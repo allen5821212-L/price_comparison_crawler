@@ -67,11 +67,23 @@ interface Stats {
   avg_price_diff: number;
 }
 
+interface CoolpcProduct {
+  source: string;
+  id: number;
+  name: string;
+  subtitle: string;
+  price: number;
+  original_price: number | null;
+  url: string;
+  image: string;
+  category: string;
+}
+
 interface ComparisonData {
   stats: Stats;
   matched: MatchedProduct[];
   sinya_products: Array<Record<string, unknown>>;
-  coolpc_products: Array<Record<string, unknown>>;
+  coolpc_products: CoolpcProduct[];
   sinya_categories: string[];
 }
 
@@ -97,6 +109,7 @@ export default function Home() {
 
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [coolpcCategoryFilter, setCoolpcCategoryFilter] = useState("all");
   const [cheaperFilter, setCheaperFilter] = useState<CheaperFilter>("all");
   const [sortField, setSortField] = useState<SortField>("price_diff");
   const [sortOrder, setSortOrder] = useState<SortOrder>("asc");
@@ -136,6 +149,28 @@ export default function Home() {
     return Array.from(cats).sort();
   }, [data]);
 
+  // Count matched products per Sinya category
+  const categoryCounts = useMemo(() => {
+    if (!data) return {} as Record<string, number>;
+    const counts: Record<string, number> = {};
+    data.matched.forEach((m) => {
+      if (m.category) counts[m.category] = (counts[m.category] || 0) + 1;
+    });
+    return counts;
+  }, [data]);
+
+  // Get CoolPC categories from coolpc_products, sorted by product count desc
+  const coolpcCategories = useMemo(() => {
+    if (!data || !data.coolpc_products) return [];
+    const counts: Record<string, number> = {};
+    data.coolpc_products.forEach((p) => {
+      if (p.category) counts[p.category] = (counts[p.category] || 0) + 1;
+    });
+    return Object.entries(counts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([name, count]) => ({ name, count }));
+  }, [data]);
+
   const filteredAndSorted = useMemo(() => {
     if (!data) return [];
     let result = [...data.matched];
@@ -151,9 +186,23 @@ export default function Home() {
       );
     }
 
-    // Category filter
+    // Sinya category filter
     if (categoryFilter !== "all") {
       result = result.filter((m) => m.category === categoryFilter);
+    }
+
+    // CoolPC category filter — check if the matched coolpc product belongs to the selected coolpc category
+    if (coolpcCategoryFilter !== "all") {
+      const coolpcProductMap = new Map<string, string>();
+      if (data) {
+        data.coolpc_products.forEach((p) => {
+          coolpcProductMap.set(p.name, p.category);
+        });
+      }
+      result = result.filter((m) => {
+        const cpCat = coolpcProductMap.get(m.coolpc_name);
+        return cpCat === coolpcCategoryFilter;
+      });
     }
 
     // Cheaper filter
@@ -193,7 +242,7 @@ export default function Home() {
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, categoryFilter, cheaperFilter, sortField, sortOrder]);
+  }, [searchQuery, categoryFilter, coolpcCategoryFilter, cheaperFilter, sortField, sortOrder]);
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -363,14 +412,30 @@ export default function Home() {
             />
           </div>
           <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-            <SelectTrigger className="w-full md:w-48">
-              <SelectValue placeholder="全部分類" />
+            <SelectTrigger className="w-full md:w-52">
+              <SelectValue placeholder="欣亞分類" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">全部分類</SelectItem>
-              {categories.map((cat) => (
-                <SelectItem key={cat} value={cat}>
-                  {cat}
+              {categories.map((cat) => {
+                const count = categoryCounts[cat] || 0;
+                return (
+                  <SelectItem key={cat} value={cat}>
+                    {cat} {count > 0 ? `(${count})` : ""}
+                  </SelectItem>
+                );
+              })}
+            </SelectContent>
+          </Select>
+          <Select value={coolpcCategoryFilter} onValueChange={setCoolpcCategoryFilter}>
+            <SelectTrigger className="w-full md:w-52">
+              <SelectValue placeholder="原價屋分類" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">原價屋全部分類</SelectItem>
+              {coolpcCategories.map((cat) => (
+                <SelectItem key={cat.name} value={cat.name}>
+                  {cat.name} ({cat.count})
                 </SelectItem>
               ))}
             </SelectContent>
