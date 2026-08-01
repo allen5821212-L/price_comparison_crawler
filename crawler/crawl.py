@@ -155,7 +155,7 @@ def crawl_sinya_by_category(categories=None, max_cats=None):
 
             # Skip placeholder products (price = 0 and no real name)
             sort_price = p.get("sortPrice", 0)
-            prod_name = (p.get("prod_name") or "").strip()
+            prod_name = strip_html_tags((p.get("prod_name") or "").strip())
             if sort_price == 0 and ("限量優惠" in prod_name or not prod_name):
                 continue
 
@@ -371,27 +371,25 @@ def extract_canonical_model(name):
     for m in re.finditer(r'\bD4[-\s]?(\d{4})', clean):
         models.add("DDR4" + m.group(1))
 
-    # ── SSD/HDD models ──
-    # SSD capacity: 1TB / 2TB / 500GB
-    for m in re.finditer(r'(\d+)\s*(TB|GB)', clean):
-        models.add("CAP" + m.group(1) + m.group(2))
+    # ── SSD/HDD models ── (REMOVED: too generic, causes false matches)
+    # SSD capacity: 1TB / 2TB / 500GB — these are too generic for matching
 
-    # ── PSU models ──
-    # 850W / 750W / 1000W
-    for m in re.finditer(r'(\d{3,4})\s*W\b', clean):
-        models.add("PSU" + m.group(1) + "W")
+    # ── PSU models ── (REMOVED: too generic, causes false matches)
+    # 850W / 750W / 1000W — these are too generic for matching
 
-    # ── Monitor models ──
-    # 27" / 32" / 24" sizes
-    for m in re.finditer(r'(\d{2})["\'\']', clean):
-        models.add("MON" + m.group(1))
+    # ── Monitor models ── (REMOVED: too generic, causes false matches)
+    # 27" / 32" / 24" sizes — these are too generic for matching
 
     # ── Fallback: generic alphanumeric model patterns ──
     # Long alphanumeric sequences that might be model numbers
+    # Must be at least 5 chars to avoid matching generic numbers like "5000"
     for m in re.finditer(r'\b([A-Z]{2,}\d{3,}[A-Z0-9]*)', clean):
         token = m.group(1)
         if len(token) >= 5 and token not in models:
-            models.add(token)
+            # Filter out very generic tokens
+            generic = {"RTX5000", "GTX5000", "DDR5000", "SSD5000"}
+            if token not in generic:
+                models.add(token)
 
     return models
 
@@ -430,6 +428,14 @@ def is_combo_or_bundle(name):
     if re.search(r'\+.*\+', name or ""):
         return True
     return False
+
+
+def strip_html_tags(text):
+    """Remove HTML tags from text."""
+    if not text:
+        return text
+    import re as _re
+    return _re.sub(r'<[^>]+>', '', text).strip()
 
 
 def is_non_product(name, price):
@@ -481,6 +487,68 @@ def match_products(sinya_products, coolpc_products):
         for m in models:
             sinya_model_index.setdefault(m, []).append((si, is_combo))
 
+    # Category compatibility map for all phases
+    CATEGORY_COMPAT = {
+        ("CPU 中央處理器", "處理器 CPU"),
+        ("MB 主機板", "主機板 MB"),
+        ("RAM 記憶體", "記憶體 RAM"),
+        ("VGA 顯示卡", "顯示卡 VGA"),
+        ("SSD 固態硬碟", "固態硬碟 M.2｜SSD"),
+        ("HDD 機械硬碟", "傳統內接硬碟 HDD"),
+        ("電源供應器/不斷電系統", "電源供應器"),
+        ("電源供應器/不斷電系統", "UPS不斷電｜印表機｜掃描"),
+        ("電腦機殼", "CASE 機殼(+電源)"),
+        ("機殼風扇/機殼配件/顯卡支架", "機殼風扇｜機殼配件"),
+        ("空冷散熱器/散熱膏", "散熱器｜散熱墊｜散熱膏"),
+        ("水冷散熱器", "封閉式｜開放式水冷"),
+        ("液晶螢幕/支架", "螢幕｜投影機｜壁掛"),
+        ("鍵盤", "鍵盤+鼠｜搖桿｜桌+椅"),
+        ("滑鼠/滑鼠墊", "滑鼠｜鼠墊｜數位板"),
+        ("滑鼠/滑鼠墊", "鍵盤+鼠｜搖桿｜桌+椅"),
+        ("耳機", "喇叭｜耳機｜麥克風"),
+        ("喇叭", "喇叭｜耳機｜麥克風"),
+        ("外接硬碟/隨身碟/記憶卡", "隨身碟｜隨身硬碟｜記憶卡"),
+        ("外接硬碟/隨身碟/記憶卡", "USB週邊｜硬碟座｜讀卡機"),
+        ("網通設備/NAS", "IP分享器｜網卡｜網通設備"),
+        ("網通設備/NAS", "網路NAS｜網路IPCAM"),
+        ("各式線材/轉接頭/外接盒", "網路、傳輸線、轉頭｜KVM"),
+        ("各式線材/轉接頭/外接盒", "USB週邊｜硬碟座｜讀卡機"),
+        ("作業系統/文書軟體/遊戲點數", "OS+應用軟體｜禮物卡"),
+        ("光碟燒錄機", "燒錄器 CD/DVD/BD"),
+        ("視訊/網路攝影機", "行車紀錄器｜USB視訊鏡頭"),
+        ("最夯遊戲推薦筆電", "筆電｜平板｜穿戴配件"),
+        ("商務筆記型電腦", "筆電｜平板｜穿戴配件"),
+        ("桌上型電腦", "品牌小主機、AIO｜VR虛擬"),
+        ("桌上型電腦", "酷！PC 套裝產線"),
+        ("Sinya 精選電腦主機", "品牌小主機、AIO｜VR虛擬"),
+        ("Sinya 精選電腦主機", "酷！PC 套裝產線"),
+        ("商用桌上型電腦", "品牌小主機、AIO｜VR虛擬"),
+        ("商用桌上型電腦", "酷！PC 套裝產線"),
+        ("電競桌椅/方向盤/手把", "鍵盤+鼠｜搖桿｜桌+椅"),
+        ("直播設備", "喇叭｜耳機｜麥克風"),
+        ("直播設備", "行車紀錄器｜USB視訊鏡頭"),
+        ("商用防火牆/交換器/無線基地台", "IP分享器｜網卡｜網通設備"),
+    }
+    # Build reverse set for quick lookup
+    compat_set = set()
+    for a, b in CATEGORY_COMPAT:
+        compat_set.add((a, b))
+        compat_set.add((b, a))
+
+    def categories_compatible(cat1, cat2):
+        if not cat1 or not cat2:
+            return True  # No category info, allow match
+        if cat1 == cat2:
+            return True
+        return (cat1, cat2) in compat_set
+
+    def price_ratio_ok(price1, price2):
+        """Check if price ratio is reasonable (within 3:1)."""
+        if price1 <= 0 or price2 <= 0:
+            return False
+        ratio = max(price1, price2) / min(price1, price2)
+        return ratio <= 3.0
+
     # Phase 1: Match by exact canonical model (non-combo vs non-combo first)
     for model, sinya_entries in sinya_model_index.items():
         if model not in coolpc_model_index:
@@ -493,9 +561,15 @@ def match_products(sinya_products, coolpc_products):
                     continue
                 sp = sinya_products[si]
                 cp = coolpc_products[ci]
+                # Category check
+                if not categories_compatible(sp.get("category", ""), cp.get("category", "")):
+                    continue
                 sp_brand = extract_brand(sp["name"])
                 cp_brand = extract_brand(cp["name"])
                 if sp_brand and cp_brand and sp_brand != cp_brand:
+                    continue
+                # Price sanity check
+                if not price_ratio_ok(sp["price"], cp["price"]):
                     continue
                 price_diff = sp["price"] - cp["price"]
                 cheaper = "sinya" if sp["price"] < cp["price"] else ("coolpc" if cp["price"] < sp["price"] else "tie")
@@ -532,9 +606,13 @@ def match_products(sinya_products, coolpc_products):
                     continue
                 sp = sinya_products[si]
                 cp = coolpc_products[ci]
+                if not categories_compatible(sp.get("category", ""), cp.get("category", "")):
+                    continue
                 sp_brand = extract_brand(sp["name"])
                 cp_brand = extract_brand(cp["name"])
                 if sp_brand and cp_brand and sp_brand != cp_brand:
+                    continue
+                if not price_ratio_ok(sp["price"], cp["price"]):
                     continue
                 price_diff = sp["price"] - cp["price"]
                 cheaper = "sinya" if sp["price"] < cp["price"] else ("coolpc" if cp["price"] < sp["price"] else "tie")
@@ -637,6 +715,9 @@ def match_products(sinya_products, coolpc_products):
             sp_brand = extract_brand(sp["name"])
             cp_brand = extract_brand(cp["name"])
             if sp_brand and cp_brand and sp_brand != cp_brand:
+                continue
+            # Price sanity check
+            if not price_ratio_ok(sp["price"], cp["price"]):
                 continue
             overlap = len(sp_specific & cp_specific)
             score = overlap / max(len(sp_specific | cp_specific), 1)
