@@ -299,20 +299,100 @@ def normalize_name(name):
     return name.upper().replace(" ", "")
 
 
-def extract_model_numbers(name):
-    """Extract key model numbers from a product name."""
-    patterns = [
-        r'[A-Za-z]+\d+[-\s]?\d+[A-Z]*',
-        r'RTX\s*\d{3,4}[A-Z]*',
-        r'GTX\s*\d{3,4}[A-Z]*',
-        r'\d{4}[A-Z]{2,}\d*',
-        r'[A-Z]{2,}[-\s]?\d{3,4}',
-    ]
-    models = []
-    for p in patterns:
-        matches = re.findall(p, name, re.IGNORECASE)
-        for m in matches:
-            models.append(m.upper().replace(" ", "").replace("-", ""))
+def extract_canonical_model(name):
+    """
+    Extract a canonical model identifier from a product name.
+    Normalizes naming differences between Sinya and CoolPC.
+    Returns a list of canonical model tokens that can be matched across sites.
+    """
+    # Strip HTML tags and noise — replace with SPACE (not empty) to prevent number concatenation
+    clean = re.sub(r"<[^>]+>", " ", name)
+    clean = re.sub(r"【[^】]*】", " ", clean)
+    clean = re.sub(r"\[[^\]]*\]", " ", clean)
+    clean = re.sub(r"\([^)]*\)", " ", clean)
+    clean = re.sub(r"~[^~]*~", " ", clean)
+    # Normalize whitespace
+    clean = re.sub(r"\s+", " ", clean).upper().strip()
+
+    models = set()
+
+    # ── CPU models ──
+    # Intel Core Ultra 5 225F / 225 / 245K / 245KF / 250K Plus / 285K
+    for m in re.finditer(r'CORE\s*ULTRA\s*\d+\s*(\d{3,4}[A-Z]*)', clean):
+        models.add("IU" + m.group(1))
+    # Intel Core i5-12400F / i9-14900K / i5-14400
+    for m in re.finditer(r'(?:CORE\s*)?I(\d)-?(\d{4,5}[A-Z]*)', clean):
+        models.add("I" + m.group(1) + m.group(2))
+    # Intel Xeon W5-2465X / W7-3465X
+    for m in re.finditer(r'XEON\s*W(\d)-(\d{4,5}[A-Z]*)', clean):
+        models.add("XEONW" + m.group(1) + m.group(2))
+    # AMD Ryzen5 7500F / Ryzen7 7800X3D / Ryzen9 9950X
+    for m in re.finditer(r'RYZEN\s*(\d)\s*(\d{4}[A-Z0-9]*)', clean):
+        models.add("R" + m.group(1) + m.group(2))
+    # AMD R5 5600X / R7 7800X3D / R9 9950X / R5 3400G
+    for m in re.finditer(r'\bR(\d)\s*(\d{4}[A-Z0-9]*)', clean):
+        models.add("R" + m.group(1) + m.group(2))
+    # AMD Athlon / Phenom (rare but handle)
+    for m in re.finditer(r'ATHLON\s*(\d{4}[A-Z]*)', clean):
+        models.add("ATHLON" + m.group(1))
+
+    # ── GPU models ──
+    # RTX 5070 / RTX 5080 / RTX 4060 Ti / RTX 5070 Ti
+    for m in re.finditer(r'RTX\s*(\d{3,4}[A-Z\s]*)', clean):
+        models.add("RTX" + m.group(1).replace(" ", ""))
+    # GTX 1660 / GTX 1650
+    for m in re.finditer(r'GTX\s*(\d{3,4}[A-Z]*)', clean):
+        models.add("GTX" + m.group(1))
+    # RX 7600 / RX 9060 XT / RX 9070
+    for m in re.finditer(r'\bRX\s*(\d{4}[A-Z\s]*)', clean):
+        models.add("RX" + m.group(1).replace(" ", ""))
+    # Arc A750 / A770
+    for m in re.finditer(r'\bARC\s*A(\d{3})', clean):
+        models.add("ARCA" + m.group(1))
+
+    # ── Motherboard models ──
+    # B850-PLUS / B760M / Z890 / X870 / H610 / B860
+    for m in re.finditer(r'\b([ABH])?(\d{3})M?[-\s]?([A-Z0-9]*)', clean):
+        chipset = (m.group(1) or "") + m.group(2)
+        suffix = m.group(3) or ""
+        if chipset and len(chipset) >= 2 and suffix:
+            full = chipset + suffix
+            if len(full) >= 4:
+                models.add("MB" + full)
+
+    # ── RAM models ──
+    # DDR5-5200 / DDR5-6000 / DDR4-3200 / D5-5600
+    for m in re.finditer(r'DDR?\s*5[-\s]?(\d{4})', clean):
+        models.add("DDR5" + m.group(1))
+    for m in re.finditer(r'DDR?\s*4[-\s]?(\d{4})', clean):
+        models.add("DDR4" + m.group(1))
+    for m in re.finditer(r'\bD5[-\s]?(\d{4})', clean):
+        models.add("DDR5" + m.group(1))
+    for m in re.finditer(r'\bD4[-\s]?(\d{4})', clean):
+        models.add("DDR4" + m.group(1))
+
+    # ── SSD/HDD models ──
+    # SSD capacity: 1TB / 2TB / 500GB
+    for m in re.finditer(r'(\d+)\s*(TB|GB)', clean):
+        models.add("CAP" + m.group(1) + m.group(2))
+
+    # ── PSU models ──
+    # 850W / 750W / 1000W
+    for m in re.finditer(r'(\d{3,4})\s*W\b', clean):
+        models.add("PSU" + m.group(1) + "W")
+
+    # ── Monitor models ──
+    # 27" / 32" / 24" sizes
+    for m in re.finditer(r'(\d{2})["\'\']', clean):
+        models.add("MON" + m.group(1))
+
+    # ── Fallback: generic alphanumeric model patterns ──
+    # Long alphanumeric sequences that might be model numbers
+    for m in re.finditer(r'\b([A-Z]{2,}\d{3,}[A-Z0-9]*)', clean):
+        token = m.group(1)
+        if len(token) >= 5 and token not in models:
+            models.add(token)
+
     return models
 
 
@@ -327,6 +407,9 @@ def extract_brand(name):
         "全漢", "FSP", "海韻", "Seasonic", "振華", "SuperFlower", "be quiet",
         "BenQ", "LG", "AOC", "Acer", "宏碲", "Dell", "戴爾", "HP", "Lenovo",
         "聯想", "Apple", "蘋果", "Sony", "索尼", "JBL", "Edifier", "漫步者",
+        "威剛", "ADATA", "金士頓", "KIOXIA", "鎧俠", "INNO3D", "映眾",
+        "ZOTAC", "索泰", "EVGA", "PNY", "麗臺", "LEADTEK",
+        "狼蛛", "AULA", "ANACOMDA", "巨蟒", "亞奇雷", "AGI",
     ]
     name_upper = name.upper()
     for brand in brands:
@@ -335,106 +418,254 @@ def extract_brand(name):
     return ""
 
 
+def is_combo_or_bundle(name):
+    """Check if product is a combo/bundle (CPU+MB etc) that shouldn't be matched."""
+    combo_keywords = ["+", "＋", "組裝價", "U版專案", "任搭", "搭購", "限量優惠組",
+                      "套裝", "酷！PC", "仁者無敵", "魅力無窮", "裝機價"]
+    name_lower = name.lower() if name else ""
+    for kw in combo_keywords:
+        if kw.lower() in name_lower:
+            return True
+    # Check for + between two different products
+    if re.search(r'\+.*\+', name or ""):
+        return True
+    return False
+
+
+def is_non_product(name, price):
+    """Check if entry is a non-product (placeholder, accessory, add-on)."""
+    if not name or price == 0:
+        return True
+    noise = ["---", "限量優惠", "加價購", "獨家", "狼蛛 AULA 獨家"]
+    for n in noise:
+        if n in name:
+            return True
+    return False
+
+
 def match_products(sinya_products, coolpc_products):
-    """Match products between Sinya and CoolPC by model number similarity."""
+    """Match products between Sinya and CoolPC using canonical model extraction."""
     print("=== 商品比對開始 ===")
     matched = []
     sinya_matched = set()
     coolpc_matched = set()
 
-    # Build index by model numbers
-    coolpc_model_index = {}
-    for i, p in enumerate(coolpc_products):
-        models = extract_model_numbers(p["name"])
-        for m in models:
-            if len(m) >= 4:
-                coolpc_model_index.setdefault(m, []).append(i)
-
-    sinya_model_index = {}
+    # Filter out non-products and combos
+    sinya_valid = {}
     for i, p in enumerate(sinya_products):
-        models = extract_model_numbers(p["name"])
-        for m in models:
-            if len(m) >= 4:
-                sinya_model_index.setdefault(m, []).append(i)
+        if is_non_product(p["name"], p["price"]):
+            continue
+        sinya_valid[i] = p
 
-    # Match by exact model number
-    for model, sinya_indices in sinya_model_index.items():
-        if model in coolpc_model_index:
-            for si in sinya_indices:
-                if si in sinya_matched:
+    coolpc_valid = {}
+    for i, p in enumerate(coolpc_products):
+        if is_non_product(p["name"], p["price"]):
+            continue
+        coolpc_valid[i] = p
+
+    print(f"  有效商品: 欣亞 {len(sinya_valid)} / 原價屋 {len(coolpc_valid)}")
+
+    # Build canonical model index for CoolPC
+    coolpc_model_index = {}  # model_token → [(ci, is_combo), ...]
+    for ci, cp in coolpc_valid.items():
+        is_combo = is_combo_or_bundle(cp["name"])
+        models = extract_canonical_model(cp["name"])
+        for m in models:
+            coolpc_model_index.setdefault(m, []).append((ci, is_combo))
+
+    # Build canonical model index for Sinya
+    sinya_model_index = {}
+    for si, sp in sinya_valid.items():
+        is_combo = is_combo_or_bundle(sp["name"])
+        models = extract_canonical_model(sp["name"])
+        for m in models:
+            sinya_model_index.setdefault(m, []).append((si, is_combo))
+
+    # Phase 1: Match by exact canonical model (non-combo vs non-combo first)
+    for model, sinya_entries in sinya_model_index.items():
+        if model not in coolpc_model_index:
+            continue
+        for si, si_combo in sinya_entries:
+            if si in sinya_matched or si_combo:
+                continue
+            for ci, ci_combo in coolpc_model_index[model]:
+                if ci in coolpc_matched or ci_combo:
                     continue
-                for ci in coolpc_model_index[model]:
-                    if ci in coolpc_matched:
-                        continue
-                    sp = sinya_products[si]
-                    cp = coolpc_products[ci]
-                    sp_brand = extract_brand(sp["name"])
-                    cp_brand = extract_brand(cp["name"])
-                    if sp_brand and cp_brand and sp_brand != cp_brand:
-                        continue
-                    price_diff = sp["price"] - cp["price"]
-                    cheaper = "sinya" if sp["price"] < cp["price"] else ("coolpc" if cp["price"] < sp["price"] else "tie")
-                    matched.append({
-                        "name": sp["name"],
-                        "sinya_name": sp["name"],
-                        "coolpc_name": cp["name"],
-                        "sinya_price": sp["price"],
-                        "coolpc_price": cp["price"],
-                        "price_diff": price_diff,
-                        "cheaper": cheaper,
-                        "sinya_url": sp["url"],
-                        "coolpc_url": cp["url"],
-                        "sinya_image": sp["image"],
-                        "coolpc_image": cp["image"],
-                        "category": sp["category"] or cp["category"],
-                    })
-                    sinya_matched.add(si)
-                    coolpc_matched.add(ci)
-                    break
+                sp = sinya_products[si]
+                cp = coolpc_products[ci]
+                sp_brand = extract_brand(sp["name"])
+                cp_brand = extract_brand(cp["name"])
+                if sp_brand and cp_brand and sp_brand != cp_brand:
+                    continue
+                price_diff = sp["price"] - cp["price"]
+                cheaper = "sinya" if sp["price"] < cp["price"] else ("coolpc" if cp["price"] < sp["price"] else "tie")
+                matched.append({
+                    "name": sp["name"],
+                    "sinya_name": sp["name"],
+                    "coolpc_name": cp["name"],
+                    "sinya_price": sp["price"],
+                    "coolpc_price": cp["price"],
+                    "price_diff": price_diff,
+                    "cheaper": cheaper,
+                    "sinya_url": sp["url"],
+                    "coolpc_url": cp["url"],
+                    "sinya_image": sp["image"],
+                    "coolpc_image": cp["image"],
+                    "category": sp["category"] or cp["category"],
+                })
+                sinya_matched.add(si)
+                coolpc_matched.add(ci)
+                break
 
-    # Try partial model matching for unmatched products
-    coolpc_by_model = {}
-    for ci, cp in enumerate(coolpc_products):
-        if ci in coolpc_matched:
-            continue
-        models = extract_model_numbers(cp["name"])
-        for m in models:
-            if len(m) >= 4:
-                coolpc_by_model.setdefault(m, []).append(ci)
+    phase1_count = len(matched)
+    print(f"  Phase 1 (精確比對): {phase1_count} 組")
 
-    for si, sp in enumerate(sinya_products):
-        if si in sinya_matched:
+    # Phase 2: Match non-combo Sinya with combo CoolPC (and vice versa)
+    for model, sinya_entries in sinya_model_index.items():
+        if model not in coolpc_model_index:
             continue
-        sp_models = extract_model_numbers(sp["name"])
-        for m in sp_models:
-            if len(m) >= 4 and m in coolpc_by_model:
-                for ci in coolpc_by_model[m]:
-                    if ci in coolpc_matched:
-                        continue
-                    cp = coolpc_products[ci]
-                    sp_brand = extract_brand(sp["name"])
-                    cp_brand = extract_brand(cp["name"])
-                    if sp_brand and cp_brand and sp_brand != cp_brand:
-                        continue
-                    price_diff = sp["price"] - cp["price"]
-                    cheaper = "sinya" if sp["price"] < cp["price"] else ("coolpc" if cp["price"] < sp["price"] else "tie")
-                    matched.append({
-                        "name": sp["name"],
-                        "sinya_name": sp["name"],
-                        "coolpc_name": cp["name"],
-                        "sinya_price": sp["price"],
-                        "coolpc_price": cp["price"],
-                        "price_diff": price_diff,
-                        "cheaper": cheaper,
-                        "sinya_url": sp["url"],
-                        "coolpc_url": cp["url"],
-                        "sinya_image": sp["image"],
-                        "coolpc_image": cp["image"],
-                        "category": sp["category"] or cp["category"],
-                    })
-                    sinya_matched.add(si)
-                    coolpc_matched.add(ci)
-                    break
+        for si, si_combo in sinya_entries:
+            if si in sinya_matched:
+                continue
+            for ci, ci_combo in coolpc_model_index[model]:
+                if ci in coolpc_matched:
+                    continue
+                sp = sinya_products[si]
+                cp = coolpc_products[ci]
+                sp_brand = extract_brand(sp["name"])
+                cp_brand = extract_brand(cp["name"])
+                if sp_brand and cp_brand and sp_brand != cp_brand:
+                    continue
+                price_diff = sp["price"] - cp["price"]
+                cheaper = "sinya" if sp["price"] < cp["price"] else ("coolpc" if cp["price"] < sp["price"] else "tie")
+                matched.append({
+                    "name": sp["name"],
+                    "sinya_name": sp["name"],
+                    "coolpc_name": cp["name"],
+                    "sinya_price": sp["price"],
+                    "coolpc_price": cp["price"],
+                    "price_diff": price_diff,
+                    "cheaper": cheaper,
+                    "sinya_url": sp["url"],
+                    "coolpc_url": cp["url"],
+                    "sinya_image": sp["image"],
+                    "coolpc_image": cp["image"],
+                    "category": sp["category"] or cp["category"],
+                })
+                sinya_matched.add(si)
+                coolpc_matched.add(ci)
+                break
+
+    phase2_count = len(matched) - phase1_count
+    print(f"  Phase 2 (包含組合包): {phase2_count} 組")
+
+    # Phase 3: Fuzzy matching by normalized name similarity
+    # For remaining unmatched, try token-based similarity with HIGH threshold
+    # to avoid false positives (e.g., different CPU models matching)
+    # Category mapping: only match within similar categories
+    CATEGORY_MAP = {
+        "CPU 中央處理器": {"處理器 CPU"},
+        "MB 主機板": {"主機板 MB"},
+        "RAM 記憶體": {"記憶體 RAM"},
+        "VGA 顯示卡": {"顯示卡 VGA"},
+        "SSD 固態硬碟": {"固態硬碟 M.2｜SSD"},
+        "HDD 機械硬碟": {"傳統內接硬碟 HDD"},
+        "電源供應器/不斷電系統": {"電源供應器", "UPS不斷電｜印表機｜掃描"},
+        "電腦機殼": {"CASE 機殼(+電源)"},
+        "機殼風扇/機殼配件/顯卡支架": {"機殼風扇｜機殼配件"},
+        "空冷散熱器/散熱膏": {"散熱器｜散熱墊｜散熱膏"},
+        "水冷散熱器": {"封閉式｜開放式水冷"},
+        "液晶螢幕/支架": {"螢幕｜投影機｜壁掛"},
+        "鍵盤": {"鍵盤+鼠｜搖桿｜桌+椅"},
+        "滑鼠/滑鼠墊": {"滑鼠｜鼠墊｜數位板", "鍵盤+鼠｜搖桿｜桌+椅"},
+        "耳機": {"喇叭｜耳機｜麥克風"},
+        "喇叭": {"喇叭｜耳機｜麥克風"},
+        "外接硬碟/隨身碟/記憶卡": {"隨身碟｜隨身硬碟｜記憶卡", "USB週邊｜硬碟座｜讀卡機"},
+        "網通設備/NAS": {"IP分享器｜網卡｜網通設備", "網路NAS｜網路IPCAM"},
+        "各式線材/轉接頭/外接盒": {"網路、傳輸線、轉頭｜KVM", "USB週邊｜硬碟座｜讀卡機"},
+        "作業系統/文書軟體/遊戲點數": {"OS+應用軟體｜禮物卡"},
+        "光碟燒錄機": {"燒錄器 CD/DVD/BD"},
+        "視訊/網路攝影機": {"行車紀錄器｜USB視訊鏡頭"},
+        "最夯遊戲推薦筆電": {"筆電｜平板｜穿戴配件"},
+        "商務筆記型電腦": {"筆電｜平板｜穿戴配件"},
+        "桌上型電腦": {"品牌小主機、AIO｜VR虛擬", "酷！PC 套裝產線"},
+        "Sinya 精選電腦主機": {"品牌小主機、AIO｜VR虛擬", "酷！PC 套裝產線"},
+        "商用桌上型電腦": {"品牌小主機、AIO｜VR虛擬", "酷！PC 套裝產線"},
+        "電競桌椅/方向盤/手把": {"鍵盤+鼠｜搖桿｜桌+椅"},
+        "直播設備": {"喇叭｜耳機｜麥克風", "行車紀錄器｜USB視訊鏡頭"},
+        "商用防火牆/交換器/無線基地台": {"IP分享器｜網卡｜網通設備"},
+        "生活家電館": {"UPS不斷電｜印表機｜掃描"},
+    }
+
+    # Build reverse map: coolpc category → set of compatible sinya categories
+    coolpc_to_sinya = {}
+    for sinya_cat, coolpc_cats in CATEGORY_MAP.items():
+        for cc in coolpc_cats:
+            coolpc_to_sinya.setdefault(cc, set()).add(sinya_cat)
+
+    sinya_remaining = [(si, sp) for si, sp in sinya_valid.items() if si not in sinya_matched]
+    coolpc_remaining = [(ci, cp) for ci, cp in coolpc_valid.items() if ci not in coolpc_matched]
+
+    for si, sp in sinya_remaining:
+        sp_norm = normalize_name(sp["name"])
+        sp_tokens = set(re.findall(r'[A-Z0-9]{3,}', sp_norm))
+        # Filter out generic tokens that cause false positives
+        generic_tokens = {"PRO", "PLUS", "MAX", "ULTRA", "CORE", "WIFI", "DDR", "SSD",
+                         "HDD", "USB", "HDMI", "DP", "RGB", "ATX", "MATX", "ITX",
+                         "BLACK", "WHITE", "RED", "BLUE", "GREEN", "TUF", "ROG",
+                         "AORUS", "PRIME", "GAMING", "MPK", "TRAY", "BOX"}
+        sp_specific = sp_tokens - generic_tokens
+        if not sp_specific:
+            continue
+        best_ci = -1
+        best_score = 0
+        for ci, cp in coolpc_remaining:
+            if ci in coolpc_matched:
+                continue
+            # Category check: only match within compatible categories
+            sp_cat = sp.get("category", "")
+            cp_cat = cp.get("category", "")
+            if sp_cat and cp_cat:
+                compatible = cp_cat in CATEGORY_MAP.get(sp_cat, set()) or sp_cat in coolpc_to_sinya.get(cp_cat, set())
+                if not compatible:
+                    continue
+            cp_norm = normalize_name(cp["name"])
+            cp_tokens = set(re.findall(r'[A-Z0-9]{3,}', cp_norm))
+            cp_specific = cp_tokens - generic_tokens
+            if not cp_specific:
+                continue
+            sp_brand = extract_brand(sp["name"])
+            cp_brand = extract_brand(cp["name"])
+            if sp_brand and cp_brand and sp_brand != cp_brand:
+                continue
+            overlap = len(sp_specific & cp_specific)
+            score = overlap / max(len(sp_specific | cp_specific), 1)
+            if score > best_score and score >= 0.6:
+                best_score = score
+                best_ci = ci
+        if best_ci >= 0:
+            cp = coolpc_products[best_ci]
+            price_diff = sp["price"] - cp["price"]
+            cheaper = "sinya" if sp["price"] < cp["price"] else ("coolpc" if cp["price"] < sp["price"] else "tie")
+            matched.append({
+                "name": sp["name"],
+                "sinya_name": sp["name"],
+                "coolpc_name": cp["name"],
+                "sinya_price": sp["price"],
+                "coolpc_price": cp["price"],
+                "price_diff": price_diff,
+                "cheaper": cheaper,
+                "sinya_url": sp["url"],
+                "coolpc_url": cp["url"],
+                "sinya_image": sp["image"],
+                "coolpc_image": cp["image"],
+                "category": sp["category"] or cp["category"],
+            })
+            sinya_matched.add(si)
+            coolpc_matched.add(best_ci)
+
+    phase3_count = len(matched) - phase1_count - phase2_count
+    print(f"  Phase 3 (模糊比對): {phase3_count} 組")
 
     print(f"  比對成功: {len(matched)} 組")
     print(f"  欣亞未比對: {len(sinya_products) - len(sinya_matched)} 件")
