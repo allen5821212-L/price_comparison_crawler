@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 價格比對爬蟲 — 欣亞數位 vs 原價屋
-爬取兩個網站的商品資訊，進行比對，輸出 JSON 供前端使用。
+以欣亞 DIY 官方分類為基準，逐分類爬取商品，再與原價屋比對。
 """
 
 import json
@@ -32,7 +32,7 @@ def fetch_url(url, method="GET", data=None, encoding="utf-8", retries=3):
         "Accept": "text/html,application/xhtml+xml,application/json,*/*",
         "Accept-Language": "zh-TW,zh;q=0.9",
     }
-    if method == "POST" and data:
+    if method == "POST" and data is not None:
         headers["Content-Type"] = "application/x-www-form-urlencoded"
         headers["X-Requested-With"] = "XMLHttpRequest"
         data = urllib.parse.urlencode(data).encode("utf-8")
@@ -57,103 +57,132 @@ def fetch_url(url, method="GET", data=None, encoding="utf-8", retries=3):
 
 
 # ──────────────────────────────────────────────
-#  Sinya crawler (欣亞數位)
+#  Sinya crawler (欣亞數位) — 使用官方 DIY 分類 API
 # ──────────────────────────────────────────────
 
-SINYA_API = "https://www.sinya.com.tw/api/search/getdata/"
+SINYA_DIY_CART_API = "https://www.sinya.com.tw/diy/diyCartList"
+SINYA_SHOW_SEARCH_API = "https://www.sinya.com.tw/diy/show_search"
 
-def crawl_sinya(max_pages=None):
-    """Crawl Sinya via their search API. Returns list of product dicts."""
-    print("=== 欣亞數位 爬蟲開始 ===")
+
+def fetch_sinya_categories():
+    """從欣亞 DIY 估價系統取得官方全部分類清單。"""
+    print("=== 欣亞數位 分類清單取得 ===")
+    html = fetch_url(SINYA_DIY_CART_API, method="POST", data={})
+    if not html:
+        print("  [ERROR] 無法取得分類清單")
+        return []
+
+    try:
+        data = json.loads(html)
+    except json.JSONDecodeError:
+        print("  [ERROR] 分類清單 JSON 解析失敗")
+        return []
+
+    categories = []
+    for item in data.get("subTitles", []):
+        cat_id = item.get("id", "")
+        cat_name = item.get("name", "")
+        cat_all = item.get("all", 0)
+        if cat_id and cat_name:
+            categories.append({
+                "id": cat_id,
+                "name": cat_name,
+                "product_count": int(cat_all) if cat_all else 0,
+            })
+
+    print(f"  取得 {len(categories)} 個分類:")
+    for cat in categories:
+        print(f"    id={cat['id']:>3}  {cat['name']:<30}  ({cat['product_count']} 件)")
+    print()
+    return categories
+
+
+def crawl_sinya_by_category(categories=None, max_cats=None):
+    """以欣亞官方 DIY 分類為基準，逐分類爬取商品。"""
+    print("=== 欣亞數位 爬蟲開始 (DIY 分類模式) ===")
+
+    if categories is None:
+        categories = fetch_sinya_categories()
+
+    if not categories:
+        print("  [ERROR] 無分類資料，無法爬取")
+        return []
+
+    if max_cats:
+        categories = categories[:max_cats]
+
     products = []
-    page = 1
-    total = None
+    seen_ids = set()
 
-    while True:
-        url = f"{SINYA_API}?page={page}"
-        print(f"  欣亞 page {page} ...", end=" ", flush=True)
-        html = fetch_url(url)
+    for cat in categories:
+        cat_id = cat["id"]
+        cat_name = cat["name"]
+        expected = cat["product_count"]
+        print(f"  欣亞 [{cat_id}] {cat_name} (預期 {expected} 件) ...", end=" ", flush=True)
+
+        # 使用 show_search API 取得該分類所有商品
+        search_data = {
+            "id": cat_id,
+            "search[keyword]": "",
+            "search[brand_id]": "",
+            "search[price_id]": "",
+            "search[brand_name]": "廠牌",
+            "search[price_name]": "價格區間",
+            "search[maxPrice]": "100000",
+            "search[price1]": "0",
+            "search[price2]": "0",
+            "search[priceStep]": "1000",
+        }
+
+        html = fetch_url(SINYA_SHOW_SEARCH_API, method="POST", data=search_data)
         if not html:
-            print("FAIL (empty response)")
-            break
+            print("FAIL (empty)")
+            continue
 
         try:
             data = json.loads(html)
         except json.JSONDecodeError:
             print("FAIL (invalid JSON)")
-            break
+            continue
 
-        if total is None:
-            total = int(data.get("result_total", 0))
-            print(f"total={total}")
+        search_prods = data.get("searchProds", [])
+        count = 0
 
-        results = data.get("results", [])
-        if not results:
-            print("no more results")
-            break
+        for p in search_prods:
+            prod_id = p.get("prod_id", "")
+            if not prod_id or prod_id in seen_ids:
+                continue
 
-        for r in results:
-            price_str = r.get("new_price", "$0元")
-            price = parse_price(price_str)
-            old_price_str = r.get("old_price", "$0元")
-            old_price = parse_price(old_price_str)
+            # Skip placeholder products (price = 0 and no real name)
+            sort_price = p.get("sortPrice", 0)
+            prod_name = (p.get("prod_name") or "").strip()
+            if sort_price == 0 and ("限量優惠" in prod_name or not prod_name):
+                continue
+
+            price = int(sort_price) if sort_price else 0
+            image = p.get("image", "")
+            if image and image.startswith("/"):
+                image = f"https://www.sinya.com.tw{image}"
 
             products.append({
                 "source": "sinya",
-                "id": r.get("prod_id", ""),
-                "name": r.get("prod_title", "").strip(),
-                "subtitle": r.get("prod_subtitle", "").strip(),
+                "id": prod_id,
+                "name": prod_name,
+                "subtitle": "",
                 "price": price,
-                "original_price": old_price if old_price != price else None,
-                "url": r.get("href", ""),
-                "image": f"https://www.sinya.com.tw{r.get('image', '')}" if r.get("image", "").startswith("/") else r.get("image", ""),
-                "category": classify_sinya_category(r.get("prod_title", "")),
+                "original_price": None,
+                "url": f"https://www.sinya.com.tw/prod/{prod_id}",
+                "image": image,
+                "category": cat_name,
             })
+            seen_ids.add(prod_id)
+            count += 1
 
-        print(f"  +{len(results)} (cumulative {len(products)})")
-
-        if len(products) >= total or len(results) == 0:
-            break
-        if max_pages and page >= max_pages:
-            print(f"  (stopped at max_pages={max_pages})")
-            break
-
-        page += 1
-        time.sleep(0.5)  # polite delay
+        print(f"{count} 件 (累計 {len(products)})")
+        time.sleep(0.8)  # polite delay
 
     print(f"=== 欣亞數位 完成: {len(products)} 件 ===\n")
     return products
-
-
-# Keyword-based category classification for Sinya products
-SINYA_CATEGORY_KEYWORDS = [
-    (r"(CPU|處理器|Intel\s+Core|Intel\s+i[3579]|AMD\s+Ryzen|R[3579]\s+\d{4}|Core\s+Ultra)", "處理器 CPU"),
-    (r"(主機板|MB|B[5-8]\d\d|H[5-8]\d\d|Z\d{3}|X\d{3}|A\d{3}|PRO\s+[A-Z]|PRIME|MAG|PRO-VC|TUF\s+GAMING)", "主機板 MB"),
-    (r"(DDR[345]|RAM|記憶體|DIMM|SO-DIMM|UDIMM)", "記憶體 RAM"),
-    (r"(RTX|GTX|顯示卡|VGA|繪圖卡|GPU)", "顯示卡 VGA"),
-    (r"(SSD|M\.2|NVMe|固態硬碟|SATA\s+SSD)", "固態硬碟 M.2｜SSD"),
-    (r"(HDD|硬碟|傳統硬碟|內接硬碟)", "傳統內接硬碟 HDD"),
-    (r"(螢幕|顯示器|Monitor|LCD|LED\s+Monitor|4K\s+Monitor|電競螢幕)", "螢幕｜投影機｜壁掛"),
-    (r"(CASE|機殼|塔|Mid\s+Tower|ATX\s+Case|ITX\s+Case)", "CASE 機殼(+電源)"),
-    (r"(電源|POWER|PSU|瓦|W\s+電源|Gold|Platinum|Bronze)", "電源供應器"),
-    (r"(風扇|Fan|散熱|Cooler|水冷|Air\s+Cooler|AIO)", "散熱器｜散熱墊｜散熱膏"),
-    (r"(鍵盤|Keyboard|機械鍵盤|Keychron|Cherry)", "鍵盤+鼠｜搖桿｜桌+椅"),
-    (r"(滑鼠|Mouse|電競鼠|G\d+|Viper|DeathAdder)", "滑鼠｜鼠墊｜數位板"),
-    (r"(喇叭|Speaker|耳機|Headset|Headphone|音效)", "喇叭｜耳機｜麥克風"),
-    (r"(隨身碟|USB\s+Flash|隨身硬碟|記憶卡|SD\s+Card|MicroSD)", "隨身碟｜隨身硬碟｜記憶卡"),
-    (r"(NAS|網路|Router|分享器|網卡|Switch|Hub)", "IP分享器｜網卡｜網通設備"),
-    (r"(筆電|Notebook|Laptop|平板|Tablet)", "筆電｜平板｜穿戴配件"),
-    (r"(印表機|Printer|掃描|Scanner|UPS)", "UPS不斷電｜印表機｜掃描"),
-    (r"(線|Cable|KVM|轉頭|轉接)", "網路、傳輸線、轉頭｜KVM"),
-    (r"(Windows|Office|軟體|Software|防毒)", "OS+應用軟體｜禮物卡"),
-]
-
-def classify_sinya_category(name):
-    """Classify a Sinya product into a category based on its name."""
-    for pattern, category in SINYA_CATEGORY_KEYWORDS:
-        if re.search(pattern, name, re.IGNORECASE):
-            return category
-    return "其他"
 
 
 def parse_price(price_str):
@@ -214,7 +243,7 @@ def crawl_coolpc(max_cats=None):
 
     for igrp, cat_name in cats:
         url = f"https://www.coolpc.com.tw/eachview.php?IGrp={igrp}"
-        print(f"  原價屋 {cat_name} (IGrp={igrp}) ...", end=" ")
+        print(f"  原價屋 [{igrp}] {cat_name} ...", end=" ", flush=True)
         html = fetch_url(url, encoding="big5")
         if not html:
             print("FAIL")
@@ -250,7 +279,6 @@ def crawl_coolpc(max_cats=None):
             count += 1
 
         print(f"{count} 件")
-
         time.sleep(1)  # polite delay between categories
 
     print(f"=== 原價屋 完成: {len(products)} 件 ===\n")
@@ -263,27 +291,22 @@ def crawl_coolpc(max_cats=None):
 
 def normalize_name(name):
     """Normalize product name for matching."""
-    # Remove common prefixes/suffixes
     name = re.sub(r"【[^】]*】", "", name)
     name = re.sub(r"\[[^\]]*\]", "", name)
-    # Remove promotional prefixes
     name = re.sub(r"^(活動|精選|新品|獨家|限定|蝦皮|即刻|歡迎|【|★|➤|➥|✦|▶|▼|◆|◇|☆|★)", "", name)
-    # Remove color/variant info at end
     name = re.sub(r"(白|黑|紅|藍|綠|灰|紫|粉|銀|金|煙燻灰|透明|紫色|白色版|黑色版)$", "", name)
-    # Remove extra spaces
     name = re.sub(r"\s+", " ", name).strip()
     return name.upper().replace(" ", "")
 
 
 def extract_model_numbers(name):
     """Extract key model numbers from a product name."""
-    # Common patterns: Intel i5-12400F, AMD R5 7500F, RTX 4060, etc.
     patterns = [
-        r'[A-Za-z]+\d+[-\s]?\d+[A-Z]*',  # e.g., i5-12400F, R57500F
-        r'RTX\s*\d{3,4}[A-Z]*',  # e.g., RTX4060Ti
-        r'GTX\s*\d{3,4}[A-Z]*',  # e.g., GTX1650
-        r'\d{4}[A-Z]{2,}\d*',  # e.g., 12400F
-        r'[A-Z]{2,}[-\s]?\d{3,4}',  # e.g., ROG-STRIX
+        r'[A-Za-z]+\d+[-\s]?\d+[A-Z]*',
+        r'RTX\s*\d{3,4}[A-Z]*',
+        r'GTX\s*\d{3,4}[A-Z]*',
+        r'\d{4}[A-Z]{2,}\d*',
+        r'[A-Z]{2,}[-\s]?\d{3,4}',
     ]
     models = []
     for p in patterns:
@@ -293,35 +316,13 @@ def extract_model_numbers(name):
     return models
 
 
-def name_similarity(name1, name2):
-    """Calculate similarity between two product names based on model numbers."""
-    models1 = set(extract_model_numbers(name1))
-    models2 = set(extract_model_numbers(name2))
-    
-    if not models1 or not models2:
-        return 0
-    
-    # Check for exact model match
-    common = models1 & models2
-    if common:
-        return len(common) / max(len(models1), len(models2))
-    
-    # Check for partial model match
-    for m1 in models1:
-        for m2 in models2:
-            if m1 in m2 or m2 in m1:
-                return 0.5
-    
-    return 0
-
-
 def extract_brand(name):
     """Extract brand name from product name."""
     brands = [
         "Intel", "AMD", "ASUS", "華碩", "ROG", "MSI", "微星", "Gigabyte", "技嘉",
         "ASRock", "華擎", "Corsair", "海盜船", "Kingston", "金士頓", "Crucial",
         "美光", "Samsung", "三星", "WD", "威寶", "Seagate", "希捷", "Toshiba",
-        "東芝", "NVIDIA", " Cooler", "酷碼", "CoolerMaster", "Logitech", "羅技",
+        "東芝", "NVIDIA", "Cooler", "酷碼", "CoolerMaster", "Logitech", "羅技",
         "Razer", "SteelSeries", "HyperX", "darkFlash", "Phanteks", "追風者",
         "全漢", "FSP", "海韻", "Seasonic", "振華", "SuperFlower", "be quiet",
         "BenQ", "LG", "AOC", "Acer", "宏碲", "Dell", "戴爾", "HP", "Lenovo",
@@ -367,7 +368,6 @@ def match_products(sinya_products, coolpc_products):
                         continue
                     sp = sinya_products[si]
                     cp = coolpc_products[ci]
-                    # Verify brand match
                     sp_brand = extract_brand(sp["name"])
                     cp_brand = extract_brand(cp["name"])
                     if sp_brand and cp_brand and sp_brand != cp_brand:
@@ -392,8 +392,7 @@ def match_products(sinya_products, coolpc_products):
                     coolpc_matched.add(ci)
                     break
 
-    # Try partial model matching for unmatched products (limited scope)
-    # Build a reverse index: for each CoolPC product, store its model numbers
+    # Try partial model matching for unmatched products
     coolpc_by_model = {}
     for ci, cp in enumerate(coolpc_products):
         if ci in coolpc_matched:
@@ -448,12 +447,19 @@ def match_products(sinya_products, coolpc_products):
 #  Main
 # ──────────────────────────────────────────────
 
-def main(max_sinya_pages=None, max_coolpc_cats=None):
+def main(max_cats=None):
     print(f"爬蟲啟動 — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
 
-    sinya_products = crawl_sinya(max_pages=max_sinya_pages)
-    coolpc_products = crawl_coolpc(max_cats=max_coolpc_cats)
+    # Step 1: 取得欣亞官方分類清單
+    categories = fetch_sinya_categories()
 
+    # Step 2: 以欣亞分類為基準爬取商品
+    sinya_products = crawl_sinya_by_category(categories=categories, max_cats=max_cats)
+
+    # Step 3: 爬取原價屋商品
+    coolpc_products = crawl_coolpc(max_cats=max_cats)
+
+    # Step 4: 比對商品
     matched = match_products(sinya_products, coolpc_products)
 
     # Generate statistics
@@ -468,7 +474,7 @@ def main(max_sinya_pages=None, max_coolpc_cats=None):
         "avg_price_diff": sum(abs(m["price_diff"]) for m in matched) / max(len(matched), 1),
     }
 
-    # Save all data (compact format to reduce file size)
+    # Save all data
     all_data = {
         "stats": stats,
         "matched": matched,
@@ -494,7 +500,6 @@ def main(max_sinya_pages=None, max_coolpc_cats=None):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="欣亞 vs 原價屋 價格比對爬蟲")
-    parser.add_argument("--sinya-pages", type=int, default=None, help="Max Sinya pages (for testing)")
-    parser.add_argument("--coolpc-cats", type=int, default=None, help="Max CoolPC categories (for testing)")
+    parser.add_argument("--max-cats", type=int, default=None, help="Max categories (for testing)")
     args = parser.parse_args()
-    main(max_sinya_pages=args.sinya_pages, max_coolpc_cats=args.coolpc_cats)
+    main(max_cats=args.max_cats)
