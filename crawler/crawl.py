@@ -25,8 +25,8 @@ USER_AGENT = (
 #  HTTP utility
 # ──────────────────────────────────────────────
 
-def fetch_url(url, method="GET", data=None, encoding="utf-8"):
-    """Fetch a URL and return decoded content."""
+def fetch_url(url, method="GET", data=None, encoding="utf-8", retries=3):
+    """Fetch a URL and return decoded content. Retries on failure."""
     headers = {
         "User-Agent": USER_AGENT,
         "Accept": "text/html,application/xhtml+xml,application/json,*/*",
@@ -37,16 +37,23 @@ def fetch_url(url, method="GET", data=None, encoding="utf-8"):
         headers["X-Requested-With"] = "XMLHttpRequest"
         data = urllib.parse.urlencode(data).encode("utf-8")
 
-    req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            raw = resp.read()
-            if encoding == "big5":
-                return raw.decode("big5", errors="replace")
-            return raw.decode("utf-8", errors="replace")
-    except Exception as e:
-        print(f"  [ERROR] fetch_url failed: {url} → {e}")
-        return ""
+    for attempt in range(retries):
+        try:
+            req = urllib.request.Request(url, data=data, headers=headers, method=method)
+            with urllib.request.urlopen(req, timeout=45) as resp:
+                raw = resp.read()
+                if encoding == "big5":
+                    return raw.decode("big5", errors="replace")
+                return raw.decode("utf-8", errors="replace")
+        except Exception as e:
+            if attempt < retries - 1:
+                wait = (attempt + 1) * 5
+                print(f"  [RETRY {attempt+1}/{retries}] {url} → {e}, waiting {wait}s...")
+                time.sleep(wait)
+            else:
+                print(f"  [ERROR] fetch_url failed after {retries} retries: {url} → {e}")
+                return ""
+    return ""
 
 
 # ──────────────────────────────────────────────
@@ -100,7 +107,7 @@ def crawl_sinya(max_pages=None):
                 "original_price": old_price if old_price != price else None,
                 "url": r.get("href", ""),
                 "image": f"https://www.sinya.com.tw{r.get('image', '')}" if r.get("image", "").startswith("/") else r.get("image", ""),
-                "category": r.get("prod_groupname", ""),
+                "category": classify_sinya_category(r.get("prod_title", "")),
             })
 
         print(f"  +{len(results)} (cumulative {len(products)})")
@@ -118,6 +125,37 @@ def crawl_sinya(max_pages=None):
     return products
 
 
+# Keyword-based category classification for Sinya products
+SINYA_CATEGORY_KEYWORDS = [
+    (r"(CPU|處理器|Intel\s+Core|Intel\s+i[3579]|AMD\s+Ryzen|R[3579]\s+\d{4}|Core\s+Ultra)", "處理器 CPU"),
+    (r"(主機板|MB|B[5-8]\d\d|H[5-8]\d\d|Z\d{3}|X\d{3}|A\d{3}|PRO\s+[A-Z]|PRIME|MAG|PRO-VC|TUF\s+GAMING)", "主機板 MB"),
+    (r"(DDR[345]|RAM|記憶體|DIMM|SO-DIMM|UDIMM)", "記憶體 RAM"),
+    (r"(RTX|GTX|顯示卡|VGA|繪圖卡|GPU)", "顯示卡 VGA"),
+    (r"(SSD|M\.2|NVMe|固態硬碟|SATA\s+SSD)", "固態硬碟 M.2｜SSD"),
+    (r"(HDD|硬碟|傳統硬碟|內接硬碟)", "傳統內接硬碟 HDD"),
+    (r"(螢幕|顯示器|Monitor|LCD|LED\s+Monitor|4K\s+Monitor|電競螢幕)", "螢幕｜投影機｜壁掛"),
+    (r"(CASE|機殼|塔|Mid\s+Tower|ATX\s+Case|ITX\s+Case)", "CASE 機殼(+電源)"),
+    (r"(電源|POWER|PSU|瓦|W\s+電源|Gold|Platinum|Bronze)", "電源供應器"),
+    (r"(風扇|Fan|散熱|Cooler|水冷|Air\s+Cooler|AIO)", "散熱器｜散熱墊｜散熱膏"),
+    (r"(鍵盤|Keyboard|機械鍵盤|Keychron|Cherry)", "鍵盤+鼠｜搖桿｜桌+椅"),
+    (r"(滑鼠|Mouse|電競鼠|G\d+|Viper|DeathAdder)", "滑鼠｜鼠墊｜數位板"),
+    (r"(喇叭|Speaker|耳機|Headset|Headphone|音效)", "喇叭｜耳機｜麥克風"),
+    (r"(隨身碟|USB\s+Flash|隨身硬碟|記憶卡|SD\s+Card|MicroSD)", "隨身碟｜隨身硬碟｜記憶卡"),
+    (r"(NAS|網路|Router|分享器|網卡|Switch|Hub)", "IP分享器｜網卡｜網通設備"),
+    (r"(筆電|Notebook|Laptop|平板|Tablet)", "筆電｜平板｜穿戴配件"),
+    (r"(印表機|Printer|掃描|Scanner|UPS)", "UPS不斷電｜印表機｜掃描"),
+    (r"(線|Cable|KVM|轉頭|轉接)", "網路、傳輸線、轉頭｜KVM"),
+    (r"(Windows|Office|軟體|Software|防毒)", "OS+應用軟體｜禮物卡"),
+]
+
+def classify_sinya_category(name):
+    """Classify a Sinya product into a category based on its name."""
+    for pattern, category in SINYA_CATEGORY_KEYWORDS:
+        if re.search(pattern, name, re.IGNORECASE):
+            return category
+    return "其他"
+
+
 def parse_price(price_str):
     """Parse price string like '$1,590元' → 1590"""
     if not price_str:
@@ -133,17 +171,36 @@ def parse_price(price_str):
 # ──────────────────────────────────────────────
 
 COOLPC_CATEGORIES = {
+    1: "品牌小主機、AIO｜VR虛擬",
+    2: "筆電｜平板｜穿戴配件",
+    3: "酷！PC 套裝產線",
     4: "處理器 CPU",
     5: "主機板 MB",
     6: "記憶體 RAM",
+    7: "固態硬碟 M.2｜SSD",
+    8: "傳統內接硬碟 HDD",
+    9: "隨身碟｜隨身硬碟｜記憶卡",
+    10: "散熱器｜散熱墊｜散熱膏",
+    11: "封閉式｜開放式水冷",
     12: "顯示卡 VGA",
-    13: "螢幕",
-    14: "機殼",
+    13: "螢幕｜投影機｜壁掛",
+    14: "CASE 機殼(+電源)",
     15: "電源供應器",
-    16: "機殼風扇",
-    17: "鍵盤",
-    18: "滑鼠",
-    22: "喇叭耳機",
+    16: "機殼風扇｜機殼配件",
+    17: "鍵盤+鼠｜搖桿｜桌+椅",
+    18: "滑鼠｜鼠墊｜數位板",
+    19: "IP分享器｜網卡｜網通設備",
+    20: "網路NAS｜網路IPCAM",
+    21: "音效卡｜電視卡(盒)｜影音",
+    22: "喇叭｜耳機｜麥克風",
+    23: "燒錄器 CD/DVD/BD",
+    24: "USB週邊｜硬碟座｜讀卡機",
+    25: "行車紀錄器｜USB視訊鏡頭",
+    26: "UPS不斷電｜印表機｜掃描",
+    27: "介面擴充卡｜專業Raid卡",
+    28: "網路、傳輸線、轉頭｜KVM",
+    29: "OS+應用軟體｜禮物卡",
+    30: "福利品出清",
 }
 
 def crawl_coolpc(max_cats=None):
@@ -194,7 +251,7 @@ def crawl_coolpc(max_cats=None):
 
         print(f"{count} 件")
 
-        time.sleep(2)  # polite delay between categories
+        time.sleep(1)  # polite delay between categories
 
     print(f"=== 原價屋 完成: {len(products)} 件 ===\n")
     return products
