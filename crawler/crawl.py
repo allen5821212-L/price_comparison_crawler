@@ -303,7 +303,10 @@ def extract_canonical_model(name):
     """
     Extract a canonical model identifier from a product name.
     Normalizes naming differences between Sinya and CoolPC.
-    Returns a list of canonical model tokens that can be matched across sites.
+    Returns a set of canonical model tokens that can be matched across sites.
+    
+    CRITICAL: Capacity/spec is included in tokens to prevent
+    matching products with same model but different capacity.
     """
     # Strip HTML tags and noise — replace with SPACE (not empty) to prevent number concatenation
     clean = re.sub(r"<[^>]+>", " ", name)
@@ -317,81 +320,200 @@ def extract_canonical_model(name):
     models = set()
 
     # ── CPU models ──
-    # Intel Core Ultra 5 225F / 225 / 245K / 245KF / 250K Plus / 285K
     for m in re.finditer(r'CORE\s*ULTRA\s*\d+\s*(\d{3,4}[A-Z]*)', clean):
         models.add("IU" + m.group(1))
-    # Intel Core i5-12400F / i9-14900K / i5-14400
     for m in re.finditer(r'(?:CORE\s*)?I(\d)-?(\d{4,5}[A-Z]*)', clean):
         models.add("I" + m.group(1) + m.group(2))
-    # Intel Xeon W5-2465X / W7-3465X
     for m in re.finditer(r'XEON\s*W(\d)-(\d{4,5}[A-Z]*)', clean):
         models.add("XEONW" + m.group(1) + m.group(2))
-    # AMD Ryzen5 7500F / Ryzen7 7800X3D / Ryzen9 9950X
     for m in re.finditer(r'RYZEN\s*(\d)\s*(\d{4}[A-Z0-9]*)', clean):
         models.add("R" + m.group(1) + m.group(2))
-    # AMD R5 5600X / R7 7800X3D / R9 9950X / R5 3400G
     for m in re.finditer(r'\bR(\d)\s*(\d{4}[A-Z0-9]*)', clean):
         models.add("R" + m.group(1) + m.group(2))
-    # AMD Athlon / Phenom (rare but handle)
     for m in re.finditer(r'ATHLON\s*(\d{4}[A-Z]*)', clean):
         models.add("ATHLON" + m.group(1))
 
-    # ── GPU models ──
-    # RTX 5070 / RTX 5080 / RTX 4060 Ti / RTX 5070 Ti
+    # ── GPU models (include VRAM to differentiate 48GB vs 72GB) ──
+    # Extract VRAM: 8G/12G/16G/24G/48GB/72GB etc.
+    vram = ""
+    for m in re.finditer(r'(\d+)\s*GB?s*(?:GDDR|DDR|VRAM)', clean):
+        vram = m.group(1) + "GB"
+    if not vram:
+        for m in re.finditer(r'RTX\s*\d{3,4}[A-Z\s]*\s+(\d+)\s*G\b', clean):
+            vram = m.group(1) + "G"
+    if not vram:
+        for m in re.finditer(r'\b(\d+)G\s*(?:GDDR|DDR)', clean):
+            vram = m.group(1) + "G"
+    # Also check for patterns like "RTX5070 12G" or "RX9060XT 16G"
+    if not vram:
+        for m in re.finditer(r'(?:RTX|RX)\s*\d{3,4}[A-Z\s]*\s+(\d+)G\b', clean):
+            vram = m.group(1) + "G"
+
     for m in re.finditer(r'RTX\s*(\d{3,4}[A-Z\s]*)', clean):
-        models.add("RTX" + m.group(1).replace(" ", ""))
-    # GTX 1660 / GTX 1650
+        token = "RTX" + m.group(1).replace(" ", "")
+        if vram:
+            token += "_" + vram
+        models.add(token)
     for m in re.finditer(r'GTX\s*(\d{3,4}[A-Z]*)', clean):
-        models.add("GTX" + m.group(1))
-    # RX 7600 / RX 9060 XT / RX 9070
+        token = "GTX" + m.group(1)
+        if vram:
+            token += "_" + vram
+        models.add(token)
     for m in re.finditer(r'\bRX\s*(\d{4}[A-Z\s]*)', clean):
-        models.add("RX" + m.group(1).replace(" ", ""))
-    # Arc A750 / A770
+        token = "RX" + m.group(1).replace(" ", "")
+        if vram:
+            token += "_" + vram
+        models.add(token)
     for m in re.finditer(r'\bARC\s*A(\d{3})', clean):
         models.add("ARCA" + m.group(1))
+    # RTX PRO 5000 Blackwell
+    for m in re.finditer(r'RTX\s*PRO\s*(\d{4})', clean):
+        token = "RTXPRO" + m.group(1)
+        if vram:
+            token += "_" + vram
+        models.add(token)
 
     # ── Motherboard models ──
-    # B850-PLUS / B760M / Z890 / X870 / H610 / B860
-    for m in re.finditer(r'\b([ABH])?(\d{3})M?[-\s]?([A-Z0-9]*)', clean):
-        chipset = (m.group(1) or "") + m.group(2)
+    for m in re.finditer(r'\b([ABH])(\d{3})M?[-\s]?([A-Z0-9]*)', clean):
+        chipset = m.group(1) + m.group(2)
         suffix = m.group(3) or ""
-        if chipset and len(chipset) >= 2 and suffix:
+        if suffix:
             full = chipset + suffix
             if len(full) >= 4:
                 models.add("MB" + full)
+        else:
+            models.add("MB" + chipset)
 
-    # ── RAM models ──
-    # DDR5-5200 / DDR5-6000 / DDR4-3200 / D5-5600
+    # ── RAM models (include capacity + speed) ──
+    # Extract RAM capacity: 8G/16G/32G/64G/128G
+    ram_cap = ""
+    for m in re.finditer(r'(\d+)G\s*(?:DDR|D5|D4|\*\d|雙通|四通)', clean):
+        ram_cap = m.group(1) + "G"
+    if not ram_cap:
+        for m in re.finditer(r'(\d+)GB\s*DDR', clean):
+            ram_cap = m.group(1) + "G"
+    # Extract RAM speed
+    ram_speed = ""
     for m in re.finditer(r'DDR?\s*5[-\s]?(\d{4})', clean):
-        models.add("DDR5" + m.group(1))
+        ram_speed = "D5_" + m.group(1)
     for m in re.finditer(r'DDR?\s*4[-\s]?(\d{4})', clean):
-        models.add("DDR4" + m.group(1))
+        ram_speed = "D4_" + m.group(1)
     for m in re.finditer(r'\bD5[-\s]?(\d{4})', clean):
-        models.add("DDR5" + m.group(1))
+        ram_speed = "D5_" + m.group(1)
     for m in re.finditer(r'\bD4[-\s]?(\d{4})', clean):
-        models.add("DDR4" + m.group(1))
+        ram_speed = "D4_" + m.group(1)
+    # Combined RAM token: speed + capacity
+    if ram_speed and ram_cap:
+        models.add("RAM_" + ram_speed + "_" + ram_cap)
+    elif ram_speed:
+        models.add("RAM_" + ram_speed)
 
-    # ── SSD/HDD models ── (REMOVED: too generic, causes false matches)
-    # SSD capacity: 1TB / 2TB / 500GB — these are too generic for matching
+    # ── SSD/HDD models (include capacity) ──
+    # Extract storage capacity: 1TB/2TB/4TB/500GB/1TB/512GB
+    storage_cap = ""
+    for m in re.finditer(r'(\d+)\s*TB\b', clean):
+        storage_cap = m.group(1) + "TB"
+    if not storage_cap:
+        for m in re.finditer(r'(\d+)\s*GB\s*(?:SSD|M\.2|PCIe|Gen)', clean):
+            storage_cap = m.group(1) + "GB"
+    # SSD model + capacity
+    for m in re.finditer(r'\b(990|970|980|9100|870|860|850|950|T700|T500|T300|MP700|MP600|MP500|NM790|NM770|NM760|T60|TI600|TIPLUS|990EVOP|990EVO|990PRO)\s*([A-Z]*)', clean):
+        token = "SSD_" + m.group(1) + m.group(2)
+        if storage_cap:
+            token += "_" + storage_cap
+        models.add(token)
+    # HDD model + capacity
+    for m in re.finditer(r'\b(ST\d{4,5}[A-Z]*)', clean):
+        token = "HDD_" + m.group(1)
+        if storage_cap:
+            token += "_" + storage_cap
+        models.add(token)
 
-    # ── PSU models ── (REMOVED: too generic, causes false matches)
-    # 850W / 750W / 1000W — these are too generic for matching
+    # ── Monitor models (exact model number) ──
+    # ASUS PA27USD / PA34VCNV / VG27A / XG27AQ
+    for m in re.finditer(r'\b(PA|VG|XG|PG|VP|VA|MX|VX)\s*(\d{2,3}[A-Z]{1,4})', clean):
+        models.add("MON_" + m.group(1) + m.group(2))
+    # BenQ GW2790 / EX3210 / EW3270
+    for m in re.finditer(r'\b(GW|EX|EW|GD|XL|EL|SW)\s*(\d{4}[A-Z]*)', clean):
+        models.add("MON_" + m.group(1) + m.group(2))
+    # AOC Q27G2 / 24G2 / 27G2
+    for m in re.finditer(r'\b(Q\d{2}G\d|\d{2}G\d)\b', clean):
+        models.add("MON_" + m.group(0))
+    # LG 27GP850 / 32GQ850
+    for m in re.finditer(r'\b(\d{2}GP\d{3,4}|\d{2}GQ\d{3,4})', clean):
+        models.add("MON_" + m.group(0))
 
-    # ── Monitor models ── (REMOVED: too generic, causes false matches)
-    # 27" / 32" / 24" sizes — these are too generic for matching
+    # ── PSU models (include wattage) ──
+    for m in re.finditer(r'\b(\d{3,4})\s*W\b', clean):
+        models.add("PSU_" + m.group(1) + "W")
 
     # ── Fallback: generic alphanumeric model patterns ──
-    # Long alphanumeric sequences that might be model numbers
-    # Must be at least 5 chars to avoid matching generic numbers like "5000"
+    # Only for tokens that are at least 6 chars to reduce false matches
     for m in re.finditer(r'\b([A-Z]{2,}\d{3,}[A-Z0-9]*)', clean):
         token = m.group(1)
-        if len(token) >= 5 and token not in models:
-            # Filter out very generic tokens
-            generic = {"RTX5000", "GTX5000", "DDR5000", "SSD5000"}
+        if len(token) >= 6 and token not in models:
+            generic = {"RTX5000", "GTX5000", "DDR5000", "SSD5000", "PCIE500",
+                       "GEN5000", "HDMI500", "TYPE500", "ATX500"}
             if token not in generic:
                 models.add(token)
 
     return models
+
+
+def extract_specs(name):
+    """Extract key specs from product name for validation."""
+    clean = re.sub(r"<[^>]+>", " ", name)
+    clean = re.sub(r"【[^】]*】", " ", clean)
+    clean = re.sub(r"\[[^\]]*\]", " ", clean)
+    clean = re.sub(r"\([^)]*\)", " ", clean)
+    clean = re.sub(r"\s+", " ", clean).upper().strip()
+    
+    specs = {}
+    
+    # Storage capacity
+    for m in re.finditer(r'(\d+)\s*TB\b', clean):
+        specs.setdefault('storage', set()).add(m.group(1) + 'TB')
+    for m in re.finditer(r'(\d+)\s*GB\s*(?:SSD|M\.2|PCIe|GEN)', clean):
+        specs.setdefault('storage', set()).add(m.group(1) + 'GB')
+    
+    # RAM capacity
+    for m in re.finditer(r'(\d+)G\s*(?:DDR|D5|D4|\*\d|雙通|四通)', clean):
+        specs.setdefault('ram_cap', set()).add(m.group(1) + 'G')
+    for m in re.finditer(r'(\d+)GB\s*DDR', clean):
+        specs.setdefault('ram_cap', set()).add(m.group(1) + 'G')
+    
+    # VRAM / GPU memory
+    for m in re.finditer(r'(\d+)\s*GB?\s*(?:GDDR|DDR|VRAM)', clean):
+        specs.setdefault('vram', set()).add(m.group(1) + 'GB')
+    for m in re.finditer(r'(?:RTX|RX)\s*\d{3,4}[A-Z\s]*\s+(\d+)G\b', clean):
+        specs.setdefault('vram', set()).add(m.group(1) + 'G')
+    
+    # Monitor size
+    for m in re.finditer(r'(\d{2})\s*(?:型|吋|"|INCH)', clean):
+        specs.setdefault('monitor_size', set()).add(m.group(1))
+    
+    # CPU model (for combo products)
+    for m in re.finditer(r'(?:RYZEN\s*)?R(\d)\s*(\d{4}[A-Z0-9]*)', clean):
+        specs.setdefault('cpu', set()).add('R' + m.group(1) + m.group(2))
+    for m in re.finditer(r'(?:CORE\s*)?I(\d)-?(\d{4,5}[A-Z]*)', clean):
+        specs.setdefault('cpu', set()).add('I' + m.group(1) + m.group(2))
+    for m in re.finditer(r'CORE\s*ULTRA\s*\d+\s*(\d{3,4}[A-Z]*)', clean):
+        specs.setdefault('cpu', set()).add('IU' + m.group(1))
+    
+    return specs
+
+
+def specs_compatible(name1, name2):
+    """Check if two product names have compatible specs (no conflicts)."""
+    specs1 = extract_specs(name1)
+    specs2 = extract_specs(name2)
+    
+    for key in ['storage', 'ram_cap', 'vram', 'monitor_size', 'cpu']:
+        if key in specs1 and key in specs2:
+            if specs1[key] and specs2[key] and not specs1[key] & specs2[key]:
+                return False
+    
+    return True
 
 
 def extract_brand(name):
@@ -595,6 +717,8 @@ def match_products(sinya_products, coolpc_products):
                     continue
                 if not price_ratio_ok(sp["price"], cp["price"]):
                     continue
+                if not specs_compatible(sp["name"], cp["name"]):
+                    continue
                 price_diff = sp["price"] - cp["price"]
                 cheaper = "sinya" if sp["price"] < cp["price"] else ("coolpc" if cp["price"] < sp["price"] else "tie")
                 matched.append({
@@ -632,6 +756,8 @@ def match_products(sinya_products, coolpc_products):
                     continue
                 if not price_ratio_ok(sp["price"], cp["price"]):
                     continue
+                if not specs_compatible(sp["name"], cp["name"]):
+                    continue
                 price_diff = sp["price"] - cp["price"]
                 cheaper = "sinya" if sp["price"] < cp["price"] else ("coolpc" if cp["price"] < sp["price"] else "tie")
                 matched.append({
@@ -668,6 +794,8 @@ def match_products(sinya_products, coolpc_products):
                 if sp_brand and cp_brand and sp_brand != cp_brand:
                     continue
                 if not price_ratio_ok(sp["price"], cp["price"]):
+                    continue
+                if not specs_compatible(sp["name"], cp["name"]):
                     continue
                 price_diff = sp["price"] - cp["price"]
                 cheaper = "sinya" if sp["price"] < cp["price"] else ("coolpc" if cp["price"] < sp["price"] else "tie")
