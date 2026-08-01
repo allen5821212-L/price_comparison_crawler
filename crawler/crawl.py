@@ -705,12 +705,15 @@ def main(max_cats=None):
         "avg_price_diff": sum(abs(m["price_diff"]) for m in matched) / max(len(matched), 1),
     }
 
-    # Save all data
+    # Save all data — include the official Sinya DIY category list (in order)
+    sinya_categories = [c["name"] for c in categories] if categories else []
+
     all_data = {
         "stats": stats,
         "matched": matched,
         "sinya_products": sinya_products,
         "coolpc_products": coolpc_products,
+        "sinya_categories": sinya_categories,
     }
 
     output_file = OUTPUT_DIR / "comparison.json"

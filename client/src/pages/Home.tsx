@@ -72,6 +72,7 @@ interface ComparisonData {
   matched: MatchedProduct[];
   sinya_products: Array<Record<string, unknown>>;
   coolpc_products: Array<Record<string, unknown>>;
+  sinya_categories: string[];
 }
 
 type SortField = "price_diff" | "sinya_price" | "coolpc_price" | "name";
@@ -121,8 +122,13 @@ export default function Home() {
     }
   };
 
+  // Use the official Sinya DIY category list (in order) from the crawler.
+  // Fallback: derive from matched products if the list is missing.
   const categories = useMemo(() => {
     if (!data) return [];
+    if (data.sinya_categories && data.sinya_categories.length > 0) {
+      return data.sinya_categories;
+    }
     const cats = new Set<string>();
     data.matched.forEach((m) => {
       if (m.category) cats.add(m.category);
