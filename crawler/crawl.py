@@ -800,37 +800,12 @@ def is_non_product(name, price):
 
 
 def match_products(sinya_products, coolpc_products):
-    """Match products between Sinya and CoolPC using strict model-based matching.
+    """Match products using the v2 spec-compliant matching engine."""
+    import sys as _sys, os as _os
+    _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+    from matcher import match_products_v2
 
-    Key design principles:
-    1. Only match when there is a SPECIFIC model number in common (not generic tokens)
-    2. Brand must match (if both have brand info)
-    3. Category must be compatible
-    4. Price ratio must be within 2:1
-    5. No fuzzy matching — only exact model token match
-    6. Combo/bundle products are matched separately from standalone products
-    """
-    print("=== 商品比對開始 ===")
-    matched = []
-    sinya_matched = set()
-    coolpc_matched = set()
-
-    # Filter out non-products
-    sinya_valid = {}
-    for i, p in enumerate(sinya_products):
-        if is_non_product(p["name"], p["price"]):
-            continue
-        sinya_valid[i] = p
-
-    coolpc_valid = {}
-    for i, p in enumerate(coolpc_products):
-        if is_non_product(p["name"], p["price"]):
-            continue
-        coolpc_valid[i] = p
-
-    print(f"  有效商品: 欣亞 {len(sinya_valid)} / 原價屋 {len(coolpc_valid)}")
-
-    # Category compatibility map
+    # Category compatibility map (same as before)
     CATEGORY_COMPAT = {
         ("CPU 中央處理器", "處理器 CPU"),
         ("MB 主機板", "主機板 MB"),
@@ -877,167 +852,22 @@ def match_products(sinya_products, coolpc_products):
         compat_set.add((a, b))
         compat_set.add((b, a))
 
-    def categories_compatible(cat1, cat2):
-        if not cat1 or not cat2:
-            return True
-        if cat1 == cat2:
-            return True
-        return (cat1, cat2) in compat_set
+    matched, rejected, review, price_review = match_products_v2(
+        sinya_products, coolpc_products, category_compat=compat_set
+    )
 
-    def price_ratio_ok(price1, price2):
-        if price1 <= 0 or price2 <= 0:
-            return False
-        ratio = max(price1, price2) / min(price1, price2)
-        return ratio <= 2.0  # Stricter: 2:1 max
+    # Store rejected/review data for audit
+    import json
+    audit_data = {
+        "rejected": rejected,
+        "review": review,
+        "price_review": price_review,
+    }
+    audit_file = OUTPUT_DIR / "audit.json"
+    with open(audit_file, "w", encoding="utf-8") as f:
+        json.dump(audit_data, f, ensure_ascii=False, separators=(',', ':'))
+    print(f"  複核清單已儲存至 {audit_file}")
 
-    # ── Build model index using ONLY specific model tokens ──
-    # Separate standalone vs combo products
-    coolpc_standalone_index = {}  # model_token → [ci, ...]
-    coolpc_combo_index = {}
-    sinya_standalone_index = {}
-    sinya_combo_index = {}
-
-    for ci, cp in coolpc_valid.items():
-        is_combo = is_combo_or_bundle(cp["name"])
-        models = extract_canonical_model(cp["name"])
-        idx = coolpc_combo_index if is_combo else coolpc_standalone_index
-        for m in models:
-            idx.setdefault(m, []).append(ci)
-
-    for si, sp in sinya_valid.items():
-        is_combo = is_combo_or_bundle(sp["name"])
-        models = extract_canonical_model(sp["name"])
-        idx = sinya_combo_index if is_combo else sinya_standalone_index
-        for m in models:
-            idx.setdefault(m, []).append(si)
-
-    # ── Phase 1: Standalone vs Standalone (exact model match) ──
-    for model, sinya_entries in sinya_standalone_index.items():
-        if model not in coolpc_standalone_index:
-            continue
-        for si in sinya_entries:
-            if si in sinya_matched:
-                continue
-            for ci in coolpc_standalone_index[model]:
-                if ci in coolpc_matched:
-                    continue
-                sp = sinya_products[si]
-                cp = coolpc_products[ci]
-                if not categories_compatible(sp.get("category", ""), cp.get("category", "")):
-                    continue
-                sp_brand = extract_brand(sp["name"])
-                cp_brand = extract_brand(cp["name"])
-                if sp_brand and cp_brand and sp_brand != cp_brand:
-                    continue
-                if not price_ratio_ok(sp["price"], cp["price"]):
-                    continue
-                if not specs_compatible(sp["name"], cp["name"]):
-                    continue
-                if not gpu_compatible(sp["name"], cp["name"]):
-                    continue
-                price_diff = sp["price"] - cp["price"]
-                cheaper = "sinya" if sp["price"] < cp["price"] else ("coolpc" if cp["price"] < sp["price"] else "tie")
-                matched.append({
-                    "name": sp["name"], "sinya_name": sp["name"], "coolpc_name": cp["name"],
-                    "sinya_price": sp["price"], "coolpc_price": cp["price"],
-                    "price_diff": price_diff, "cheaper": cheaper,
-                    "sinya_url": sp["url"], "coolpc_url": cp["url"],
-                    "sinya_image": sp["image"], "coolpc_image": cp["image"],
-                    "category": sp["category"] or cp["category"],
-                })
-                sinya_matched.add(si)
-                coolpc_matched.add(ci)
-                break
-
-    phase1_count = len(matched)
-    print(f"  Phase 1 (單品精確比對): {phase1_count} 組")
-
-    # ── Phase 2: Standalone vs Combo (exact model match) ──
-    for model, sinya_entries in sinya_standalone_index.items():
-        if model not in coolpc_combo_index:
-            continue
-        for si in sinya_entries:
-            if si in sinya_matched:
-                continue
-            for ci in coolpc_combo_index[model]:
-                if ci in coolpc_matched:
-                    continue
-                sp = sinya_products[si]
-                cp = coolpc_products[ci]
-                if not categories_compatible(sp.get("category", ""), cp.get("category", "")):
-                    continue
-                sp_brand = extract_brand(sp["name"])
-                cp_brand = extract_brand(cp["name"])
-                if sp_brand and cp_brand and sp_brand != cp_brand:
-                    continue
-                if not price_ratio_ok(sp["price"], cp["price"]):
-                    continue
-                if not specs_compatible(sp["name"], cp["name"]):
-                    continue
-                if not gpu_compatible(sp["name"], cp["name"]):
-                    continue
-                price_diff = sp["price"] - cp["price"]
-                cheaper = "sinya" if sp["price"] < cp["price"] else ("coolpc" if cp["price"] < sp["price"] else "tie")
-                matched.append({
-                    "name": sp["name"], "sinya_name": sp["name"], "coolpc_name": cp["name"],
-                    "sinya_price": sp["price"], "coolpc_price": cp["price"],
-                    "price_diff": price_diff, "cheaper": cheaper,
-                    "sinya_url": sp["url"], "coolpc_url": cp["url"],
-                    "sinya_image": sp["image"], "coolpc_image": cp["image"],
-                    "category": sp["category"] or cp["category"],
-                })
-                sinya_matched.add(si)
-                coolpc_matched.add(ci)
-                break
-
-    phase2_count = len(matched) - phase1_count
-    print(f"  Phase 2 (單品 vs 組合包): {phase2_count} 組")
-
-    # ── Phase 3: Combo vs Combo (exact model match) ──
-    for model, sinya_entries in sinya_combo_index.items():
-        if model not in coolpc_combo_index:
-            continue
-        for si in sinya_entries:
-            if si in sinya_matched:
-                continue
-            for ci in coolpc_combo_index[model]:
-                if ci in coolpc_matched:
-                    continue
-                sp = sinya_products[si]
-                cp = coolpc_products[ci]
-                if not categories_compatible(sp.get("category", ""), cp.get("category", "")):
-                    continue
-                sp_brand = extract_brand(sp["name"])
-                cp_brand = extract_brand(cp["name"])
-                if sp_brand and cp_brand and sp_brand != cp_brand:
-                    continue
-                if not price_ratio_ok(sp["price"], cp["price"]):
-                    continue
-                if not specs_compatible(sp["name"], cp["name"]):
-                    continue
-                if not gpu_compatible(sp["name"], cp["name"]):
-                    continue
-                price_diff = sp["price"] - cp["price"]
-                cheaper = "sinya" if sp["price"] < cp["price"] else ("coolpc" if cp["price"] < sp["price"] else "tie")
-                matched.append({
-                    "name": sp["name"], "sinya_name": sp["name"], "coolpc_name": cp["name"],
-                    "sinya_price": sp["price"], "coolpc_price": cp["price"],
-                    "price_diff": price_diff, "cheaper": cheaper,
-                    "sinya_url": sp["url"], "coolpc_url": cp["url"],
-                    "sinya_image": sp["image"], "coolpc_image": cp["image"],
-                    "category": sp["category"] or cp["category"],
-                })
-                sinya_matched.add(si)
-                coolpc_matched.add(ci)
-                break
-
-    phase3_count = len(matched) - phase1_count - phase2_count
-    print(f"  Phase 3 (組合包比對): {phase3_count} 組")
-
-    print(f"  比對成功: {len(matched)} 組")
-    print(f"  欣亞未比對: {len(sinya_products) - len(sinya_matched)} 件")
-    print(f"  原價屋未比對: {len(coolpc_products) - len(coolpc_matched)} 件")
-    print(f"=== 商品比對完成 ===\n")
     return matched
 
 
