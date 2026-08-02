@@ -301,161 +301,253 @@ def normalize_name(name):
 
 def extract_canonical_model(name):
     """
-    Extract a canonical model identifier from a product name.
-    Normalizes naming differences between Sinya and CoolPC.
-    Returns a set of canonical model tokens that can be matched across sites.
+    Extract canonical model tokens from a product name.
     
-    CRITICAL: Capacity/spec is included in tokens to prevent
-    matching products with same model but different capacity.
+    CRITICAL: VRAM/capacity is ALWAYS included in GPU tokens to prevent
+    matching products with same GPU model but different VRAM.
+    Fallback generic tokens are heavily filtered to prevent false matches.
     """
-    # Strip HTML tags and noise — replace with SPACE (not empty) to prevent number concatenation
     clean = re.sub(r"<[^>]+>", " ", name)
     clean = re.sub(r"【[^】]*】", " ", clean)
     clean = re.sub(r"\[[^\]]*\]", " ", clean)
     clean = re.sub(r"\([^)]*\)", " ", clean)
     clean = re.sub(r"~[^~]*~", " ", clean)
-    # Normalize whitespace
     clean = re.sub(r"\s+", " ", clean).upper().strip()
+    # Also normalize dashes to spaces for better tokenization
+    clean_norm = clean.replace("-", " ")
 
     models = set()
 
-    # ── CPU models ──
-    for m in re.finditer(r'CORE\s*ULTRA\s*\d+\s*(\d{3,4}[A-Z]*)', clean):
+    # ── CPU models (with alias normalization) ──
+    # Normalize: Ryzen5 → R5, Ryzen7 → R7, etc.
+    cpu_norm = clean_norm
+    cpu_norm = re.sub(r'\bRYZEN\s*(\d)\b', r'R\1', cpu_norm)
+    cpu_norm = re.sub(r'\bCORE\s*ULTRA\s*(\d)\b', r'IU\1', cpu_norm)
+    cpu_norm = re.sub(r'\bCORE\s*I(\d)\b', r'I\1', cpu_norm)
+    
+    for m in re.finditer(r'\bIU\d+\s*(\d{3,4}[A-Z]*)', cpu_norm):
         models.add("IU" + m.group(1))
-    for m in re.finditer(r'(?:CORE\s*)?I(\d)-?(\d{4,5}[A-Z]*)', clean):
+    for m in re.finditer(r'\bIU(\d{3,4}[A-Z]*)', cpu_norm):
+        models.add("IU" + m.group(1))
+    for m in re.finditer(r'(?:CORE\s*)?\bI(\d)\s*(\d{4,5}[A-Z]*)', cpu_norm):
         models.add("I" + m.group(1) + m.group(2))
-    for m in re.finditer(r'XEON\s*W(\d)-(\d{4,5}[A-Z]*)', clean):
+    for m in re.finditer(r'\bXEON\s*W(\d)\s*(\d{4,5}[A-Z]*)', cpu_norm):
         models.add("XEONW" + m.group(1) + m.group(2))
-    for m in re.finditer(r'RYZEN\s*(\d)\s*(\d{4}[A-Z0-9]*)', clean):
+    for m in re.finditer(r'\bRYZEN\s*(\d)\s*(\d{4}[A-Z0-9]*)', cpu_norm):
         models.add("R" + m.group(1) + m.group(2))
-    for m in re.finditer(r'\bR(\d)\s*(\d{4}[A-Z0-9]*)', clean):
+    for m in re.finditer(r'\bR(\d)\s*(\d{4}[A-Z0-9]*)', cpu_norm):
         models.add("R" + m.group(1) + m.group(2))
-    for m in re.finditer(r'ATHLON\s*(\d{4}[A-Z]*)', clean):
+    for m in re.finditer(r'\bATHLON\s*(\d{4}[A-Z]*)', cpu_norm):
         models.add("ATHLON" + m.group(1))
 
-    # ── GPU models (include VRAM to differentiate 48GB vs 72GB) ──
-    # Extract VRAM: 8G/12G/16G/24G/48GB/72GB etc.
+    # ── GPU models ──
+    # Extract VRAM aggressively from multiple patterns — NORMALIZE to "NG" format
     vram = ""
-    for m in re.finditer(r'(\d+)\s*GB?s*(?:GDDR|DDR|VRAM)', clean):
-        vram = m.group(1) + "GB"
+    # Pattern 1: "8GB GDDR6" / "16GB GDDR" / "48GB GDDR7"
+    for m in re.finditer(r'(\d+)\s*GB\s*GDDR', clean_norm):
+        vram = m.group(1) + "G"
+    # Pattern 1b: "16GB D6" / "8GB D7" (Sinya uses D6/D7 abbreviation)
     if not vram:
-        for m in re.finditer(r'RTX\s*\d{3,4}[A-Z\s]*\s+(\d+)\s*G\b', clean):
+        for m in re.finditer(r'(\d+)\s*GB\s*D[567]\b', clean_norm):
             vram = m.group(1) + "G"
+    # Pattern 2: "8G GDDR6"
     if not vram:
-        for m in re.finditer(r'\b(\d+)G\s*(?:GDDR|DDR)', clean):
+        for m in re.finditer(r'(\d+)G\s*GDDR', clean_norm):
             vram = m.group(1) + "G"
-    # Also check for patterns like "RTX5070 12G" or "RX9060XT 16G"
+    # Pattern 3: "RTX3050 8G" or "RX9060XT 16G" (number + G after GPU model)
     if not vram:
-        for m in re.finditer(r'(?:RTX|RX)\s*\d{3,4}[A-Z\s]*\s+(\d+)G\b', clean):
+        for m in re.finditer(r'(?:RTX|RX|GTX)\s*\d{3,4}[A-Z\s]*\s+(\d+)G\b', clean_norm):
+            vram = m.group(1) + "G"
+    # Pattern 5: "O6G" or "-O8G" in CoolPC names (OC + VRAM)
+    if not vram:
+        for m in re.finditer(r'(?:RTX|RX|GTX)\s*\d{3,4}[A-Z\s]*O?(\d+)G\b', clean_norm):
+            vram = m.group(1) + "G"
+    # Pattern 6: standalone "NG" near GPU model (e.g. "RTX5050 8G SHADOW")
+    if not vram:
+        for m in re.finditer(r'(?:RTX|RX|GTX)\s*(\d{3,4})[A-Z\s]*(\d+)G\b', clean_norm):
+            vram = m.group(2) + "G"
+    # Pattern 7: "16GB" right after GPU model (e.g. "RX9060XT Challenger 16GB OC")
+    if not vram:
+        for m in re.finditer(r'(?:RTX|RX|GTX)\s*\d{3,4}[A-Z\s]*\s+(\d+)GB\b', clean_norm):
             vram = m.group(1) + "G"
 
-    for m in re.finditer(r'RTX\s*(\d{3,4}[A-Z\s]*)', clean):
-        token = "RTX" + m.group(1).replace(" ", "")
+    # Generate GPU tokens — ALWAYS include VRAM if found
+    # If VRAM found: only create token WITH VRAM (prevents cross-VRAM matching)
+    # If VRAM NOT found: create bare token (for coverage, gpu_compatible will catch mismatches)
+    for m in re.finditer(r'RTX\s*(\d{3,4}[A-Z\s]*)', clean_norm):
+        raw = m.group(1).replace(" ", "")
+        raw = re.sub(r'(\d)G$', r'\1', raw)
+        raw = re.sub(r'O(\d+)G$', '', raw)
+        token = "RTX" + raw
         if vram:
             token += "_" + vram
         models.add(token)
-    for m in re.finditer(r'GTX\s*(\d{3,4}[A-Z]*)', clean):
-        token = "GTX" + m.group(1)
+    for m in re.finditer(r'GTX\s*(\d{3,4}[A-Z\s]*)', clean_norm):
+        raw = m.group(1).replace(" ", "")
+        raw = re.sub(r'(\d)G$', r'\1', raw)
+        token = "GTX" + raw
         if vram:
             token += "_" + vram
         models.add(token)
-    for m in re.finditer(r'\bRX\s*(\d{4}[A-Z\s]*)', clean):
-        token = "RX" + m.group(1).replace(" ", "")
+    for m in re.finditer(r'\bRX\s*(\d{4}[A-Z\s]*)', clean_norm):
+        raw = m.group(1).replace(" ", "")
+        raw = re.sub(r'(\d)G$', r'\1', raw)
+        raw = re.sub(r'O(\d+)G$', '', raw)
+        token = "RX" + raw
         if vram:
             token += "_" + vram
         models.add(token)
-    for m in re.finditer(r'\bARC\s*A(\d{3})', clean):
-        models.add("ARCA" + m.group(1))
-    # RTX PRO 5000 Blackwell
-    for m in re.finditer(r'RTX\s*PRO\s*(\d{4})', clean):
+    for m in re.finditer(r'\bARC\s*A(\d{3})', clean_norm):
+        token = "ARCA" + m.group(1)
+        if vram:
+            token += "_" + vram
+        models.add(token)
+    for m in re.finditer(r'RTX\s*PRO\s*(\d{4})', clean_norm):
         token = "RTXPRO" + m.group(1)
         if vram:
             token += "_" + vram
         models.add(token)
 
     # ── Motherboard models ──
-    for m in re.finditer(r'\b([ABH])(\d{3})M?[-\s]?([A-Z0-9]*)', clean):
+    for m in re.finditer(r'\b([ABH])(\d{3})M?\s?([A-Z0-9]*)', clean_norm):
         chipset = m.group(1) + m.group(2)
         suffix = m.group(3) or ""
-        if suffix:
-            full = chipset + suffix
-            if len(full) >= 4:
-                models.add("MB" + full)
+        if suffix and len(suffix) >= 2:
+            models.add("MB" + chipset + suffix)
         else:
             models.add("MB" + chipset)
 
-    # ── RAM models (include capacity + speed) ──
-    # Extract RAM capacity: 8G/16G/32G/64G/128G
+    # ── RAM models (speed + capacity, BOTH required) ──
     ram_cap = ""
-    for m in re.finditer(r'(\d+)G\s*(?:DDR|D5|D4|\*\d|雙通|四通)', clean):
+    # Pattern: "16G DDR5" or "16G*2" (capacity before speed/multiplier)
+    for m in re.finditer(r'(\d+)G\s*(?:DDR|D5|D4|\*\d|雙通|四通)', clean_norm):
         ram_cap = m.group(1) + "G"
+    # Pattern: "DDR5-6000 16G" (speed first, then capacity after)
     if not ram_cap:
-        for m in re.finditer(r'(\d+)GB\s*DDR', clean):
+        for m in re.finditer(r'DDR\s*5\s*\d{4}\s*(\d+)G\b', clean_norm):
             ram_cap = m.group(1) + "G"
-    # Extract RAM speed
+    if not ram_cap:
+        for m in re.finditer(r'DDR\s*4\s*\d{4}\s*(\d+)G\b', clean_norm):
+            ram_cap = m.group(1) + "G"
+    # Pattern: "D5-6000 16G" (short form)
+    if not ram_cap:
+        for m in re.finditer(r'\bD5\s*\d{4}\s*(\d+)G\b', clean_norm):
+            ram_cap = m.group(1) + "G"
+    if not ram_cap:
+        for m in re.finditer(r'\bD4\s*\d{4}\s*(\d+)G\b', clean_norm):
+            ram_cap = m.group(1) + "G"
+    # Pattern: "16GB DDR" or "16GB(雙通...)
+    if not ram_cap:
+        for m in re.finditer(r'(\d+)GB\s*DDR', clean_norm):
+            ram_cap = m.group(1) + "G"
+    if not ram_cap:
+        for m in re.finditer(r'(\d+)GB\s*雙通', clean_norm):
+            ram_cap = m.group(1) + "G"
+    if not ram_cap:
+        for m in re.finditer(r'單條(\d+)GB', clean_norm):
+            ram_cap = m.group(1) + "G"
+    # Pattern: "32GB(雙通16G*2)" → total capacity
+    if not ram_cap:
+        for m in re.finditer(r'(\d+)GB\s*\(雙通', clean_norm):
+            ram_cap = m.group(1) + "G"
+    if not ram_cap:
+        for m in re.finditer(r'(\d+)GB\s*\(雙通', clean_norm):
+            ram_cap = m.group(1) + "G"
+    # Also try: "32G(16G*2)" → total is 32G
+    if not ram_cap:
+        for m in re.finditer(r'(\d+)G\s*\(\d+G\s*\*\s*\d+\)', clean_norm):
+            ram_cap = m.group(1) + "G"
     ram_speed = ""
-    for m in re.finditer(r'DDR?\s*5[-\s]?(\d{4})', clean):
+    for m in re.finditer(r'DDR?\s*5\s*(\d{4})', clean_norm):
         ram_speed = "D5_" + m.group(1)
-    for m in re.finditer(r'DDR?\s*4[-\s]?(\d{4})', clean):
+    for m in re.finditer(r'DDR?\s*4\s*(\d{4})', clean_norm):
         ram_speed = "D4_" + m.group(1)
-    for m in re.finditer(r'\bD5[-\s]?(\d{4})', clean):
+    for m in re.finditer(r'\bD5\s*(\d{4})', clean_norm):
         ram_speed = "D5_" + m.group(1)
-    for m in re.finditer(r'\bD4[-\s]?(\d{4})', clean):
+    for m in re.finditer(r'\bD4\s*(\d{4})', clean_norm):
         ram_speed = "D4_" + m.group(1)
-    # Combined RAM token: speed + capacity
+    # CRITICAL: Only generate RAM token if BOTH speed AND capacity are found
+    # This prevents matching different capacity RAM at same speed
     if ram_speed and ram_cap:
         models.add("RAM_" + ram_speed + "_" + ram_cap)
-    elif ram_speed:
-        models.add("RAM_" + ram_speed)
+    # Do NOT add speed-only token — it causes false matches across brands/capacities
 
-    # ── SSD/HDD models (include capacity) ──
-    # Extract storage capacity: 1TB/2TB/4TB/500GB/1TB/512GB
+    # ── SSD/HDD models ──
     storage_cap = ""
-    for m in re.finditer(r'(\d+)\s*TB\b', clean):
+    for m in re.finditer(r'(\d+)\s*TB\b', clean_norm):
         storage_cap = m.group(1) + "TB"
     if not storage_cap:
-        for m in re.finditer(r'(\d+)\s*GB\s*(?:SSD|M\.2|PCIe|Gen)', clean):
+        for m in re.finditer(r'(\d+)\s*GB\s*(?:SSD|M\.2|PCIe|GEN|/|SATA|吋)', clean_norm):
             storage_cap = m.group(1) + "GB"
-    # SSD model + capacity
-    for m in re.finditer(r'\b(990|970|980|9100|870|860|850|950|T700|T500|T300|MP700|MP600|MP500|NM790|NM770|NM760|T60|TI600|TIPLUS|990EVOP|990EVO|990PRO)\s*([A-Z]*)', clean):
+    # Also handle "NG" format (CoolPC uses "240G" not "240GB")
+    if not storage_cap:
+        for m in re.finditer(r'(\d+)G\s*/\s*2\.5|(\d+)G\s*/\s*M', clean_norm):
+            cap = m.group(1) or m.group(2)
+            if cap:
+                storage_cap = cap + "GB"
+    # Normalize approximate capacities
+    if storage_cap == "512GB":
+        storage_cap = "500GB"
+    if storage_cap == "960GB":
+        storage_cap = "1TB"
+    if storage_cap == "256GB":
+        storage_cap = "250GB"
+    if storage_cap == "128GB":
+        storage_cap = "120GB"
+    # SSD model patterns — expanded list
+    for m in re.finditer(r'\b(990|970|980|9100|870|860|850|950|T700|T500|T300|MP700|MP600|MP500|NM790|NM770|NM760|T60|TI600|TIPLUS|990EVOP|990EVO|990PRO|BX500|A400|SU650|SU800|S330|S270|SA510|RE100|EXCERIA|VULCAN|SPATIUM|CYBER|FURY|NS100|NS200|CS|CR|GOLDS|S70|S50|S40|ST)\s*([A-Z]*)', clean_norm):
         token = "SSD_" + m.group(1) + m.group(2)
         if storage_cap:
             token += "_" + storage_cap
         models.add(token)
-    # HDD model + capacity
-    for m in re.finditer(r'\b(ST\d{4,5}[A-Z]*)', clean):
+    for m in re.finditer(r'\b(ST\d{4,5}[A-Z]*)', clean_norm):
         token = "HDD_" + m.group(1)
         if storage_cap:
             token += "_" + storage_cap
         models.add(token)
 
-    # ── Monitor models (exact model number) ──
-    # ASUS PA27USD / PA34VCNV / VG27A / XG27AQ
-    for m in re.finditer(r'\b(PA|VG|XG|PG|VP|VA|MX|VX)\s*(\d{2,3}[A-Z]{1,4})', clean):
+    # ── Monitor models (exact model number only) ──
+    for m in re.finditer(r'\b(PA|VG|XG|PG|VP|VA|MX|VX)\s*(\d{2,3}[A-Z]{1,5})', clean_norm):
         models.add("MON_" + m.group(1) + m.group(2))
-    # BenQ GW2790 / EX3210 / EW3270
-    for m in re.finditer(r'\b(GW|EX|EW|GD|XL|EL|SW)\s*(\d{4}[A-Z]*)', clean):
+    for m in re.finditer(r'\b(GW|EX|EW|GD|XL|EL|SW)\s*(\d{4}[A-Z]*)', clean_norm):
         models.add("MON_" + m.group(1) + m.group(2))
-    # AOC Q27G2 / 24G2 / 27G2
-    for m in re.finditer(r'\b(Q\d{2}G\d|\d{2}G\d)\b', clean):
+    for m in re.finditer(r'\b(Q\d{2}G\d|\d{2}G\d)\b', clean_norm):
         models.add("MON_" + m.group(0))
-    # LG 27GP850 / 32GQ850
-    for m in re.finditer(r'\b(\d{2}GP\d{3,4}|\d{2}GQ\d{3,4})', clean):
+    for m in re.finditer(r'\b(\d{2}GP\d{3,4}|\d{2}GQ\d{3,4})', clean_norm):
         models.add("MON_" + m.group(0))
+    # Acer ED240Q / Nitro ED240Q
+    for m in re.finditer(r'\b(ED|VY|VU|VA|VE)\s*(\d{3}[A-Z]{0,2})', clean_norm):
+        models.add("MON_" + m.group(1) + m.group(2))
+    # ViewSonic VP2788 / XG248QSG
+    for m in re.finditer(r'\b(VP|XG|VX)\s*(\d{4}[A-Z]*)', clean_norm):
+        models.add("MON_" + m.group(1) + m.group(2))
 
-    # ── PSU models (include wattage) ──
-    for m in re.finditer(r'\b(\d{3,4})\s*W\b', clean):
+    # ── PSU models (wattage) ──
+    for m in re.finditer(r'\b(\d{3,4})\s*W\b', clean_norm):
         models.add("PSU_" + m.group(1) + "W")
 
-    # ── Fallback: generic alphanumeric model patterns ──
-    # Only for tokens that are at least 6 chars to reduce false matches
-    for m in re.finditer(r'\b([A-Z]{2,}\d{3,}[A-Z0-9]*)', clean):
+    # ── Fallback: heavily filtered generic tokens ──
+    # Only 7+ char tokens, exclude all known generic patterns
+    GENERIC_EXCLUDE = {
+        "RTX5000", "GTX5000", "DDR5000", "SSD5000", "PCIE500",
+        "GEN5000", "HDMI500", "TYPE500", "ATX500", "HDR400", "HDR600",
+        "HDR1000", "FREESYNC", "GSYNC", "ADAPTIVE", "HDMI20", "HDMI21",
+        "DISPLAYPORT", "TYPEC", "USB30", "USB20", "PCIE40", "PCIE50",
+        "GEN4", "GEN5", "M2SSD", "NVME", "SATA3", "DDR4", "DDR5",
+        "GDDR6", "GDDR7", "GDDR5", "HDMI11", "DP14", "DP12",
+        # Exclude ATX-related patterns that cause false SSD matches
+        "850ATX", "750ATX", "650ATX", "550ATX", "450ATX",
+        "ATX300", "ATX301", "ATX30", "ATX31",
+        # Exclude wattage-only patterns
+        "850W", "750W", "650W", "550W", "450W", "350W",
+        "1000W", "1200W", "1300W", "1600W",
+        # Exclude HDR variants that cause false monitor matches
+        "HDR500", "HDR700", "HDR800", "HDR900",
+    }
+    for m in re.finditer(r'\b([A-Z]{2,}\d{3,}[A-Z0-9]*)', clean_norm):
         token = m.group(1)
-        if len(token) >= 6 and token not in models:
-            generic = {"RTX5000", "GTX5000", "DDR5000", "SSD5000", "PCIE500",
-                       "GEN5000", "HDMI500", "TYPE500", "ATX500"}
-            if token not in generic:
-                models.add(token)
+        if len(token) >= 7 and token not in models and token not in GENERIC_EXCLUDE:
+            models.add(token)
 
     return models
 
@@ -467,37 +559,77 @@ def extract_specs(name):
     clean = re.sub(r"\[[^\]]*\]", " ", clean)
     clean = re.sub(r"\([^)]*\)", " ", clean)
     clean = re.sub(r"\s+", " ", clean).upper().strip()
+    clean_norm = clean.replace("-", " ")
     
     specs = {}
     
-    # Storage capacity
-    for m in re.finditer(r'(\d+)\s*TB\b', clean):
+    # Storage capacity — normalize approximate values
+    for m in re.finditer(r'(\d+)\s*TB\b', clean_norm):
         specs.setdefault('storage', set()).add(m.group(1) + 'TB')
-    for m in re.finditer(r'(\d+)\s*GB\s*(?:SSD|M\.2|PCIe|GEN)', clean):
+    for m in re.finditer(r'(\d+)\s*GB\s*(?:SSD|M\.2|PCIe|GEN|/|SATA|吋)', clean_norm):
         specs.setdefault('storage', set()).add(m.group(1) + 'GB')
+    # Also handle "NG" format (CoolPC uses "240G/2.5吋")
+    for m in re.finditer(r'(\d+)G\s*/\s*(?:2\.5|M\.)', clean_norm):
+        specs.setdefault('storage', set()).add(m.group(1) + 'GB')
+    # Normalize storage values
+    if 'storage' in specs:
+        normalized = set()
+        for v in specs['storage']:
+            if v == '512GB': v = '500GB'
+            elif v == '960GB': v = '1TB'
+            elif v == '256GB': v = '250GB'
+            elif v == '128GB': v = '120GB'
+            normalized.add(v)
+        specs['storage'] = normalized
     
-    # RAM capacity
-    for m in re.finditer(r'(\d+)G\s*(?:DDR|D5|D4|\*\d|雙通|四通)', clean):
+    # RAM capacity — broader patterns
+    for m in re.finditer(r'(\d+)G\s*(?:DDR|D5|D4|\*\d|雙通|四通)', clean_norm):
         specs.setdefault('ram_cap', set()).add(m.group(1) + 'G')
-    for m in re.finditer(r'(\d+)GB\s*DDR', clean):
+    for m in re.finditer(r'DDR\s*5\s*\d{4}\s*(\d+)G\b', clean_norm):
+        specs.setdefault('ram_cap', set()).add(m.group(1) + 'G')
+    for m in re.finditer(r'DDR\s*4\s*\d{4}\s*(\d+)G\b', clean_norm):
+        specs.setdefault('ram_cap', set()).add(m.group(1) + 'G')
+    for m in re.finditer(r'\bD5\s*\d{4}\s*(\d+)G\b', clean_norm):
+        specs.setdefault('ram_cap', set()).add(m.group(1) + 'G')
+    for m in re.finditer(r'\bD4\s*\d{4}\s*(\d+)G\b', clean_norm):
+        specs.setdefault('ram_cap', set()).add(m.group(1) + 'G')
+    for m in re.finditer(r'(\d+)GB\s*(?:DDR|雙通|D5|D4)', clean_norm):
+        specs.setdefault('ram_cap', set()).add(m.group(1) + 'G')
+    for m in re.finditer(r'(\d+)GB\s*\(雙通', clean_norm):
+        specs.setdefault('ram_cap', set()).add(m.group(1) + 'G')
+    for m in re.finditer(r'(\d+)G\s*\(\d+G\s*\*\s*\d+\)', clean_norm):
+        specs.setdefault('ram_cap', set()).add(m.group(1) + 'G')
+    for m in re.finditer(r'單條(\d+)GB', clean_norm):
         specs.setdefault('ram_cap', set()).add(m.group(1) + 'G')
     
-    # VRAM / GPU memory
-    for m in re.finditer(r'(\d+)\s*GB?\s*(?:GDDR|DDR|VRAM)', clean):
-        specs.setdefault('vram', set()).add(m.group(1) + 'GB')
-    for m in re.finditer(r'(?:RTX|RX)\s*\d{3,4}[A-Z\s]*\s+(\d+)G\b', clean):
+    # VRAM / GPU memory — normalize to NG format
+    for m in re.finditer(r'(\d+)\s*GB\s*(?:GDDR|D[567])', clean_norm):
+        specs.setdefault('vram', set()).add(m.group(1) + 'G')
+    for m in re.finditer(r'(\d+)G\s*GDDR', clean_norm):
+        specs.setdefault('vram', set()).add(m.group(1) + 'G')
+    for m in re.finditer(r'(?:RTX|RX|GTX)\s*\d{3,4}[A-Z\s]*\s+(\d+)G\b', clean_norm):
+        specs.setdefault('vram', set()).add(m.group(1) + 'G')
+    for m in re.finditer(r'(?:RTX|RX|GTX)\s*\d{3,4}[A-Z\s]*O?(\d+)G\b', clean_norm):
+        specs.setdefault('vram', set()).add(m.group(1) + 'G')
+    for m in re.finditer(r'(?:RTX|RX|GTX)\s*\d{3,4}[A-Z\s]*\s+(\d+)GB\b', clean_norm):
         specs.setdefault('vram', set()).add(m.group(1) + 'G')
     
     # Monitor size
     for m in re.finditer(r'(\d{2})\s*(?:型|吋|"|INCH)', clean):
         specs.setdefault('monitor_size', set()).add(m.group(1))
     
-    # CPU model (for combo products)
-    for m in re.finditer(r'(?:RYZEN\s*)?R(\d)\s*(\d{4}[A-Z0-9]*)', clean):
+    # CPU model (with alias normalization)
+    cpu_norm = clean_norm
+    cpu_norm = re.sub(r'\bRYZEN\s*(\d)\b', r'R\1', cpu_norm)
+    cpu_norm = re.sub(r'\bCORE\s*ULTRA\s*(\d)\b', r'IU\1', cpu_norm)
+    cpu_norm = re.sub(r'\bCORE\s*I(\d)\b', r'I\1', cpu_norm)
+    for m in re.finditer(r'\bR(\d)\s*(\d{4}[A-Z0-9]*)', cpu_norm):
         specs.setdefault('cpu', set()).add('R' + m.group(1) + m.group(2))
-    for m in re.finditer(r'(?:CORE\s*)?I(\d)-?(\d{4,5}[A-Z]*)', clean):
+    for m in re.finditer(r'\bI(\d)\s*(\d{4,5}[A-Z]*)', cpu_norm):
         specs.setdefault('cpu', set()).add('I' + m.group(1) + m.group(2))
-    for m in re.finditer(r'CORE\s*ULTRA\s*\d+\s*(\d{3,4}[A-Z]*)', clean):
+    for m in re.finditer(r'\bIU\d+\s*(\d{3,4}[A-Z]*)', cpu_norm):
+        specs.setdefault('cpu', set()).add('IU' + m.group(1))
+    for m in re.finditer(r'\bIU(\d{3,4}[A-Z]*)', cpu_norm):
         specs.setdefault('cpu', set()).add('IU' + m.group(1))
     
     return specs
@@ -516,6 +648,80 @@ def specs_compatible(name1, name2):
     return True
 
 
+def extract_gpu_model(name):
+    """Extract GPU model including VRAM for validation (e.g. RTX3050_8G, RX9060XT_16G)."""
+    clean = re.sub(r"<[^>]+>", " ", name)
+    clean = re.sub(r"【[^】]*】", " ", clean)
+    clean = re.sub(r"\[[^\]]*\]", " ", clean)
+    clean = re.sub(r"\([^)]*\)", " ", clean)
+    clean = re.sub(r"\s+", " ", clean).upper().strip().replace("-", " ")
+    
+    # Extract VRAM — handle all common patterns including D6/D7 abbreviations
+    # NORMALIZE to "NG" format (not "NGB") for consistent comparison
+    vram = ""
+    # Pattern: "16GB GDDR6" / "8GB GDDR"
+    for m in re.finditer(r'(\d+)\s*GB\s*GDDR', clean):
+        vram = m.group(1) + "G"
+    # Pattern: "16GB D6" / "8GB D7" (Sinya uses D6/D7 abbreviation)
+    if not vram:
+        for m in re.finditer(r'(\d+)\s*GB\s*D[567]\b', clean):
+            vram = m.group(1) + "G"
+    # Pattern: "8G GDDR6"
+    if not vram:
+        for m in re.finditer(r'(\d+)G\s*GDDR', clean):
+            vram = m.group(1) + "G"
+    # Pattern: "RTX3050 8G" or "RX9060XT 16G" (number + G after GPU model)
+    if not vram:
+        for m in re.finditer(r'(?:RTX|RX|GTX)\s*\d{3,4}[A-Z\s]*\s+(\d+)G\b', clean):
+            vram = m.group(1) + "G"
+    # Pattern: "O6G" or "O8G" in CoolPC names (OC + VRAM)
+    if not vram:
+        for m in re.finditer(r'(?:RTX|RX|GTX)\s*\d{3,4}[A-Z\s]*O?(\d+)G\b', clean):
+            vram = m.group(1) + "G"
+    # Pattern: "RX9060XT 8G" (no space before VRAM)
+    if not vram:
+        for m in re.finditer(r'(?:RTX|RX|GTX)\s*(\d{3,4})[A-Z\s]*(\d+)G\b', clean):
+            vram = m.group(2) + "G"
+    # Pattern: "16GB OC" (VRAM followed by OC, no GDDR)
+    if not vram:
+        for m in re.finditer(r'(?:RTX|RX|GTX)\s*\d{3,4}[A-Z\s]*\s+(\d+)GB\s', clean):
+            vram = m.group(1) + "G"
+    # Pattern: "8GB" right after GPU model number (e.g. "RX9060XT Challenger 8GB OC")
+    if not vram:
+        for m in re.finditer(r'(?:RTX|RX|GTX)\s*\d{3,4}[A-Z\s]*\s+(\d+)GB\b', clean):
+            vram = m.group(1) + "G"
+    
+    # Extract GPU model — PRESERVE XT/TI suffix to differentiate RX9060 from RX9060XT
+    gpu = ""
+    for m in re.finditer(r'RTX\s*PRO\s*(\d{4})', clean):
+        gpu = "RTXPRO" + m.group(1)
+    if not gpu:
+        for m in re.finditer(r'RTX\s*(\d{3,4}[A-Z]*)', clean):
+            gpu = "RTX" + m.group(1)
+    if not gpu:
+        for m in re.finditer(r'GTX\s*(\d{3,4}[A-Z]*)', clean):
+            gpu = "GTX" + m.group(1)
+    if not gpu:
+        for m in re.finditer(r'\bRX\s*(\d{4}[A-Z]*)', clean):
+            gpu = "RX" + m.group(1)
+    if not gpu:
+        for m in re.finditer(r'\bARC\s*A(\d{3})', clean):
+            gpu = "ARCA" + m.group(1)
+    
+    if gpu and vram:
+        return gpu + "_" + vram
+    return gpu
+
+
+def gpu_compatible(name1, name2):
+    """Check if two products have the same GPU model AND VRAM."""
+    gpu1 = extract_gpu_model(name1)
+    gpu2 = extract_gpu_model(name2)
+    if gpu1 and gpu2:
+        return gpu1 == gpu2
+    return True  # If no GPU info, don't block match
+
+
 def extract_brand(name):
     """Extract brand name from product name."""
     brands = [
@@ -530,6 +736,14 @@ def extract_brand(name):
         "威剛", "ADATA", "金士頓", "KIOXIA", "鎧俠", "INNO3D", "映眾",
         "ZOTAC", "索泰", "EVGA", "PNY", "麗臺", "LEADTEK",
         "狼蛛", "AULA", "ANACOMDA", "巨蟒", "亞奇雷", "AGI",
+        "芝奇", "G.SKILL", "GSKILL", "藍寶石", "SAPPHIRE", "撼訊", "POWERCOLOR",
+        "PowerColor", "創見", "Transcend", "ViewSonic", "優派", "Philips", "飛利浦",
+        "ANTEC", "安鈦克", "MONTECH", "DEEPCOOL", "九州風神", "JONSBO",
+        "ENERMAX", "保銳", "Thermaltake", "曜越", "TT", "Fractal", "分形工藝",
+        "Lian Li", "聯力", "NZXT", "Phanteks", "追風者", "SilverStone", "銀欣",
+        "BitFenix", "酷碼", "Cooler Master", "酷冷至尊", "DeepCool", "九州",
+        "ARCTIC", "貓頭鷹", "Noctua", "貓頭鹰", "Scythe", "鐮刀", "be quiet!",
+        "Enermax", "保銳科技", "Xigmatek", "銀欣科技", "BitFenix",
     ]
     name_upper = name.upper()
     for brand in brands:
@@ -719,6 +933,8 @@ def match_products(sinya_products, coolpc_products):
                     continue
                 if not specs_compatible(sp["name"], cp["name"]):
                     continue
+                if not gpu_compatible(sp["name"], cp["name"]):
+                    continue
                 price_diff = sp["price"] - cp["price"]
                 cheaper = "sinya" if sp["price"] < cp["price"] else ("coolpc" if cp["price"] < sp["price"] else "tie")
                 matched.append({
@@ -758,6 +974,8 @@ def match_products(sinya_products, coolpc_products):
                     continue
                 if not specs_compatible(sp["name"], cp["name"]):
                     continue
+                if not gpu_compatible(sp["name"], cp["name"]):
+                    continue
                 price_diff = sp["price"] - cp["price"]
                 cheaper = "sinya" if sp["price"] < cp["price"] else ("coolpc" if cp["price"] < sp["price"] else "tie")
                 matched.append({
@@ -796,6 +1014,8 @@ def match_products(sinya_products, coolpc_products):
                 if not price_ratio_ok(sp["price"], cp["price"]):
                     continue
                 if not specs_compatible(sp["name"], cp["name"]):
+                    continue
+                if not gpu_compatible(sp["name"], cp["name"]):
                     continue
                 price_diff = sp["price"] - cp["price"]
                 cheaper = "sinya" if sp["price"] < cp["price"] else ("coolpc" if cp["price"] < sp["price"] else "tie")
