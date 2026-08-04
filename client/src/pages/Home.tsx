@@ -44,6 +44,7 @@ import {
   Upload,
   Download,
   UserCheck,
+  AlertTriangle,
 } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useOverrides } from "@/hooks/useOverrides";
@@ -63,6 +64,7 @@ interface MatchedProduct {
   coolpc_image: string;
   category: string;
   score?: number;
+  spec_diff?: string[];
 }
 
 interface Stats {
@@ -881,19 +883,39 @@ export default function Home() {
                           )}
                         </TableCell>
                         <TableCell className="text-center">
-                          {item.score !== undefined && (
-                            <span
-                              className={`font-mono text-xs ${
-                                item.score >= 0.85
-                                  ? "text-green-600"
-                                  : item.score >= 0.70
-                                  ? "text-yellow-600"
-                                  : "text-muted-foreground"
-                              }`}
-                            >
-                              {(item.score * 100).toFixed(0)}%
-                            </span>
-                          )}
+                          <div className="flex items-center justify-center gap-1">
+                            {item.score !== undefined && (
+                              <span
+                                className={`font-mono text-xs ${
+                                  item.score >= 0.85
+                                    ? "text-green-600"
+                                    : item.score >= 0.70
+                                    ? "text-yellow-600"
+                                    : "text-muted-foreground"
+                                }`}
+                              >
+                                {(item.score * 100).toFixed(0)}%
+                              </span>
+                            )}
+                            {item.spec_diff && item.spec_diff.length > 0 && (
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span className="inline-flex items-center gap-0.5 rounded bg-amber-100 px-1 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                                    <AlertTriangle className="size-2.5" />
+                                    {item.spec_diff.length}
+                                  </span>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <div className="space-y-1">
+                                    <p className="text-xs font-semibold">規格差異</p>
+                                    {item.spec_diff.map((d, i) => (
+                                      <p key={i} className="text-xs text-muted-foreground">{d}</p>
+                                    ))}
+                                  </div>
+                                </TooltipContent>
+                              </Tooltip>
+                            )}
+                          </div>
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center justify-center gap-2">

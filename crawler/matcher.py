@@ -614,6 +614,14 @@ def veto(name1, name2):
             nums2 = {re.search(r'(\d+)$', c).group(1) for c in size_code2}
             if nums1 and nums2 and not (nums1 & nums2):
                 return True, f"R3型號代碼碼衝突(螢幕尺寸): {size_code1} vs {size_code2}"
+        # 筆電 CPU 規格例外：如果雙方有共同的筆電系列 token，
+        # 且不同的短代碼都是 CPU 代碼（如 255H vs 255U, 13620H vs 1315U），不衝突
+        LAPTOP_SERIES_SET = {'KATANA', 'KATANA15', 'KATANA17', 'CYBORG', 'CYBORG15', 'GAMINGA16', 'AEROX16', 'NITRO', 'VICTUS', 'SWIFT', 'ASPIRE', 'GRAM', 'ZENBOOK', 'LOQ', 'IDEAPAD', 'YOGA', 'THINKPAD', 'THINKBOOK', 'OMNIBOOK', 'ZBOOK', 'ELITEBOOK', 'PROBOOK', 'SPECTRE', 'ENVOY', 'OMEN', 'FIREFLY', 'FURY', 'LEGION', 'EXPERTBOOK', 'TRAVELMATE', 'TOUGHBOOK'}
+        lt_series1 = {t for t in extract_tokens(name1) if t in LAPTOP_SERIES_SET}
+        lt_series2 = {t for t in extract_tokens(name2) if t in LAPTOP_SERIES_SET}
+        is_laptop_pair = bool(lt_series1 and lt_series2 and (lt_series1 & lt_series2))
+        # CPU 代碼模式：I7-13620H, R7-255H, Ultra7-255U, 13620H, 255H, 255U 等
+        CPU_CODE_RE = r'^(I\d{4,5}[A-Z]?|R\d{4}[A-Z]?|ULTRA\d{3,4}[A-Z]?|\d{4,5}[A-Z]{1,2}|\d{3,4}[A-Z])$'
         # 如果有共同代碼，但雙方有不同的子型號代碼（如 32P vs 52M），仍應衝突
         # 檢查短代碼（2-4字元字母+數字）是否有完全不同的子型號
         sub1 = {c for c in codes1 if re.match(r'^([A-Z]{1,2}\d{1,3}[A-Z]?|\d{2,3}[A-Z])$', c) and c not in codes2}
@@ -623,7 +631,11 @@ def veto(name1, name2):
             real_sub1 = {c for c in sub1 if c not in {'N150', 'W11', 'W10', 'W12'}}
             real_sub2 = {c for c in sub2 if c not in {'N150', 'W11', 'W10', 'W12'}}
             if real_sub1 and real_sub2:
-                return True, f"R3型號代碼衝突: {codes1} vs {codes2}"
+                # 筆電 CPU 規格例外：如果雙方都是 CPU 代碼且同系列筆電，不衝突
+                if is_laptop_pair and all(re.match(CPU_CODE_RE, c) for c in real_sub1) and all(re.match(CPU_CODE_RE, c) for c in real_sub2):
+                    pass  # 同系列筆電不同 CPU 規格，允許配對
+                else:
+                    return True, f"R3型號代碼衝突: {codes1} vs {codes2}"
         if not (codes1 & codes2):
             # 筆電例外：如果一方只有長型號代碼（5+字元），另一方只有 CPU 代碼（如 14700HX, 240H），不衝突
             long_codes1 = {c for c in codes1 if len(c) >= 5}
@@ -816,6 +828,46 @@ MATCH_THRESHOLD = 0.75
 REVIEW_THRESHOLD = 0.58
 
 
+def compute_spec_diff(name1, name2):
+    """計算兩個品名之間的規格差異，返回差異描述列表。"""
+    diffs = []
+    
+    # CPU 規格差異
+    cpu1 = re.search(r'(?:Ultra\s*\d|Core\s*Ultra\s*\d|Core\s*i\d|Ryzen\s*\d|R\d|I\d)[\s-]*(\d{3,5}[A-Z]{0,2})', name1, re.IGNORECASE)
+    cpu2 = re.search(r'(?:Ultra\s*\d|Core\s*Ultra\s*\d|Core\s*i\d|Ryzen\s*\d|R\d|I\d)[\s-]*(\d{3,5}[A-Z]{0,2})', name2, re.IGNORECASE)
+    if cpu1 and cpu2 and cpu1.group(1).upper() != cpu2.group(1).upper():
+        diffs.append(f"CPU: {cpu1.group(1)} vs {cpu2.group(1)}")
+    
+    # RAM 容量差異（只匹配 /NNNG 或 /NNNGB 格式，避免型號代碼中的數字+G）
+    ram1 = re.search(r'(?:/|\s)(\d{1,3})G(?:B)?(?:\s|$|/|D[DR])', name1)
+    ram2 = re.search(r'(?:/|\s)(\d{1,3})G(?:B)?(?:\s|$|/|D[DR])', name2)
+    if ram1 and ram2 and ram1.group(1) != ram2.group(1):
+        diffs.append(f"RAM: {ram1.group(1)}G vs {ram2.group(1)}G")
+    
+    # SSD 容量差異（只匹配 /NNNT 或 /NNNTB 格式）
+    ssd1 = re.search(r'(?:/|\s)(\d{1,3})T(?:B)?(?:\s|$|/)', name1, re.IGNORECASE)
+    ssd2 = re.search(r'(?:/|\s)(\d{1,3})T(?:B)?(?:\s|$|/)', name2, re.IGNORECASE)
+    if ssd1 and ssd2 and ssd1.group(1) != ssd2.group(1):
+        diffs.append(f"SSD: {ssd1.group(1)}T vs {ssd2.group(1)}T")
+    
+    # GPU 差異
+    gpu1 = re.search(r'(RTX|GTX|RX)\s*(\d{3,4})', name1, re.IGNORECASE)
+    gpu2 = re.search(r'(RTX|GTX|RX)\s*(\d{3,4})', name2, re.IGNORECASE)
+    if gpu1 and gpu2:
+        g1 = f"{gpu1.group(1).upper()}{gpu1.group(2)}"
+        g2 = f"{gpu2.group(1).upper()}{gpu2.group(2)}"
+        if g1 != g2:
+            diffs.append(f"GPU: {g1} vs {g2}")
+    
+    # 螢幕尺寸差異
+    size1 = re.search(r'(\d+(?:\.\d)?)\s*吋', name1)
+    size2 = re.search(r'(\d+(?:\.\d)?)\s*吋', name2)
+    if size1 and size2 and size1.group(1) != size2.group(1):
+        diffs.append(f"螢幕: {size1.group(1)}吋 vs {size2.group(1)}吋")
+    
+    return diffs
+
+
 def match_products_v2(sinya_products, coolpc_products, category_compat=None):
     """
     依照規格書 v2 的完整配對流程。
@@ -946,6 +998,7 @@ def match_products_v2(sinya_products, coolpc_products, category_compat=None):
                 "category": sp.get("category") or cp.get("category", ""),
                 "score": round(best_score, 4),
                 "is_bare_match": bool(bare_name),
+                "spec_diff": compute_spec_diff(sinya_name, cp["name"]),
             })
             sinya_matched.add(si_orig)
             coolpc_matched.add(best_ci)
@@ -1038,6 +1091,7 @@ def match_products_v2(sinya_products, coolpc_products, category_compat=None):
                 "category": sp.get("category") or cp.get("category", ""),
                 "score": round(best_score, 4),
                 "is_bare_match": bool(bare_name),
+                "spec_diff": compute_spec_diff(sinya_name, cp["name"]),
             })
             sinya_matched.add(si_orig)
     
