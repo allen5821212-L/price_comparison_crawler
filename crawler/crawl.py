@@ -9,6 +9,7 @@ import re
 import time
 import urllib.request
 import urllib.parse
+import datetime as dt
 from datetime import datetime
 from pathlib import Path
 
@@ -918,6 +919,47 @@ def main(max_cats=None):
         json.dump(all_data, f, ensure_ascii=False, separators=(',', ':'))
 
     print(f"資料已儲存至 {output_file}")
+
+    # ── 價格歷史快照 ──
+    history_file = OUTPUT_DIR / "price_history.json"
+    today = dt.date.today().isoformat()
+
+    # 載入現有歷史
+    price_history = []
+    if history_file.exists():
+        try:
+            with open(history_file, "r", encoding="utf-8") as f:
+                price_history = json.load(f)
+        except:
+            price_history = []
+
+    # 建立今日快照（只記錄配對成功的商品價格）
+    today_snapshot = {
+        "date": today,
+        "matched": [
+            {
+                "sinya_name": m["sinya_name"],
+                "coolpc_name": m["coolpc_name"],
+                "sinya_price": m["sinya_price"],
+                "coolpc_price": m["coolpc_price"],
+                "price_diff": m["price_diff"],
+            }
+            for m in all_data["matched"]
+        ],
+    }
+
+    # 移除今日已有的快照（避免重複），然後加入新快照
+    price_history = [s for s in price_history if s.get("date") != today]
+    price_history.append(today_snapshot)
+
+    # 只保留最近 90 天的快照
+    cutoff = (dt.date.today() - dt.timedelta(days=90)).isoformat()
+    price_history = [s for s in price_history if s.get("date", "") >= cutoff]
+
+    with open(history_file, "w", encoding="utf-8") as f:
+        json.dump(price_history, f, ensure_ascii=False, separators=(',', ':'))
+    print(f"價格歷史快照已儲存至 {history_file} ({len(price_history)} 天)")
+
     print(f"\n統計摘要:")
     print(f"  欣亞商品數: {stats['sinya_total']}")
     print(f"  原價屋商品數: {stats['coolpc_total']}")

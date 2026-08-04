@@ -45,10 +45,13 @@ import {
   Download,
   UserCheck,
   AlertTriangle,
+  CheckCheck,
 } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useOverrides } from "@/hooks/useOverrides";
+import { toast } from "sonner";
 import { ManualMatchDialog } from "@/components/ManualMatchDialog";
+import { PriceHistoryDialog } from "@/components/PriceHistoryDialog";
 
 interface MatchedProduct {
   name: string;
@@ -153,6 +156,7 @@ export default function Home() {
   // Manual matching
   const overrides = useOverrides();
   const [manualMatchOpen, setManualMatchOpen] = useState(false);
+  const [showPriceHistory, setShowPriceHistory] = useState(false);
   const [activeSinyaProduct, setActiveSinyaProduct] = useState<{
     name: string;
     price: number;
@@ -729,6 +733,33 @@ export default function Home() {
             <AlertTriangle className="size-3.5" />
             規格差異
           </button>
+          {specDiffFilter && filteredAndSorted.some((m) => m.spec_diff && m.spec_diff.length > 0) && (
+            <button
+              onClick={() => {
+                const toConfirm = filteredAndSorted
+                  .filter((m) => m.spec_diff && m.spec_diff.length > 0)
+                  .map((m) => ({
+                    ours_id: sinyaId(m.sinya_name),
+                    ours_name: m.sinya_name,
+                    their_id: coolpcId(m.coolpc_name),
+                    their_name: m.coolpc_name,
+                  }));
+                overrides.batchConfirm(toConfirm);
+                toast.success(`已批次確認 ${toConfirm.length} 組配對`);
+              }}
+              className="inline-flex h-9 items-center gap-1.5 rounded-md border border-green-500 bg-green-500/10 px-3 text-sm font-medium text-green-700 transition-colors hover:bg-green-500/20 dark:text-green-400"
+            >
+              <CheckCheck className="size-3.5" />
+              全部確認
+            </button>
+          )}
+          <button
+            onClick={() => setShowPriceHistory(true)}
+            className="inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-transparent px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted/50"
+          >
+            <TrendingUp className="size-3.5" />
+            價格趨勢
+          </button>
         </div>
       </section>
 
@@ -1088,6 +1119,11 @@ export default function Home() {
           }
         }}
         rejectedIds={rejectedTheirIds}
+      />
+
+      <PriceHistoryDialog
+        open={showPriceHistory}
+        onOpenChange={setShowPriceHistory}
       />
 
       {/* ── Footer ── */}

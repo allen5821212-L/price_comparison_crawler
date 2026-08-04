@@ -838,11 +838,24 @@ def compute_spec_diff(name1, name2):
     if cpu1 and cpu2 and cpu1.group(1).upper() != cpu2.group(1).upper():
         diffs.append(f"CPU: {cpu1.group(1)} vs {cpu2.group(1)}")
     
-    # RAM 容量差異（只匹配 /NNNG 或 /NNNGB 格式，避免型號代碼中的數字+G）
-    ram1 = re.search(r'(?:/|\s)(\d{1,3})G(?:B)?(?:\s|$|/|D[DR])', name1)
-    ram2 = re.search(r'(?:/|\s)(\d{1,3})G(?:B)?(?:\s|$|/|D[DR])', name2)
-    if ram1 and ram2 and ram1.group(1) != ram2.group(1):
-        diffs.append(f"RAM: {ram1.group(1)}G vs {ram2.group(1)}G")
+    # RAM 容量差異（只匹配 1-128G 範圍，排除 SSD 容量和 GPU VRAM）
+    # 排除：1) 數字 >128（SSD/HDD 容量）2) 前面是 RTX/GTX/RX（GPU VRAM）
+    def _extract_ram(name):
+        for m in re.finditer(r'(?:/|\s)(\d{1,3})G(?:B)?(?:\s|$|/|D[DR])', name):
+            val = int(m.group(1))
+            if val > 128:
+                continue  # SSD/HDD capacity, not RAM
+            # Check if preceded by GPU model name
+            start = max(0, m.start() - 10)
+            prefix = name[start:m.start()]
+            if re.search(r'(RTX|GTX|RX)\s*\d{3,4}\s*$', prefix, re.IGNORECASE):
+                continue  # GPU VRAM, not system RAM
+            return m.group(1)
+        return None
+    ram1 = _extract_ram(name1)
+    ram2 = _extract_ram(name2)
+    if ram1 and ram2 and ram1 != ram2:
+        diffs.append(f"RAM: {ram1}G vs {ram2}G")
     
     # SSD 容量差異（只匹配 /NNNT 或 /NNNTB 格式）
     ssd1 = re.search(r'(?:/|\s)(\d{1,3})T(?:B)?(?:\s|$|/)', name1, re.IGNORECASE)

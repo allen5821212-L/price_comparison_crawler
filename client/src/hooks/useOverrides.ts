@@ -203,6 +203,33 @@ export function useOverrides() {
     reader.readAsText(file);
   }, []);
 
+  /** Batch confirm multiple matches at once */
+  const batchConfirm = useCallback(
+    (entries: { ours_id: string; ours_name: string; their_id: string; their_name: string }[]) => {
+      setOverrides((prev) => {
+        const data = { ...prev, overrides: [...prev.overrides] };
+        for (const entry of entries) {
+          // Remove existing entries for this ours_id
+          const filtered = data.overrides.filter(
+            (o) => !(o.ours_id === entry.ours_id && o.action === "confirm")
+          );
+          // Remove the ones we just filtered out
+          data.overrides = filtered;
+          // Add new confirm entry
+          data.overrides.push({
+            ...entry,
+            action: "confirm",
+            by: "user",
+            at: new Date().toISOString(),
+          });
+        }
+        saveToStorage(data);
+        return data;
+      });
+    },
+    []
+  );
+
   return {
     overrides: overrides.overrides,
     stats,
@@ -210,6 +237,7 @@ export function useOverrides() {
     rejectMatch,
     markNoMatch,
     manualMatch,
+    batchConfirm,
     getOverride,
     isRejected,
     getConfirmed,
