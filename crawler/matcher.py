@@ -137,6 +137,9 @@ def is_excluded(name):
     """
     if not name:
         return True
+    # 箱損/外箱受損是全新品，只是外箱有瑕疵，應保留
+    if re.search(r'箱損|外箱受損|外箱損', name):
+        return False
     if re.search(r'贈品|福利品|拆封|展示機|整新|二手|預購|客訂', name):
         return True
     return False
@@ -163,6 +166,9 @@ def is_system(name):
         return False
     if SYSTEM_KEYWORDS.search(name):
         return True
+    # 機殼品名不可能是整機（即使規格描述中提到電源/風扇等）
+    if '機殼' in name or '機箱' in name:
+        return False
     # 3 種以上零組件類別 → 整機
     count = sum(1 for kw in COMPONENT_KEYWORDS if kw in name.upper())
     return count >= 3
@@ -315,6 +321,30 @@ def extract_tokens(name):
         if storage_cap:
             tok += '_' + storage_cap
         tokens.add(tok)
+    
+    # ── 機殼系列名稱 token ──
+    # 常見機殼系列：GT502, Y70, RM400, DS900, O11, 4000D, 5000D 等
+    for m in re.finditer(r'\b(GT\d{3,4}|Y\d{2,3}|RM\d{3,4}|DS\d{3,4}|O11|O\d{4}[A-Z]?|\d{4}[A-Z]|HELIOS|PANORAMA|SILENT|SERUM|LANCOOL|LANCOOL\d|AIR\d{2,3}|FOCUS\d?|SHELF|TOWER\d{0,2}|COMPASS|EDGE|CINE|VIEW|H6\d?|H5\d?|H7\d?)', n):
+        tok = m.group(1).replace(' ', '')
+        if len(tok) >= 3:
+            tokens.add(tok)
+    # 機殼品牌+系列（如 HYTE Y70, darkFlash DS900, 銀欣 RM400）
+    for m in re.finditer(r'\b(GT\d{3})\s*([A-Z]*)', n):
+        tok = m.group(1) + (m.group(2) or '')
+        if len(tok) >= 4:
+            tokens.add(tok)
+    
+    # ── 筆電系列名稱 token ──
+    # 常見筆電系列：GAMING A16, CYBORG 15, KATANA 15, NITRO V, VICTUS, TUF GAMING 等
+    for m in re.finditer(r'\b(GAMING\s*[AX]\d{2}|CYBORG\s*\d{2}|KATANA\s*\d{2}|NITRO\s*[V\d]|VICTUS\s*\d{2}|CREATOR\s*\d{2}|AERO\s*[AX]\d{2}|SWIFT\s*\d|RAIDER\s*\d|VECTOR\s*\d|STEALTH\s*\d{2}|PULSE\s*\d{2}|BRAVO\s*\d{2}|CYBORG|KATANA|NITRO|VICTUS|CREATOR|RAIDER|VECTOR|STEALTH|PULSE|BRAVO|ALLY|ODYSSEY|PROART|ZENBOOK|VIVOBOOK|EXPERTBOOK|GRAM|TUF\s*GAMING|ROG\s*STRIX|ROG\s*ZEPHYRUS|ROG\s*SCAR|LEGION|IDEAPAD|THINKBOOK|SWIFT|ASPIRE|ENVOY|SPECTRE|ELITEBOOK|PROBOOK|SURFACE|IPHONE)', n):
+        tok = m.group(1).replace(' ', '')
+        if len(tok) >= 4:
+            tokens.add(tok)
+    # 筆電型號代碼（如 B14WFK, B2RWFKG, V3607VJ, ANV16S 等）
+    for m in re.finditer(r'\b([A-Z]\d{3,4}[A-Z]{2,4})\b', n):
+        tok = m.group(1)
+        if len(tok) >= 5:
+            tokens.add(tok)
     
     return tokens
 
@@ -478,12 +508,20 @@ def veto(name1, name2):
                 else:
                     return True, f"R2數字型號衝突: {pat} {vals1} vs {vals2}"
     
-    # R3. 型號代碼衝突
+    # R3. 型號代碼衝突（筆電例外：長型號代碼 vs CPU 代碼不衝突）
     codes1 = extract_model_codes(name1)
     codes2 = extract_model_codes(name2)
     if codes1 and codes2:
         if not (codes1 & codes2):
-            return True, f"R3型號代碼衝突: {codes1} vs {codes2}"
+            # 筆電例外：如果一方只有長型號代碼（5+字元），另一方只有 CPU 代碼（如 14700HX, 240H），不衝突
+            long_codes1 = {c for c in codes1 if len(c) >= 5}
+            long_codes2 = {c for c in codes2 if len(c) >= 5}
+            cpu_codes1 = {c for c in codes1 if re.match(r'^(I\d{4,5}|R\d{4}|ULTRA\d{3,4}|\d{3,4}HX|\d{3,4}H)$', c)}
+            cpu_codes2 = {c for c in codes2 if re.match(r'^(I\d{4,5}|R\d{4}|ULTRA\d{3,4}|\d{3,4}HX|\d{3,4}H)$', c)}
+            if (long_codes1 and cpu_codes2 and not long_codes2) or (long_codes2 and cpu_codes1 and not long_codes1):
+                pass  # 筆電型號 vs CPU 代碼，不衝突
+            else:
+                return True, f"R3型號代碼衝突: {codes1} vs {codes2}"
     
     # R4. 型號後綴衝突
     suf1 = extract_suffixes(name1)
