@@ -22,7 +22,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Search, Check, X, PackageX } from "lucide-react";
+import { Search, Check, X, PackageX, Edit3 } from "lucide-react";
 
 interface CoolpcProduct {
   source: string;
@@ -49,6 +49,7 @@ interface ManualMatchDialogProps {
   onConfirm: (their_id: string, their_name: string) => void;
   onReject: (their_id: string, their_name: string) => void;
   onNoMatch: () => void;
+  onManualSave?: (their_name: string, their_price?: number) => void;
   rejectedIds?: Set<string>;
 }
 
@@ -88,9 +89,13 @@ export function ManualMatchDialog({
   onConfirm,
   onReject,
   onNoMatch,
+  onManualSave,
   rejectedIds = new Set(),
 }: ManualMatchDialogProps) {
   const [searchQuery, setSearchQuery] = useState("");
+  const [showManualInput, setShowManualInput] = useState(false);
+  const [manualName, setManualName] = useState("");
+  const [manualPrice, setManualPrice] = useState("");
 
   // Set default search query when dialog opens
   useEffect(() => {
@@ -251,18 +256,79 @@ export function ManualMatchDialog({
           </div>
         </ScrollArea>
 
+        {/* Manual name input section */}
+        {showManualInput && (
+          <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-2">
+            <p className="text-sm font-medium">手動輸入比對品名</p>
+            <Input
+              placeholder="輸入原價屋商品名稱..."
+              value={manualName}
+              onChange={(e) => setManualName(e.target.value)}
+              autoFocus
+            />
+            <Input
+              placeholder="價格（選填，例如 9999）"
+              type="number"
+              value={manualPrice}
+              onChange={(e) => setManualPrice(e.target.value)}
+            />
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                disabled={!manualName.trim()}
+                onClick={() => {
+                  if (onManualSave) {
+                    const price = manualPrice.trim() ? parseInt(manualPrice, 10) : undefined;
+                    onManualSave(manualName.trim(), price);
+                  }
+                  setShowManualInput(false);
+                  setManualName("");
+                  setManualPrice("");
+                  onOpenChange(false);
+                }}
+              >
+                <Check className="size-4" />
+                存檔
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setShowManualInput(false);
+                  setManualName("");
+                  setManualPrice("");
+                }}
+              >
+                取消
+              </Button>
+            </div>
+          </div>
+        )}
+
         <DialogFooter className="flex items-center justify-between gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              onNoMatch();
-              onOpenChange(false);
-            }}
-          >
-            <PackageX className="size-4" />
-            此商品對手站沒有
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                onNoMatch();
+                onOpenChange(false);
+              }}
+            >
+              <PackageX className="size-4" />
+              此商品對手站沒有
+            </Button>
+            {!showManualInput && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowManualInput(true)}
+              >
+                <Edit3 className="size-4" />
+                手動輸入品名
+              </Button>
+            )}
+          </div>
           <Button
             variant="ghost"
             size="sm"

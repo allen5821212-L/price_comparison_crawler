@@ -1042,6 +1042,12 @@ export default function Home() {
             overrides.markNoMatch(sId, activeSinyaProduct.name, "使用者確認無對應");
           }
         }}
+        onManualSave={(their_name, their_price) => {
+          if (activeSinyaProduct) {
+            const sId = sinyaId(activeSinyaProduct.name);
+            overrides.manualMatch(sId, activeSinyaProduct.name, their_name, their_price);
+          }
+        }}
         rejectedIds={rejectedTheirIds}
       />
 

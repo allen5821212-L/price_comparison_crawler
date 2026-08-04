@@ -108,6 +108,22 @@ export function useOverrides() {
     [setOverride]
   );
 
+  /** Manually enter a product name for comparison (not from CoolPC database) */
+  const manualMatch = useCallback(
+    (ours_id: string, ours_name: string, their_name: string, their_price?: number) => {
+      const customId = `manual_${their_name.replace(/\s+/g, "_").substring(0, 30)}`;
+      setOverride({
+        ours_id,
+        ours_name,
+        their_id: customId,
+        their_name,
+        action: "confirm",
+        note: their_price ? `手動輸入品名，價格: NT$${their_price}` : "手動輸入品名",
+      });
+    },
+    [setOverride]
+  );
+
   /** Get override for a specific sinya product (by ours_id) */
   const getOverride = useCallback(
     (ours_id: string): OverrideEntry | undefined => {
@@ -193,6 +209,7 @@ export function useOverrides() {
     confirmMatch,
     rejectMatch,
     markNoMatch,
+    manualMatch,
     getOverride,
     isRejected,
     getConfirmed,
