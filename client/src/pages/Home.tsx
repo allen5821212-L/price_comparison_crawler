@@ -770,7 +770,7 @@ export default function Home() {
               <SelectValue placeholder="欣亞分類" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">全部分類</SelectItem>
+              <SelectItem value="all">全部分類 ({filterCounts.total})</SelectItem>
               {categories.map((cat) => {
                 const count = categoryCounts[cat] || 0;
                 return (
@@ -786,7 +786,7 @@ export default function Home() {
               <SelectValue placeholder="原價屋分類" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">原價屋全部分類</SelectItem>
+              <SelectItem value="all">原價屋全部分類 ({data?.coolpc_products?.length ?? 0})</SelectItem>
               {coolpcCategories.map((cat) => (
                 <SelectItem key={cat.name} value={cat.name}>
                   {cat.name} ({cat.count})
