@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -38,8 +38,16 @@ import {
   ShoppingCart,
   BarChart3,
   Package,
+  Check,
+  X,
+  Search as SearchIcon,
+  Upload,
+  Download,
+  UserCheck,
 } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
+import { useOverrides } from "@/hooks/useOverrides";
+import { ManualMatchDialog } from "@/components/ManualMatchDialog";
 
 interface MatchedProduct {
   name: string;
@@ -101,6 +109,24 @@ function formatPriceDiff(diff: number): string {
   return "NT$0";
 }
 
+/** Generate a stable ID for a Sinya product (hash of name) */
+function sinyaId(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0;
+  }
+  return `sinya_${Math.abs(hash)}`;
+}
+
+/** Generate a stable ID for a CoolPC product */
+function coolpcId(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0;
+  }
+  return `cool_${Math.abs(hash)}`;
+}
+
 export default function Home() {
   const { theme, toggleTheme } = useTheme();
   const [data, setData] = useState<ComparisonData | null>(null);
@@ -115,6 +141,17 @@ export default function Home() {
   const [sortOrder, setSortOrder] = useState<SortOrder>("asc");
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 25;
+
+  // Manual matching
+  const overrides = useOverrides();
+  const [manualMatchOpen, setManualMatchOpen] = useState(false);
+  const [activeSinyaProduct, setActiveSinyaProduct] = useState<{
+    name: string;
+    price: number;
+    url: string;
+    image: string;
+  } | null>(null);
+  const importFileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     fetchData();
@@ -171,9 +208,67 @@ export default function Home() {
       .map(([name, count]) => ({ name, count }));
   }, [data]);
 
-  const filteredAndSorted = useMemo(() => {
+  // Build a map of coolpc products by name for quick lookup
+  const coolpcProductMap = useMemo(() => {
+    if (!data) return new Map<string, CoolpcProduct>();
+    const map = new Map<string, CoolpcProduct>();
+    data.coolpc_products.forEach((p) => map.set(p.name, p));
+    return map;
+  }, [data]);
+
+  // Apply overrides to matched products
+  const processedMatches = useMemo(() => {
     if (!data) return [];
-    let result = [...data.matched];
+    return data.matched
+      .map((m) => {
+        const sId = sinyaId(m.sinya_name);
+        const cId = coolpcId(m.coolpc_name);
+
+        // Check if this pair is rejected
+        if (overrides.isRejected(sId, cId)) {
+          return null;
+        }
+
+        // Check if this sinya product has a confirmed override pointing to a different coolpc product
+        const confirmed = overrides.getConfirmed(sId);
+        if (confirmed && confirmed.their_id && confirmed.their_id !== cId) {
+          // Find the confirmed coolpc product
+          const confirmedProduct = data.coolpc_products.find(
+            (p) => coolpcId(p.name) === confirmed.their_id
+          );
+          if (confirmedProduct) {
+            const newDiff = m.sinya_price - confirmedProduct.price;
+            const newCheaper =
+              m.sinya_price < confirmedProduct.price
+                ? "sinya"
+                : confirmedProduct.price < m.sinya_price
+                ? "coolpc"
+                : "tie";
+            return {
+              ...m,
+              coolpc_name: confirmedProduct.name,
+              coolpc_price: confirmedProduct.price,
+              coolpc_url: confirmedProduct.url,
+              coolpc_image: confirmedProduct.image,
+              price_diff: newDiff,
+              cheaper: newCheaper,
+              _confirmed: true,
+            } as MatchedProduct & { _confirmed?: boolean };
+          }
+        }
+
+        // Check if marked as no_match
+        if (overrides.isNoMatch(sId)) {
+          return null;
+        }
+
+        return m;
+      })
+      .filter((m): m is MatchedProduct & { _confirmed?: boolean } => m !== null);
+  }, [data, overrides]);
+
+  const filteredAndSorted = useMemo(() => {
+    let result = [...processedMatches];
 
     // Search filter
     if (searchQuery.trim()) {
@@ -191,16 +286,10 @@ export default function Home() {
       result = result.filter((m) => m.category === categoryFilter);
     }
 
-    // CoolPC category filter — check if the matched coolpc product belongs to the selected coolpc category
+    // CoolPC category filter
     if (coolpcCategoryFilter !== "all") {
-      const coolpcProductMap = new Map<string, string>();
-      if (data) {
-        data.coolpc_products.forEach((p) => {
-          coolpcProductMap.set(p.name, p.category);
-        });
-      }
       result = result.filter((m) => {
-        const cpCat = coolpcProductMap.get(m.coolpc_name);
+        const cpCat = coolpcProductMap.get(m.coolpc_name)?.category;
         return cpCat === coolpcCategoryFilter;
       });
     }
@@ -231,7 +320,7 @@ export default function Home() {
     });
 
     return result;
-  }, [data, searchQuery, categoryFilter, cheaperFilter, sortField, sortOrder]);
+  }, [processedMatches, searchQuery, categoryFilter, coolpcCategoryFilter, cheaperFilter, sortField, sortOrder, coolpcProductMap]);
 
   const totalPages = Math.ceil(filteredAndSorted.length / itemsPerPage);
   const paginatedItems = filteredAndSorted.slice(
@@ -262,6 +351,43 @@ export default function Home() {
     );
   };
 
+  // Manual match handlers
+  const handleConfirm = (sinyaName: string, sinyaPrice: number, sinyaUrl: string, sinyaImage: string) => {
+    const sId = sinyaId(sinyaName);
+    setActiveSinyaProduct({ name: sinyaName, price: sinyaPrice, url: sinyaUrl, image: sinyaImage });
+    setManualMatchOpen(true);
+  };
+
+  const handleRejectMatch = (sinyaName: string, sinyaProductName: string, coolpcName: string) => {
+    const sId = sinyaId(sinyaName);
+    const cId = coolpcId(coolpcName);
+    overrides.rejectMatch(sId, sinyaName, cId, coolpcName, "使用者標記為錯誤");
+  };
+
+  const handleConfirmMatch = (sinyaName: string, coolpcName: string) => {
+    const sId = sinyaId(sinyaName);
+    const cId = coolpcId(coolpcName);
+    overrides.confirmMatch(sId, sinyaName, cId, coolpcName);
+  };
+
+  const handleOpenManualMatch = (sinyaName: string, sinyaPrice: number, sinyaUrl: string, sinyaImage: string) => {
+    setActiveSinyaProduct({ name: sinyaName, price: sinyaPrice, url: sinyaUrl, image: sinyaImage });
+    setManualMatchOpen(true);
+  };
+
+  // Build set of rejected their_ids for the active sinya product
+  const rejectedTheirIds = useMemo(() => {
+    if (!activeSinyaProduct) return new Set<string>();
+    const sId = sinyaId(activeSinyaProduct.name);
+    const ids = new Set<string>();
+    overrides.overrides.forEach((o) => {
+      if (o.ours_id === sId && o.action === "reject" && o.their_id) {
+        ids.add(o.their_id);
+      }
+    });
+    return ids;
+  }, [activeSinyaProduct, overrides.overrides]);
+
   return (
     <div className="min-h-screen bg-background">
       {/* ── Header ── */}
@@ -279,6 +405,59 @@ export default function Home() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {/* Override stats */}
+            {overrides.stats.total > 0 && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Badge variant="outline" className="gap-1.5 text-xs">
+                    <UserCheck className="size-3" />
+                    {overrides.stats.total} 筆修正
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>已確認 {overrides.stats.confirmed} 組</p>
+                  <p>已排除 {overrides.stats.rejected} 組</p>
+                  <p>確認無對應 {overrides.stats.noMatch} 項</p>
+                </TooltipContent>
+              </Tooltip>
+            )}
+            {/* Export/Import */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={overrides.exportOverrides}
+                  disabled={overrides.stats.total === 0}
+                >
+                  <Download className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>匯出人工配對表</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => importFileRef.current?.click()}
+                >
+                  <Upload className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>匯入人工配對表</TooltipContent>
+            </Tooltip>
+            <input
+              ref={importFileRef}
+              type="file"
+              accept=".json"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) overrides.importOverrides(file);
+                e.target.value = "";
+              }}
+            />
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -397,6 +576,20 @@ export default function Home() {
             loading={loading}
           />
         </div>
+
+        {/* Override stats banner */}
+        {overrides.stats.total > 0 && (
+          <div className="mt-4 flex items-center gap-4 rounded-lg border border-border bg-muted/30 px-4 py-2 text-sm">
+            <UserCheck className="size-4 text-primary" />
+            <span>
+              已人工確認 <strong>{overrides.stats.confirmed}</strong> 組
+              {" ｜ "}
+              已排除錯配 <strong>{overrides.stats.rejected}</strong> 組
+              {" ｜ "}
+              確認無對應 <strong>{overrides.stats.noMatch}</strong> 項
+            </span>
+          </div>
+        )}
       </section>
 
       {/* ── Filter Bar ── */}
@@ -485,11 +678,11 @@ export default function Home() {
                 {totalPages || 1} 頁
               </span>
             </div>
-            <div className="overflow-hidden rounded-xl border border-border">
+            <div className="overflow-x-auto rounded-xl border border-border">
               <Table>
                 <TableHeader>
                   <TableRow className="bg-muted/50 hover:bg-muted/50">
-                    <TableHead className="w-[35%]">
+                    <TableHead className="w-[30%]">
                       <button
                         onClick={() => handleSort("name")}
                         className="flex items-center gap-1.5 font-semibold hover:text-foreground"
@@ -497,7 +690,7 @@ export default function Home() {
                         商品名稱 {getSortIcon("name")}
                       </button>
                     </TableHead>
-                    <TableHead className="w-[12%]">分類</TableHead>
+                    <TableHead className="w-[10%]">分類</TableHead>
                     <TableHead className="text-right">
                       <button
                         onClick={() => handleSort("sinya_price")}
@@ -524,111 +717,187 @@ export default function Home() {
                     </TableHead>
                     <TableHead className="text-center">較便宜</TableHead>
                     <TableHead className="text-center">連結</TableHead>
+                    <TableHead className="text-center w-[80px]">配對</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {paginatedItems.map((item, idx) => (
-                    <TableRow
-                      key={`${item.sinya_name}-${idx}`}
-                      className="transition-colors hover:bg-muted/30"
-                    >
-                      <TableCell>
-                        <div className="flex items-start gap-3">
-                          {item.sinya_image && (
-                            <img
-                              src={item.sinya_image}
-                              alt=""
-                              className="size-12 shrink-0 rounded-md border border-border object-cover"
-                              loading="lazy"
-                              onError={(e) => {
-                                (e.target as HTMLImageElement).style.display =
-                                  "none";
-                              }}
-                            />
-                          )}
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-medium">
-                              {item.name}
-                            </p>
-                            {item.sinya_name !== item.coolpc_name && (
-                              <p className="truncate text-xs text-muted-foreground">
-                                {item.coolpc_name}
+                  {paginatedItems.map((item, idx) => {
+                    const sId = sinyaId(item.sinya_name);
+                    const cId = coolpcId(item.coolpc_name);
+                    const isConfirmed = overrides.getConfirmed(sId);
+                    const confirmedThisPair = isConfirmed && isConfirmed.their_id === cId;
+
+                    return (
+                      <TableRow
+                        key={`${item.sinya_name}-${idx}`}
+                        className={`transition-colors hover:bg-muted/30 ${
+                          confirmedThisPair ? "bg-green-500/5" : ""
+                        }`}
+                      >
+                        <TableCell>
+                          <div className="flex items-start gap-3">
+                            {item.sinya_image && (
+                              <img
+                                src={item.sinya_image}
+                                alt=""
+                                className="size-12 shrink-0 rounded-md border border-border object-cover"
+                                loading="lazy"
+                                onError={(e) => {
+                                  (e.target as HTMLImageElement).style.display =
+                                    "none";
+                                }}
+                              />
+                            )}
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-medium">
+                                {item.name}
                               </p>
+                              {item.sinya_name !== item.coolpc_name && (
+                                <p className="truncate text-xs text-muted-foreground">
+                                  {item.coolpc_name}
+                                </p>
+                              )}
+                              {confirmedThisPair && (
+                                <Badge className="mt-1 gap-1 text-xs bg-green-500/15 text-green-600 hover:bg-green-500/20">
+                                  <Check className="size-2.5" />
+                                  已確認
+                                </Badge>
+                              )}
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          {item.category && (
+                            <Badge variant="outline" className="text-xs">
+                              {item.category}
+                            </Badge>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <span
+                            className={`font-mono text-sm ${item.cheaper === "sinya" ? "price-cheaper price-sinya" : ""}`}
+                          >
+                            {formatPrice(item.sinya_price)}
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <span
+                            className={`font-mono text-sm ${item.cheaper === "coolpc" ? "price-cheaper price-coolpc" : ""}`}
+                          >
+                            {formatPrice(item.coolpc_price)}
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <span
+                            className={`font-mono text-sm ${item.price_diff < 0 ? "price-diff-positive" : item.price_diff > 0 ? "price-diff-negative" : "text-muted-foreground"}`}
+                          >
+                            {formatPriceDiff(item.price_diff)}
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-center">
+                          {item.cheaper === "sinya" && (
+                            <Badge className="bg-primary/15 text-primary hover:bg-primary/20">
+                              欣亞
+                            </Badge>
+                          )}
+                          {item.cheaper === "coolpc" && (
+                            <Badge className="bg-orange-500/15 text-orange-500 hover:bg-orange-500/20">
+                              原價屋
+                            </Badge>
+                          )}
+                          {item.cheaper === "tie" && (
+                            <Badge variant="secondary">相同</Badge>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center justify-center gap-2">
+                            {item.sinya_url && (
+                              <a
+                                href={item.sinya_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-primary hover:opacity-70"
+                                title="欣亞購買頁"
+                              >
+                                <ExternalLink className="size-4" />
+                              </a>
+                            )}
+                            {item.coolpc_url && (
+                              <a
+                                href={item.coolpc_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-orange-500 hover:opacity-70"
+                                title="原價屋購買頁"
+                              >
+                                <ShoppingCart className="size-4" />
+                              </a>
                             )}
                           </div>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        {item.category && (
-                          <Badge variant="outline" className="text-xs">
-                            {item.category}
-                          </Badge>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <span
-                          className={`font-mono text-sm ${item.cheaper === "sinya" ? "price-cheaper price-sinya" : ""}`}
-                        >
-                          {formatPrice(item.sinya_price)}
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <span
-                          className={`font-mono text-sm ${item.cheaper === "coolpc" ? "price-cheaper price-coolpc" : ""}`}
-                        >
-                          {formatPrice(item.coolpc_price)}
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <span
-                          className={`font-mono text-sm ${item.price_diff < 0 ? "price-diff-positive" : item.price_diff > 0 ? "price-diff-negative" : "text-muted-foreground"}`}
-                        >
-                          {formatPriceDiff(item.price_diff)}
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-center">
-                        {item.cheaper === "sinya" && (
-                          <Badge className="bg-primary/15 text-primary hover:bg-primary/20">
-                            欣亞
-                          </Badge>
-                        )}
-                        {item.cheaper === "coolpc" && (
-                          <Badge className="bg-orange-500/15 text-orange-500 hover:bg-orange-500/20">
-                            原價屋
-                          </Badge>
-                        )}
-                        {item.cheaper === "tie" && (
-                          <Badge variant="secondary">相同</Badge>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center justify-center gap-2">
-                          {item.sinya_url && (
-                            <a
-                              href={item.sinya_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-primary hover:opacity-70"
-                              title="欣亞購買頁"
-                            >
-                              <ExternalLink className="size-4" />
-                            </a>
-                          )}
-                          {item.coolpc_url && (
-                            <a
-                              href={item.coolpc_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-orange-500 hover:opacity-70"
-                              title="原價屋購買頁"
-                            >
-                              <ShoppingCart className="size-4" />
-                            </a>
-                          )}
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center justify-center gap-1">
+                            {/* Confirm (✓) */}
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  className="size-7 text-green-600 hover:bg-green-500/10"
+                                  onClick={() =>
+                                    handleConfirmMatch(item.sinya_name, item.coolpc_name)
+                                  }
+                                  title="標記配對正確"
+                                >
+                                  <Check className="size-3.5" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>配對正確</TooltipContent>
+                            </Tooltip>
+                            {/* Reject (✗) */}
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  className="size-7 text-destructive hover:bg-destructive/10"
+                                  onClick={() =>
+                                    handleRejectMatch(item.sinya_name, item.name, item.coolpc_name)
+                                  }
+                                  title="標記配對錯誤"
+                                >
+                                  <X className="size-3.5" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>配對錯誤</TooltipContent>
+                            </Tooltip>
+                            {/* Manual match (🔍) */}
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  className="size-7 text-muted-foreground hover:bg-muted/50"
+                                  onClick={() =>
+                                    handleOpenManualMatch(
+                                      item.sinya_name,
+                                      item.sinya_price,
+                                      item.sinya_url,
+                                      item.sinya_image
+                                    )
+                                  }
+                                  title="手動配對"
+                                >
+                                  <SearchIcon className="size-3.5" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>手動配對</TooltipContent>
+                            </Tooltip>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </div>
@@ -662,6 +931,33 @@ export default function Home() {
           </>
         )}
       </section>
+
+      {/* ── Manual Match Dialog ── */}
+      <ManualMatchDialog
+        open={manualMatchOpen}
+        onOpenChange={setManualMatchOpen}
+        sinyaProduct={activeSinyaProduct}
+        coolpcProducts={data?.coolpc_products || []}
+        onConfirm={(their_id, their_name) => {
+          if (activeSinyaProduct) {
+            const sId = sinyaId(activeSinyaProduct.name);
+            overrides.confirmMatch(sId, activeSinyaProduct.name, their_id, their_name);
+          }
+        }}
+        onReject={(their_id, their_name) => {
+          if (activeSinyaProduct) {
+            const sId = sinyaId(activeSinyaProduct.name);
+            overrides.rejectMatch(sId, activeSinyaProduct.name, their_id, their_name, "手動標記排除");
+          }
+        }}
+        onNoMatch={() => {
+          if (activeSinyaProduct) {
+            const sId = sinyaId(activeSinyaProduct.name);
+            overrides.markNoMatch(sId, activeSinyaProduct.name, "使用者確認無對應");
+          }
+        }}
+        rejectedIds={rejectedTheirIds}
+      />
 
       {/* ── Footer ── */}
       <footer className="border-t border-border py-6">

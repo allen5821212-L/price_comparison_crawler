@@ -30,6 +30,9 @@ A_tests = [
     ("海韻 Focus GX-1000 櫻花", "海韻 FOCUS GD-1000", "R4"),
     ("曜越 Toughpower GT 750W", "曜越 Toughpower GF A3 750W", "R4"),
     ("致態小翼 e7 1TB", "致態小翼 S001 1TB", "R4"),
+    # 附錄新增
+    ("三星 SAMSUNG 9100 PRO 4TB/M.2 PCIe Gen5/含散熱片", "三星 Samsung 9100 PRO 8TB含散熱片/PCIe 5.0 x4", "R2"),
+    ("三星 SAMSUNG 9100 PRO 1TB/M.2 PCIe Gen5/含散熱片", "三星 Samsung 9100 PRO 4TB含散熱片/PCIe 5.0 x4", "R2"),
 ]
 
 A_pass = 0
@@ -58,6 +61,8 @@ B_tests = [
     ("Intel Core Ultra 7 265K", "英特爾 Ultra 7 265K 中央處理器"),
     ("美光 Crucial T705 2TB", "美光 Micron Crucial T705 2TB Gen5 讀14100"),
     ("acer Nitro V ANV16S-41-R5FT", "acer Nitro V ANV16S-41-R5FT 電競筆電"),
+    # 附錄新增
+    ("三星 SAMSUNG 9100 PRO 4TB/M.2 PCIe Gen5/含散熱片", "三星 Samsung 9100 PRO 4TB含散熱片/PCIe 5.0 x4/TLC"),
 ]
 
 B_pass = 0

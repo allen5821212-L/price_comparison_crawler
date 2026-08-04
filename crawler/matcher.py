@@ -371,10 +371,10 @@ def extract_numeric_patterns(name):
     
     patterns = {}
     
-    # 容量型態 NG, NT
-    for m in re.finditer(r'(\d+)G\b', n):
+    # 容量型態 NG, NT（不可用 \b，中文字元會使詞邊界失效）
+    for m in re.finditer(r'(\d+)G(?![A-Z0-9])', n):
         patterns.setdefault('#G', set()).add(m.group(0))
-    for m in re.finditer(r'(\d+)T\b', n):
+    for m in re.finditer(r'(\d+)T(?![A-Z0-9])', n):
         patterns.setdefault('#T', set()).add(m.group(0))
     
     # 純數字型號 (3位以上)
