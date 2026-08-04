@@ -380,8 +380,9 @@ def extract_tokens(name):
     # 筆電型號代碼（如 B14WFK, B2RWFKG, V3607VJ, ANV16S, 16Z90TS 等）
     # 從完整品名（split 前）中提取，因為型號代碼常在 / 之後
     n_full = re.sub(r'【[^】]*】', ' ', norm(name))
-    # 字母開頭的型號代碼（如 B14WFK, AU89C2）
-    for m in re.finditer(r'\b([A-Z]\d{2,4}[A-Z]{2,4})\b', n_full):
+    # 字母開頭的型號代碼（如 B14WFK, AU89C2, FA617NT, FX607VU, G614PR, GU606AM）
+    # 支援 1-2 字母前綴 + 3-4 數字 + 0-4 字母後綴
+    for m in re.finditer(r'\b([A-Z]{1,2}\d{3,4}[A-Z]{0,4})\b', n_full):
         tok = m.group(1)
         if len(tok) >= 5:
             tokens.add(tok)
@@ -439,6 +440,10 @@ SUFFIX_EXCLUDE = {
     "CORE", "HX", "H", "U", "P", "HS", "KF", "K", "F",
     # 筆電型號前綴
     "ANV", "AN", "NL", "SFL", "SFG", "SFE", "SFA", "AL", "AM", "ASP",
+    # ASUS 筆電系列代號（A14/A16/A18=TUF AMD, F16/F17=TUF Intel）
+    "A14", "A16", "A18", "F16", "F17", "F18",
+    # CPU 短別名（R5/R7/R9/I5/I7/I9）不應被當成後綴
+    "R5", "R7", "R9", "I5", "I7", "I9",
 }
 
 # 顏色詞
@@ -583,6 +588,22 @@ def veto(name1, name2):
         laptop_suffix2 = {c for c in codes2 if re.match(r'^\d{2,4}TW$', c)}
         if laptop_suffix1 and laptop_suffix2 and not (laptop_suffix1 & laptop_suffix2):
             return True, f"R3型號代碼衝突: {codes1} vs {codes2}"
+        # 筆電系列數字後綴衝突（如 KATANA17 vs KATANA15）
+        all_tokens1 = extract_tokens(name1)
+        all_tokens2 = extract_tokens(name2)
+        series_num1 = {t for t in all_tokens1 if re.match(r'^(KATANA|CYBORG|GAMING|VICTUS|NITRO|SWIFT|ASPIRE|PULSE|BRAVO|STEALTH|RAIDER|VECTOR|CREATOR)\d+$', t)}
+        series_num2 = {t for t in all_tokens2 if re.match(r'^(KATANA|CYBORG|GAMING|VICTUS|NITRO|SWIFT|ASPIRE|PULSE|BRAVO|STEALTH|RAIDER|VECTOR|CREATOR)\d+$', t)}
+        if series_num1 and series_num2 and not (series_num1 & series_num2):
+            return True, f"R3型號代碼衝突(系列不同): {series_num1} vs {series_num2}"
+        # 筆電型號代碼含螢幕尺寸衝突（如 SFL16 vs SFL14, ANV15 vs ANV16）
+        size_code1 = {c for c in codes1 if re.match(r'^[A-Z]{2,4}\d{2}$', c) and c not in codes2}
+        size_code2 = {c for c in codes2 if re.match(r'^[A-Z]{2,4}\d{2}$', c) and c not in codes1}
+        if size_code1 and size_code2 and not (size_code1 & size_code2):
+            # 提取型號代碼中的數字部分（如 SFL16 -> 16, ANV15 -> 15）
+            nums1 = {re.search(r'(\d+)$', c).group(1) for c in size_code1}
+            nums2 = {re.search(r'(\d+)$', c).group(1) for c in size_code2}
+            if nums1 and nums2 and not (nums1 & nums2):
+                return True, f"R3型號代碼碼衝突(螢幕尺寸): {size_code1} vs {size_code2}"
         # 如果有共同代碼，但雙方有不同的子型號代碼（如 32P vs 52M），仍應衝突
         # 檢查短代碼（2-4字元字母+數字）是否有完全不同的子型號
         sub1 = {c for c in codes1 if re.match(r'^([A-Z]{1,2}\d{1,3}[A-Z]?|\d{2,3}[A-Z])$', c) and c not in codes2}
@@ -614,6 +635,11 @@ def veto(name1, name2):
                     digit_codes2 = {c for c in long_codes2 if re.search(r'\d', c) and c not in long_codes1}
                     if digit_codes1 and digit_codes2:
                         return True, f"R3型號代碼衝突: {codes1} vs {codes2}"
+                    # 檢查筆電系列中的數字後綴是否不同（如 KATANA17 vs KATANA15）
+                    series_num1 = {t for t in laptop_series1 if re.search(r'\d+$', t)}
+                    series_num2 = {t for t in laptop_series2 if re.search(r'\d+$', t)}
+                    if series_num1 and series_num2 and not (series_num1 & series_num2):
+                        return True, f"R3型號代碼衝突(系列不同): {series_num1} vs {series_num2}"
                     pass  # 同系列筆電，型號代碼不含數字部分相同，不衝突
                 # 筆電型號代碼例外：如果雙方有共同的 5+ 字元筆電型號代碼（如 16Z90TS），
                 # 即使其他代碼不同（如 AU89C2 vs 258V），也不衝突
@@ -713,14 +739,14 @@ def compute_score(name1, name2):
         overlap = max(overlap, 0.50)
         rHead = max(rHead, 0.60)
     
-    # 筆電型號代碼匹配：如果雙方有相同的 5+ 字元筆電型號代碼（如 B14WFK），
+    # 筆電型號代碼匹配：如果雙方有相同的 5+ 字元筆電型號代碼（如 B14WFK, FA617NT, G614PR），
     # 這是極強的信號，直接提升分數
-    laptop_code_pattern = re.compile(r'^[A-Z]\d{2,4}[A-Z]{2,4}$')
+    laptop_code_pattern = re.compile(r'^[A-Z]{1,2}\d{3,4}[A-Z]{0,4}$')
     code_tokens1 = {t for t in tokens1 if laptop_code_pattern.match(t) and len(t) >= 5}
     code_tokens2 = {t for t in tokens2 if laptop_code_pattern.match(t) and len(t) >= 5}
     if code_tokens1 and code_tokens2 and (code_tokens1 & code_tokens2):
-        overlap = max(overlap, 0.80)
-        rHead = max(rHead, 0.80)
+        overlap = max(overlap, 0.85)
+        rHead = max(rHead, 0.85)
     
     # GIGABYTE 筆電型號代碼模糊匹配：
     # GIGABYTE 使用 12 字元型號代碼（如 CTHH3TW893SH），欣亞和原價屋可能末 1-3 碼不同
