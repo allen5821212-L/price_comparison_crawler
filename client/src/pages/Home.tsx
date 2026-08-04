@@ -114,7 +114,7 @@ type SortField = "price_diff" | "sinya_price" | "coolpc_price" | "name" | "score
 type SortOrder = "asc" | "desc";
 type CheaperFilter = "all" | "sinya" | "coolpc" | "tie";
 type ScoreFilter = "all" | "high" | "medium" | "low";
-type OverrideFilter = "all" | "confirmed" | "rejected" | "none";
+type OverrideFilter = "all" | "confirmed" | "rejected" | "no_match" | "none";
 
 function formatPrice(price: number): string {
   return `NT$${price.toLocaleString()}`;
@@ -342,6 +342,9 @@ export default function Home() {
         }
         if (overrideFilter === "rejected") {
           return overrides.isRejected(sId, cId);
+        }
+        if (overrideFilter === "no_match") {
+          return overrides.isNoMatch(sId);
         }
         if (overrideFilter === "none") {
           return !overrides.getConfirmed(sId) && !overrides.isRejected(sId, cId) && !overrides.isNoMatch(sId);
@@ -789,6 +792,7 @@ export default function Home() {
               <SelectItem value="all">全部狀態</SelectItem>
               <SelectItem value="confirmed">已確認配對</SelectItem>
               <SelectItem value="rejected">已排除配對</SelectItem>
+              <SelectItem value="no_match">無符合商品</SelectItem>
               <SelectItem value="none">未處理</SelectItem>
             </SelectContent>
           </Select>
