@@ -278,6 +278,19 @@ export function useOverrides() {
     return snapshot;
   }, [overrides]);
 
+  /** Clear overrides by action type */
+  const clearOverridesByType = useCallback(
+    (actionType: "confirm" | "reject" | "no_match") => {
+      const snapshot = overrides.overrides;
+      const remaining = overrides.overrides.filter((o) => o.action !== actionType);
+      const data = { version: 1, updated_at: new Date().toISOString(), overrides: remaining };
+      saveToStorage(data);
+      setOverrides(data);
+      return snapshot;
+    },
+    [overrides]
+  );
+
   return {
     overrides: overrides.overrides,
     stats,
@@ -289,6 +302,7 @@ export function useOverrides() {
     batchReject,
     restoreSnapshot,
     clearAllOverrides,
+    clearOverridesByType,
     getOverride,
     isRejected,
     getConfirmed,

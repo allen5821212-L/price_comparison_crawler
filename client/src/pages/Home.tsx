@@ -25,6 +25,14 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuItem,
+} from "@/components/ui/dropdown-menu";
+import {
   Search,
   TrendingDown,
   TrendingUp,
@@ -512,31 +520,67 @@ export default function Home() {
                 e.target.value = "";
               }}
             />
-            <Tooltip>
-              <TooltipTrigger asChild>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
                   size="icon"
-                  onClick={() => {
-                    if (overrides.stats.total === 0) return;
-                    const snapshot = overrides.clearAllOverrides();
-                    toast.success(`已清除 ${snapshot.length} 筆手動標記`, {
-                      action: {
-                        label: "復原",
-                        onClick: () => {
-                          overrides.restoreSnapshot(snapshot);
-                          toast.success("已復原清除操作");
-                        },
-                      },
-                    });
-                  }}
                   disabled={overrides.stats.total === 0}
                 >
                   <Trash2 className="size-4" />
                 </Button>
-              </TooltipTrigger>
-              <TooltipContent>清除所有手動標記</TooltipContent>
-            </Tooltip>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuLabel>清除手動標記</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  disabled={overrides.stats.confirmed === 0}
+                  onClick={() => {
+                    const snapshot = overrides.clearOverridesByType("confirm");
+                    toast.success(`已清除 ${overrides.stats.confirmed} 筆確認標記`, {
+                      action: { label: "復原", onClick: () => { overrides.restoreSnapshot(snapshot); toast.success("已復原清除操作"); } },
+                    });
+                  }}
+                >
+                  清除確認標記 ({overrides.stats.confirmed})
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  disabled={overrides.stats.rejected === 0}
+                  onClick={() => {
+                    const snapshot = overrides.clearOverridesByType("reject");
+                    toast.success(`已清除 ${overrides.stats.rejected} 筆排除標記`, {
+                      action: { label: "復原", onClick: () => { overrides.restoreSnapshot(snapshot); toast.success("已復原清除操作"); } },
+                    });
+                  }}
+                >
+                  清除排除標記 ({overrides.stats.rejected})
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  disabled={overrides.stats.noMatch === 0}
+                  onClick={() => {
+                    const snapshot = overrides.clearOverridesByType("no_match");
+                    toast.success(`已清除 ${overrides.stats.noMatch} 筆無符合標記`, {
+                      action: { label: "復原", onClick: () => { overrides.restoreSnapshot(snapshot); toast.success("已復原清除操作"); } },
+                    });
+                  }}
+                >
+                  清除無符合標記 ({overrides.stats.noMatch})
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  className="text-red-600"
+                  disabled={overrides.stats.total === 0}
+                  onClick={() => {
+                    const snapshot = overrides.clearAllOverrides();
+                    toast.success(`已清除 ${snapshot.length} 筆手動標記`, {
+                      action: { label: "復原", onClick: () => { overrides.restoreSnapshot(snapshot); toast.success("已復原清除操作"); } },
+                    });
+                  }}
+                >
+                  清除全部標記 ({overrides.stats.total})
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
