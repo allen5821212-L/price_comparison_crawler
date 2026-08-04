@@ -160,6 +160,43 @@ def is_combo(name):
     return bool(COMBO_PATTERNS.search(name))
 
 
+# 筆電組合包標籤
+LAPTOP_COMBO_TAGS = re.compile(
+    r'【雙營組】|【雙螢組】|【職人辦公組】|【Office超值組】|【抗漲升級組】|【全能防護組】'
+    r'|【學生專案組】|【開學配備組】|【防疫辦公組】|【商務辦公組】'
+)
+
+
+def extract_bare_laptop(name):
+    """從筆電組合包品名中剝離附加品，取出裸機筆電品名。
+    
+    例如：
+      【雙營組】LG gram 16Z90TL-G.AS55C2 曜石黑 極致輕薄AI筆電+LG UltraGear 27G610A-B ...
+      → LG gram 16Z90TL-G.AS55C2 曜石黑 極致輕薄AI筆電
+      
+      【Office超值組】ASUS V16 V3607VJ-0031K210H 靜謐黑 華碩蒼藍戰魂效能筆電+Office 2024 ...
+      → ASUS V16 V3607VJ-0031K210H 靜謐黑 華碩蒼藍戰魂效能筆電
+    
+    如果不是組合包，返回 None。
+    """
+    if not name:
+        return None
+    # 只處理筆電組合包
+    if not LAPTOP_COMBO_TAGS.search(name):
+        return None
+    # 去除【】標籤
+    bare = re.sub(r'【[^】]*】', '', name).strip()
+    # 取 + 之前的部分（裸機）
+    if '+' in bare:
+        bare = bare.split('+')[0].strip()
+    # 去除尾部「送」之後的附加品描述
+    bare = re.split(r'送[^,，]{0,20}$', bare)[0].strip()
+    # 確保裸機品名中包含「筆電」關鍵詞
+    if '筆電' not in bare:
+        return None
+    return bare
+
+
 def is_system(name):
     """判斷是否為整機/套裝電腦。"""
     if not name:
@@ -340,11 +377,27 @@ def extract_tokens(name):
         tok = m.group(1).replace(' ', '')
         if len(tok) >= 4:
             tokens.add(tok)
-    # 筆電型號代碼（如 B14WFK, B2RWFKG, V3607VJ, ANV16S 等）
-    for m in re.finditer(r'\b([A-Z]\d{3,4}[A-Z]{2,4})\b', n):
+    # 筆電型號代碼（如 B14WFK, B2RWFKG, V3607VJ, ANV16S, 16Z90TS 等）
+    # 從完整品名（split 前）中提取，因為型號代碼常在 / 之後
+    n_full = re.sub(r'【[^】]*】', ' ', norm(name))
+    # 字母開頭的型號代碼（如 B14WFK, AU89C2）
+    for m in re.finditer(r'\b([A-Z]\d{2,4}[A-Z]{2,4})\b', n_full):
         tok = m.group(1)
         if len(tok) >= 5:
             tokens.add(tok)
+    # 數字開頭的型號代碼（如 16Z90TS, 27UP600K）
+    for m in re.finditer(r'\b(\d{2,4}[A-Z]\d{2,4}[A-Z]{2,4})\b', n_full):
+        tok = m.group(1)
+        if len(tok) >= 5:
+            tokens.add(tok)
+    # 也提取 - 分隔的型號代碼（如 B14WFK-884TW）
+    for m in re.finditer(r'\b([A-Z]\d{2,4}[A-Z]{2,4})-(\d{3,4}[A-Z]{0,2})\b', n_full):
+        tokens.add(m.group(1))
+        tokens.add(m.group(1) + m.group(2))
+    # 提取含點的型號代碼（如 16Z90TS-G.AU89C2 → 16Z90TS, AU89C2）
+    for m in re.finditer(r'\b(\d{2,4}[A-Z]\d{2,4}[A-Z]{2,4})[.-]([A-Z]\d{2,4}[A-Z]{2,4})\b', n_full):
+        tokens.add(m.group(1))
+        tokens.add(m.group(2))
     
     return tokens
 
@@ -374,6 +427,12 @@ SUFFIX_EXCLUDE = {
     "PRIME", "STEALTH", "STORM", "FROST", "BLAZE",
     "BLACK", "WHITE", "RED", "BLUE", "GREEN", "GRAY", "GREY",
     "V2", "V3", "V4", "V5", "II", "III", "IV",
+    # 品牌名不應被當成後綴
+    "MSI", "ASUS", "AOC", "HP", "LG", "JBL", "PNY", "EVGA",
+    # 筆電系列名/CPU 後綴不應被當成後綴
+    "CORE", "HX", "H", "U", "P", "HS", "KF", "K", "F",
+    # 筆電型號前綴
+    "ANV", "AN", "NL", "SFL", "SFG", "SFE", "SFA", "AL", "AM", "ASP",
 }
 
 # 顏色詞
@@ -428,16 +487,17 @@ def extract_model_codes(name):
     """
     n = norm(name)
     n = re.sub(r'【[^】]*】', ' ', n)
+    # 筆電型號代碼常在 / 之後，需要從完整品名中提取
+    n_full = n.replace('-', ' ').replace('.', ' ')
     n = re.split(r'[/〈(【]', n)[0]
     n = n.replace('-', ' ').replace('.', ' ')
     
     codes = set()
-    # 匹配任何 3+ 字元的英數混合 token（同時含字母和數字）
-    for m in re.finditer(r'\b([A-Z0-9]{3,})\b', n):
+    # 從 split 前的品名中提取所有 3+ 字元的英數混合 token
+    for m in re.finditer(r'\b([A-Z0-9]{3,})\b', n_full):
         code = m.group(1)
         if code in GENERIC_CODE:
             continue
-        # 必須同時含字母和數字
         has_letter = any(c.isalpha() for c in code)
         has_digit = any(c.isdigit() for c in code)
         if has_letter and has_digit:
@@ -508,7 +568,7 @@ def veto(name1, name2):
                 else:
                     return True, f"R2數字型號衝突: {pat} {vals1} vs {vals2}"
     
-    # R3. 型號代碼衝突（筆電例外：長型號代碼 vs CPU 代碼不衝突）
+    # R3. 型號代型號代碼衝突（筆電例外：長型號代碼 vs CPU 代碼不衝突）
     codes1 = extract_model_codes(name1)
     codes2 = extract_model_codes(name2)
     if codes1 and codes2:
@@ -520,6 +580,19 @@ def veto(name1, name2):
             cpu_codes2 = {c for c in codes2 if re.match(r'^(I\d{4,5}|R\d{4}|ULTRA\d{3,4}|\d{3,4}HX|\d{3,4}H)$', c)}
             if (long_codes1 and cpu_codes2 and not long_codes2) or (long_codes2 and cpu_codes1 and not long_codes1):
                 pass  # 筆電型號 vs CPU 代碼，不衝突
+            # 筆電裸機例外：如果雙方都有長型號代碼但不同（如 B14WFK vs 14700HX），
+            # 但雙方都有相同的筆電系列 token（KATANA/CYBORG/GAMINGA16 等），不衝突
+            elif long_codes1 and long_codes2:
+                laptop_series1 = {t for t in extract_tokens(name1) if t in {'KATANA', 'KATANA15', 'KATANA17', 'CYBORG', 'CYBORG15', 'GAMINGA16', 'AEROX16', 'NITRO', 'VICTUS', 'SWIFT', 'ASPIRE', 'GRAM', 'ZENBOOK'}}
+                laptop_series2 = {t for t in extract_tokens(name2) if t in {'KATANA', 'KATANA15', 'KATANA17', 'CYBORG', 'CYBORG15', 'GAMINGA16', 'AEROX16', 'NITRO', 'VICTUS', 'SWIFT', 'ASPIRE', 'GRAM', 'ZENBOOK'}}
+                if laptop_series1 and laptop_series2 and (laptop_series1 & laptop_series2):
+                    pass  # 同系列筆電，型號代碼不同不衝突
+                # 筆電型號代碼例外：如果雙方有共同的 5+ 字元筆電型號代碼（如 16Z90TS），
+                # 即使其他代碼不同（如 AU89C2 vs 258V），也不衝突
+                elif long_codes1 & long_codes2:
+                    pass  # 有共同的長型號代碼，不衝突
+                else:
+                    return True, f"R3型號代碼衝突: {codes1} vs {codes2}"
             else:
                 return True, f"R3型號代碼衝突: {codes1} vs {codes2}"
     
@@ -544,10 +617,18 @@ def veto(name1, name2):
         return True, f"R6整機vs單品: sys1={sys1} sys2={sys2}"
     
     # R7. 組合 vs 單品
+    # 筆電裸機例外：如果一方是筆電組合包，另一方是裸機筆電，
+    # 且裸機品名能從組合包中剝離出來，則不視為組合 vs 單品衝突
+    bare1 = extract_bare_laptop(name1)
+    bare2 = extract_bare_laptop(name2)
     combo1 = is_combo(name1)
     combo2 = is_combo(name2)
     if combo1 != combo2:
-        return True, f"R7組合vs單品: combo1={combo1} combo2={combo2}"
+        # 如果組合包方可以剝離出裸機品名，且裸機品名與另一方有 token 重疊，允許配對
+        if (bare1 and not combo2) or (bare2 and not combo1):
+            pass  # 筆電裸機比對，允許
+        else:
+            return True, f"R7組合vs單品: combo1={combo1} combo2={combo2}"
     
     return False, ""
 
@@ -580,6 +661,27 @@ def compute_score(name1, name2):
     ram_tokens1 = {t for t in tokens1 if t.startswith('D4') or t.startswith('D5')}
     ram_tokens2 = {t for t in tokens2 if t.startswith('D4') or t.startswith('D5')}
     if ram_tokens1 and ram_tokens2 and ram_tokens1 == ram_tokens2:
+        rHead = max(rHead, 0.80)
+    
+    # 筆電裸機例外：如果雙方有相同的筆電系列 token，提升 overlap 和 head
+    laptop_series = {'KATANA', 'KATANA15', 'KATANA17', 'CYBORG', 'CYBORG15', 
+                     'GAMINGA16', 'AEROX16', 'NITRO', 'VICTUS', 'SWIFT', 
+                     'ASPIRE', 'GRAM', 'ZENBOOK', 'CREATOR', 'RAIDER', 
+                     'VECTOR', 'STEALTH', 'PULSE', 'BRAVO', 'LEGION'}
+    laptop_tokens1 = tokens1 & laptop_series
+    laptop_tokens2 = tokens2 & laptop_series
+    if laptop_tokens1 and laptop_tokens2 and (laptop_tokens1 & laptop_tokens2):
+        # 筆電系列匹配：提升 overlap 至至少 0.50，head 至至少 0.60
+        overlap = max(overlap, 0.50)
+        rHead = max(rHead, 0.60)
+    
+    # 筆電型號代碼匹配：如果雙方有相同的 5+ 字元筆電型號代碼（如 B14WFK），
+    # 這是極強的信號，直接提升分數
+    laptop_code_pattern = re.compile(r'^[A-Z]\d{2,4}[A-Z]{2,4}$')
+    code_tokens1 = {t for t in tokens1 if laptop_code_pattern.match(t) and len(t) >= 5}
+    code_tokens2 = {t for t in tokens2 if laptop_code_pattern.match(t) and len(t) >= 5}
+    if code_tokens1 and code_tokens2 and (code_tokens1 & code_tokens2):
+        overlap = max(overlap, 0.80)
         rHead = max(rHead, 0.80)
     
     score = 0.45 * overlap + 0.40 * rHead + 0.15 * rFull
@@ -666,7 +768,13 @@ def match_products_v2(sinya_products, coolpc_products, category_compat=None):
             continue
         
         sp = sinya_products[si_orig]
-        sinya_tokens = extract_tokens(sp["name"])
+        sinya_name = sp["name"]
+        
+        # 筆電裸機比對：如果品名是筆電組合包，使用剝離後的裸機品名進行比對
+        bare_name = extract_bare_laptop(sinya_name)
+        match_name = bare_name if bare_name else sinya_name
+        
+        sinya_tokens = extract_tokens(match_name)
         
         # Gather candidates from inverted index (products sharing at least one token)
         candidate_positions = set()
@@ -697,14 +805,14 @@ def match_products_v2(sinya_products, coolpc_products, category_compat=None):
                     if (cat_s, cat_c) not in category_compat and (cat_c, cat_s) not in category_compat:
                         continue
             
-            # 步驟 5: 硬否決
-            is_vetoed, reason = veto(sp["name"], cp["name"])
+            # 步驟 5: 硬否決（使用裸機品名比對）
+            is_vetoed, reason = veto(match_name, cp["name"])
             if is_vetoed:
                 vetoed_candidates.append((ci_orig, reason, 0))
                 continue
             
-            # 步驟 4: 計分
-            score, details = compute_score(sp["name"], cp["name"])
+            # 步驟 4: 計分（使用裸機品名比對）
+            score, details = compute_score(match_name, cp["name"])
             
             if score > best_score:
                 best_score = score
@@ -731,6 +839,7 @@ def match_products_v2(sinya_products, coolpc_products, category_compat=None):
                 "coolpc_image": cp.get("image", ""),
                 "category": sp.get("category") or cp.get("category", ""),
                 "score": round(best_score, 4),
+                "is_bare_match": bool(bare_name),
             })
             sinya_matched.add(si_orig)
             coolpc_matched.add(best_ci)
