@@ -206,6 +206,7 @@ export function useOverrides() {
   /** Batch confirm multiple matches at once */
   const batchConfirm = useCallback(
     (entries: { ours_id: string; ours_name: string; their_id: string; their_name: string }[]) => {
+      const snapshot = overrides.overrides;
       setOverrides((prev) => {
         const data = { ...prev, overrides: [...prev.overrides] };
         for (const entry of entries) {
@@ -213,9 +214,7 @@ export function useOverrides() {
           const filtered = data.overrides.filter(
             (o) => !(o.ours_id === entry.ours_id && o.action === "confirm")
           );
-          // Remove the ones we just filtered out
           data.overrides = filtered;
-          // Add new confirm entry
           data.overrides.push({
             ...entry,
             action: "confirm",
@@ -223,6 +222,46 @@ export function useOverrides() {
             at: new Date().toISOString(),
           });
         }
+        saveToStorage(data);
+        return data;
+      });
+      return snapshot;
+    },
+    [overrides]
+  );
+
+  /** Batch reject multiple matches at once, returns previous state for undo */
+  const batchReject = useCallback(
+    (entries: { ours_id: string; ours_name: string; their_id: string; their_name: string }[], note?: string) => {
+      const snapshot = overrides.overrides;
+      setOverrides((prev) => {
+        const data = { ...prev, overrides: [...prev.overrides] };
+        for (const entry of entries) {
+          const filtered = data.overrides.filter(
+            (o) => !(o.ours_id === entry.ours_id && o.their_id === entry.their_id && o.action === "reject")
+          );
+          data.overrides = filtered;
+          data.overrides.push({
+            ...entry,
+            action: "reject",
+            note: note || "批次排除",
+            by: "user",
+            at: new Date().toISOString(),
+          });
+        }
+        saveToStorage(data);
+        return data;
+      });
+      return snapshot;
+    },
+    [overrides]
+  );
+
+  /** Restore overrides to a previous snapshot (undo) */
+  const restoreSnapshot = useCallback(
+    (snapshot: OverrideEntry[]) => {
+      setOverrides((prev) => {
+        const data = { ...prev, overrides: snapshot };
         saveToStorage(data);
         return data;
       });
@@ -238,6 +277,8 @@ export function useOverrides() {
     markNoMatch,
     manualMatch,
     batchConfirm,
+    batchReject,
+    restoreSnapshot,
     getOverride,
     isRejected,
     getConfirmed,

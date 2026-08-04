@@ -745,8 +745,16 @@ export default function Home() {
                     their_id: coolpcId(m.coolpc_name),
                     their_name: m.coolpc_name,
                   }));
-                overrides.batchConfirm(toConfirm);
-                toast.success(`已批次確認 ${toConfirm.length} 組配對`);
+                const snapshot = overrides.batchConfirm(toConfirm);
+                toast.success(`已批次確認 ${toConfirm.length} 組配對`, {
+                  action: {
+                    label: "復原",
+                    onClick: () => {
+                      overrides.restoreSnapshot(snapshot);
+                      toast.success("已復原批次確認");
+                    },
+                  },
+                });
               }}
               className="inline-flex h-9 items-center gap-1.5 rounded-md border border-green-500 bg-green-500/10 px-3 text-sm font-medium text-green-700 transition-colors hover:bg-green-500/20 dark:text-green-400"
             >
@@ -763,10 +771,16 @@ export default function Home() {
                     their_id: coolpcId(m.coolpc_name),
                     their_name: m.coolpc_name,
                   }));
-                for (const entry of toReject) {
-                  overrides.rejectMatch(entry.ours_id, entry.ours_name, entry.their_id, entry.their_name, "規格差異批次排除");
-                }
-                toast.success(`已批次排除 ${toReject.length} 組配對`);
+                const snapshot = overrides.batchReject(toReject, "規格差異批次排除");
+                toast.success(`已批次排除 ${toReject.length} 組配對`, {
+                  action: {
+                    label: "復原",
+                    onClick: () => {
+                      overrides.restoreSnapshot(snapshot);
+                      toast.success("已復原批次排除");
+                    },
+                  },
+                });
               }}
               className="inline-flex h-9 items-center gap-1.5 rounded-md border border-red-500 bg-red-500/10 px-3 text-sm font-medium text-red-700 transition-colors hover:bg-red-500/20 dark:text-red-400"
             >
