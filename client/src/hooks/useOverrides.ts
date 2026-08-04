@@ -269,6 +269,15 @@ export function useOverrides() {
     []
   );
 
+  /** Clear all overrides (confirm/reject/no_match) */
+  const clearAllOverrides = useCallback(() => {
+    const snapshot = overrides.overrides;
+    const data = { version: 1, updated_at: new Date().toISOString(), overrides: [] };
+    saveToStorage(data);
+    setOverrides(data);
+    return snapshot;
+  }, [overrides]);
+
   return {
     overrides: overrides.overrides,
     stats,
@@ -279,6 +288,7 @@ export function useOverrides() {
     batchConfirm,
     batchReject,
     restoreSnapshot,
+    clearAllOverrides,
     getOverride,
     isRejected,
     getConfirmed,

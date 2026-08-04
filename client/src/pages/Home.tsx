@@ -46,6 +46,7 @@ import {
   UserCheck,
   AlertTriangle,
   CheckCheck,
+  Trash2,
 } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useOverrides } from "@/hooks/useOverrides";
@@ -511,6 +512,31 @@ export default function Home() {
                 e.target.value = "";
               }}
             />
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => {
+                    if (overrides.stats.total === 0) return;
+                    const snapshot = overrides.clearAllOverrides();
+                    toast.success(`已清除 ${snapshot.length} 筆手動標記`, {
+                      action: {
+                        label: "復原",
+                        onClick: () => {
+                          overrides.restoreSnapshot(snapshot);
+                          toast.success("已復原清除操作");
+                        },
+                      },
+                    });
+                  }}
+                  disabled={overrides.stats.total === 0}
+                >
+                  <Trash2 className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>清除所有手動標記</TooltipContent>
+            </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
