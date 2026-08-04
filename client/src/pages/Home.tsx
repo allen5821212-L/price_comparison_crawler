@@ -734,6 +734,7 @@ export default function Home() {
             規格差異
           </button>
           {specDiffFilter && filteredAndSorted.some((m) => m.spec_diff && m.spec_diff.length > 0) && (
+            <>
             <button
               onClick={() => {
                 const toConfirm = filteredAndSorted
@@ -752,6 +753,27 @@ export default function Home() {
               <CheckCheck className="size-3.5" />
               全部確認
             </button>
+            <button
+              onClick={() => {
+                const toReject = filteredAndSorted
+                  .filter((m) => m.spec_diff && m.spec_diff.length > 0)
+                  .map((m) => ({
+                    ours_id: sinyaId(m.sinya_name),
+                    ours_name: m.sinya_name,
+                    their_id: coolpcId(m.coolpc_name),
+                    their_name: m.coolpc_name,
+                  }));
+                for (const entry of toReject) {
+                  overrides.rejectMatch(entry.ours_id, entry.ours_name, entry.their_id, entry.their_name, "規格差異批次排除");
+                }
+                toast.success(`已批次排除 ${toReject.length} 組配對`);
+              }}
+              className="inline-flex h-9 items-center gap-1.5 rounded-md border border-red-500 bg-red-500/10 px-3 text-sm font-medium text-red-700 transition-colors hover:bg-red-500/20 dark:text-red-400"
+            >
+              <X className="size-3.5" />
+              全部排除
+            </button>
+            </>
           )}
           <button
             onClick={() => setShowPriceHistory(true)}
