@@ -146,6 +146,14 @@ def is_combo(name):
     """判斷是否為組合包/搭購品（用於 R7 規則）。"""
     if not name:
         return False
+    # 擴充：CPU+MB 組合包（U版專案、限省、現省等）
+    if re.search(r'U版專案|限省\d|現省\d|【.*\+.*】|【搭機價】|【任搭CPU】|【CPU獨家', name):
+        return True
+    # 偵測 CPU+MB 組合：品名同時含 CPU 型號與主機板晶片組
+    cpu_pattern = re.search(r'(R[3579]\s*\d{4}|I[3579]\s*\d{4,5}|ULTRA[3579]\s*\d{3,4}|RYZEN\s*\d|CORE\s*I?\d|CORE\s*ULTRA\s*\d)', name, re.IGNORECASE)
+    mb_pattern = re.search(r'\b([ABH]\d{3}[A-Z]*)', name)
+    if cpu_pattern and mb_pattern and '+' in name:
+        return True
     return bool(COMBO_PATTERNS.search(name))
 
 
@@ -439,12 +447,20 @@ def extract_suffixes(name):
 def veto(name1, name2):
     """執行 7 條硬否決規則。返回 (vetoed: bool, reason: str)。"""
     
-    # R1. 品牌衝突
+    # R1. 品牌衝突（RAM 例外：同規格不同品牌可配對）
     brands1 = extract_brands(name1)
     brands2 = extract_brands(name2)
     if brands1 and brands2:
         if not (brands1 & brands2):
-            return True, f"R1品牌衝突: {brands1} vs {brands2}"
+            # RAM 例外：如果雙方都有 DDR 速度+容量 token 且完全一致，允許跨品牌配對
+            tokens1 = extract_tokens(name1)
+            tokens2 = extract_tokens(name2)
+            ram_tokens1 = {t for t in tokens1 if t.startswith('D4') or t.startswith('D5')}
+            ram_tokens2 = {t for t in tokens2 if t.startswith('D4') or t.startswith('D5')}
+            if ram_tokens1 and ram_tokens2 and ram_tokens1 == ram_tokens2:
+                pass  # 允許跨品牌 RAM 配對
+            else:
+                return True, f"R1品牌衝突: {brands1} vs {brands2}"
     
     # R2. 數字型號衝突
     p1 = extract_numeric_patterns(name1)
@@ -520,6 +536,13 @@ def compute_score(name1, name2):
     overlap = len(tokens1 & tokens2) / min(len(tokens1), len(tokens2))
     rHead = string_similarity(head(name1), head(name2))
     rFull = string_similarity(norm(name1), norm(name2))
+    
+    # RAM 例外：同規格不同品牌配對時，head 相似度因品牌不同而被壓低
+    # 如果雙方有完全一致的 DDR 速度+容量 token，將 head 提升至 max(rHead, 0.80)
+    ram_tokens1 = {t for t in tokens1 if t.startswith('D4') or t.startswith('D5')}
+    ram_tokens2 = {t for t in tokens2 if t.startswith('D4') or t.startswith('D5')}
+    if ram_tokens1 and ram_tokens2 and ram_tokens1 == ram_tokens2:
+        rHead = max(rHead, 0.80)
     
     score = 0.45 * overlap + 0.40 * rHead + 0.15 * rFull
     return score, {"overlap": overlap, "rHead": rHead, "rFull": rFull}

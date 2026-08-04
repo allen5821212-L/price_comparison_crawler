@@ -62,6 +62,7 @@ interface MatchedProduct {
   sinya_image: string;
   coolpc_image: string;
   category: string;
+  score?: number;
 }
 
 interface Stats {
@@ -95,9 +96,11 @@ interface ComparisonData {
   sinya_categories: string[];
 }
 
-type SortField = "price_diff" | "sinya_price" | "coolpc_price" | "name";
+type SortField = "price_diff" | "sinya_price" | "coolpc_price" | "name" | "score" | "price_diff_abs";
 type SortOrder = "asc" | "desc";
 type CheaperFilter = "all" | "sinya" | "coolpc" | "tie";
+type ScoreFilter = "all" | "high" | "medium" | "low";
+type OverrideFilter = "all" | "confirmed" | "rejected" | "none";
 
 function formatPrice(price: number): string {
   return `NT$${price.toLocaleString()}`;
@@ -137,6 +140,8 @@ export default function Home() {
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [coolpcCategoryFilter, setCoolpcCategoryFilter] = useState("all");
   const [cheaperFilter, setCheaperFilter] = useState<CheaperFilter>("all");
+  const [scoreFilter, setScoreFilter] = useState<ScoreFilter>("all");
+  const [overrideFilter, setOverrideFilter] = useState<OverrideFilter>("all");
   const [sortField, setSortField] = useState<SortField>("price_diff");
   const [sortOrder, setSortOrder] = useState<SortOrder>("asc");
   const [currentPage, setCurrentPage] = useState(1);
@@ -299,12 +304,45 @@ export default function Home() {
       result = result.filter((m) => m.cheaper === cheaperFilter);
     }
 
+    // Score filter
+    if (scoreFilter !== "all") {
+      result = result.filter((m) => {
+        const s = m.score ?? 0;
+        if (scoreFilter === "high") return s >= 0.85;
+        if (scoreFilter === "medium") return s >= 0.70 && s < 0.85;
+        if (scoreFilter === "low") return s < 0.70;
+        return true;
+      });
+    }
+
+    // Override status filter
+    if (overrideFilter !== "all") {
+      result = result.filter((m) => {
+        const sId = sinyaId(m.sinya_name);
+        const cId = coolpcId(m.coolpc_name);
+        if (overrideFilter === "confirmed") {
+          const confirmed = overrides.getConfirmed(sId);
+          return confirmed && confirmed.their_id === cId;
+        }
+        if (overrideFilter === "rejected") {
+          return overrides.isRejected(sId, cId);
+        }
+        if (overrideFilter === "none") {
+          return !overrides.getConfirmed(sId) && !overrides.isRejected(sId, cId) && !overrides.isNoMatch(sId);
+        }
+        return true;
+      });
+    }
+
     // Sort
     result.sort((a, b) => {
       let cmp = 0;
       switch (sortField) {
         case "price_diff":
           cmp = a.price_diff - b.price_diff;
+          break;
+        case "price_diff_abs":
+          cmp = Math.abs(a.price_diff) - Math.abs(b.price_diff);
           break;
         case "sinya_price":
           cmp = a.sinya_price - b.sinya_price;
@@ -315,12 +353,15 @@ export default function Home() {
         case "name":
           cmp = a.name.localeCompare(b.name, "zh-TW");
           break;
+        case "score":
+          cmp = (a.score ?? 0) - (b.score ?? 0);
+          break;
       }
       return sortOrder === "asc" ? cmp : -cmp;
     });
 
     return result;
-  }, [processedMatches, searchQuery, categoryFilter, coolpcCategoryFilter, cheaperFilter, sortField, sortOrder, coolpcProductMap]);
+  }, [processedMatches, searchQuery, categoryFilter, coolpcCategoryFilter, cheaperFilter, scoreFilter, overrideFilter, sortField, sortOrder, coolpcProductMap, overrides]);
 
   const totalPages = Math.ceil(filteredAndSorted.length / itemsPerPage);
   const paginatedItems = filteredAndSorted.slice(
@@ -331,7 +372,7 @@ export default function Home() {
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, categoryFilter, coolpcCategoryFilter, cheaperFilter, sortField, sortOrder]);
+  }, [searchQuery, categoryFilter, coolpcCategoryFilter, cheaperFilter, scoreFilter, overrideFilter, sortField, sortOrder]);
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -647,6 +688,28 @@ export default function Home() {
               <SelectItem value="tie">價格相同</SelectItem>
             </SelectContent>
           </Select>
+          <Select value={scoreFilter} onValueChange={(v) => setScoreFilter(v as ScoreFilter)}>
+            <SelectTrigger className="w-full md:w-40">
+              <SelectValue placeholder="相似度" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">全部相似度</SelectItem>
+              <SelectItem value="high">高 (≥0.85)</SelectItem>
+              <SelectItem value="medium">中 (0.70-0.85)</SelectItem>
+              <SelectItem value="low">低 (&lt;0.70)</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={overrideFilter} onValueChange={(v) => setOverrideFilter(v as OverrideFilter)}>
+            <SelectTrigger className="w-full md:w-44">
+              <SelectValue placeholder="配對狀態" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">全部狀態</SelectItem>
+              <SelectItem value="confirmed">已確認配對</SelectItem>
+              <SelectItem value="rejected">已排除配對</SelectItem>
+              <SelectItem value="none">未處理</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       </section>
 
@@ -716,6 +779,14 @@ export default function Home() {
                       </button>
                     </TableHead>
                     <TableHead className="text-center">較便宜</TableHead>
+                    <TableHead className="text-center">
+                      <button
+                        onClick={() => handleSort("score")}
+                        className="flex items-center justify-center gap-1.5 font-semibold hover:text-foreground"
+                      >
+                        相似度 {getSortIcon("score")}
+                      </button>
+                    </TableHead>
                     <TableHead className="text-center">連結</TableHead>
                     <TableHead className="text-center w-[80px]">配對</TableHead>
                   </TableRow>
@@ -807,6 +878,21 @@ export default function Home() {
                           )}
                           {item.cheaper === "tie" && (
                             <Badge variant="secondary">相同</Badge>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-center">
+                          {item.score !== undefined && (
+                            <span
+                              className={`font-mono text-xs ${
+                                item.score >= 0.85
+                                  ? "text-green-600"
+                                  : item.score >= 0.70
+                                  ? "text-yellow-600"
+                                  : "text-muted-foreground"
+                              }`}
+                            >
+                              {(item.score * 100).toFixed(0)}%
+                            </span>
                           )}
                         </TableCell>
                         <TableCell>
