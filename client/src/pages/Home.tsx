@@ -288,6 +288,41 @@ export default function Home() {
       .filter((m): m is MatchedProduct & { _confirmed?: boolean } => m !== null);
   }, [data, overrides]);
 
+  // Compute counts for each filter option
+  const filterCounts = useMemo(() => {
+    let cheaper = { sinya: 0, coolpc: 0, tie: 0 };
+    let score = { high: 0, medium: 0, low: 0 };
+    let override = { confirmed: 0, rejected: 0, no_match: 0, none: 0 };
+    let specDiff = 0;
+
+    for (const m of processedMatches) {
+      // Cheaper counts
+      if (m.cheaper === "sinya") cheaper.sinya++;
+      else if (m.cheaper === "coolpc") cheaper.coolpc++;
+      else if (m.cheaper === "tie") cheaper.tie++;
+
+      // Score counts
+      const s = m.score ?? 0;
+      if (s >= 0.85) score.high++;
+      else if (s >= 0.70) score.medium++;
+      else score.low++;
+
+      // Override counts
+      const sId = sinyaId(m.sinya_name);
+      const cId = coolpcId(m.coolpc_name);
+      const confirmed = overrides.getConfirmed(sId);
+      if (confirmed && confirmed.their_id === cId) override.confirmed++;
+      else if (overrides.isRejected(sId, cId)) override.rejected++;
+      else if (overrides.isNoMatch(sId)) override.no_match++;
+      else override.none++;
+
+      // Spec diff count
+      if (m.spec_diff && m.spec_diff.length > 0) specDiff++;
+    }
+
+    return { cheaper, score, override, specDiff, total: processedMatches.length };
+  }, [processedMatches, overrides]);
+
   const filteredAndSorted = useMemo(() => {
     let result = [...processedMatches];
 
@@ -767,10 +802,10 @@ export default function Home() {
               <SelectValue placeholder="價格比較" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">全部</SelectItem>
-              <SelectItem value="sinya">欣亞較便宜</SelectItem>
-              <SelectItem value="coolpc">原價屋較便宜</SelectItem>
-              <SelectItem value="tie">價格相同</SelectItem>
+              <SelectItem value="all">全部 ({filterCounts.total})</SelectItem>
+              <SelectItem value="sinya">欣亞較便宜 ({filterCounts.cheaper.sinya})</SelectItem>
+              <SelectItem value="coolpc">原價屋較便宜 ({filterCounts.cheaper.coolpc})</SelectItem>
+              <SelectItem value="tie">價格相同 ({filterCounts.cheaper.tie})</SelectItem>
             </SelectContent>
           </Select>
           <Select value={scoreFilter} onValueChange={(v) => setScoreFilter(v as ScoreFilter)}>
@@ -778,10 +813,10 @@ export default function Home() {
               <SelectValue placeholder="相似度" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">全部相似度</SelectItem>
-              <SelectItem value="high">高 (≥0.85)</SelectItem>
-              <SelectItem value="medium">中 (0.70-0.85)</SelectItem>
-              <SelectItem value="low">低 (&lt;0.70)</SelectItem>
+              <SelectItem value="all">全部相似度 ({filterCounts.total})</SelectItem>
+              <SelectItem value="high">高 (≥0.85) ({filterCounts.score.high})</SelectItem>
+              <SelectItem value="medium">中 (0.70-0.85) ({filterCounts.score.medium})</SelectItem>
+              <SelectItem value="low">低 (&lt;0.70) ({filterCounts.score.low})</SelectItem>
             </SelectContent>
           </Select>
           <Select value={overrideFilter} onValueChange={(v) => setOverrideFilter(v as OverrideFilter)}>
@@ -789,11 +824,11 @@ export default function Home() {
               <SelectValue placeholder="配對狀態" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">全部狀態</SelectItem>
-              <SelectItem value="confirmed">已確認配對</SelectItem>
-              <SelectItem value="rejected">已排除配對</SelectItem>
-              <SelectItem value="no_match">無符合商品</SelectItem>
-              <SelectItem value="none">未處理</SelectItem>
+              <SelectItem value="all">全部狀態 ({filterCounts.total})</SelectItem>
+              <SelectItem value="confirmed">已確認配對 ({filterCounts.override.confirmed})</SelectItem>
+              <SelectItem value="rejected">已排除配對 ({filterCounts.override.rejected})</SelectItem>
+              <SelectItem value="no_match">無符合商品 ({filterCounts.override.no_match})</SelectItem>
+              <SelectItem value="none">未處理 ({filterCounts.override.none})</SelectItem>
             </SelectContent>
           </Select>
           <button
@@ -805,7 +840,15 @@ export default function Home() {
             }`}
           >
             <AlertTriangle className="size-3.5" />
-            規格差異
+            規格差異{filterCounts.specDiff > 0 && (
+              <span className={`ml-0.5 rounded-full px-1.5 py-0.5 text-xs font-semibold ${
+                specDiffFilter
+                  ? "bg-amber-600 text-white"
+                  : "bg-amber-500/20 text-amber-700 dark:text-amber-400"
+              }`}>
+                {filterCounts.specDiff}
+              </span>
+            )}
           </button>
           {specDiffFilter && filteredAndSorted.some((m) => m.spec_diff && m.spec_diff.length > 0) && (
             <>
