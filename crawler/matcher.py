@@ -373,7 +373,7 @@ def extract_tokens(name):
     
     # ── 筆電系列名稱 token ──
     # 常見筆電系列：GAMING A16, CYBORG 15, KATANA 15, NITRO V, VICTUS, TUF GAMING 等
-    for m in re.finditer(r'\b(GAMING\s*[AX]\d{2}|CYBORG\s*\d{2}|KATANA\s*\d{2}|NITRO\s*[V\d]|VICTUS\s*\d{2}|CREATOR\s*\d{2}|AERO\s*[AX]\d{2}|SWIFT\s*\d|RAIDER\s*\d|VECTOR\s*\d|STEALTH\s*\d{2}|PULSE\s*\d{2}|BRAVO\s*\d{2}|CYBORG|KATANA|NITRO|VICTUS|CREATOR|RAIDER|VECTOR|STEALTH|PULSE|BRAVO|ALLY|ODYSSEY|PROART|ZENBOOK|VIVOBOOK|EXPERTBOOK|GRAM|TUF\s*GAMING|ROG\s*STRIX|ROG\s*ZEPHYRUS|ROG\s*SCAR|LEGION|IDEAPAD|THINKBOOK|SWIFT|ASPIRE|ENVOY|SPECTRE|ELITEBOOK|PROBOOK|SURFACE|IPHONE)', n):
+    for m in re.finditer(r'\b(GAMING\s*[AX]\d{2}|CYBORG\s*\d{2}|KATANA\s*\d{2}|NITRO\s*[V\d]|VICTUS\s*\d{2}|CREATOR\s*\d{2}|AERO\s*[AX]\d{2}|SWIFT\s*\d|RAIDER\s*\d|VECTOR\s*\d|STEALTH\s*\d{2}|PULSE\s*\d{2}|BRAVO\s*\d{2}|CYBORG|KATANA|NITRO|VICTUS|CREATOR|RAIDER|VECTOR|STEALTH|PULSE|BRAVO|ALLY|ODYSSEY|PROART|ZENBOOK|VIVOBOOK|EXPERTBOOK|GRAM|TUF\s*GAMING|ROG\s*STRIX|ROG\s*ZEPHYRUS|ROG\s*SCAR|LEGION|IDEAPAD|THINKBOOK|SWIFT|ASPIRE|ENVOY|SPECTRE|ELITEBOOK|PROBOOK|SURFACE|IPHONE|OMNIBOOK|ZBOOK|LOQ|YOGA|THINKPAD|PROBOOK|FIREFLY|FURY|OMEN|HYPERX)', n):
         tok = m.group(1).replace(' ', '')
         if len(tok) >= 4:
             tokens.add(tok)
@@ -578,6 +578,21 @@ def veto(name1, name2):
     codes1 = extract_model_codes(name1)
     codes2 = extract_model_codes(name2)
     if codes1 and codes2:
+        # 即使有共同代碼，如果雙方有不同的筆電型號後綴代碼（如 288TW vs 884TW），仍應衝突
+        laptop_suffix1 = {c for c in codes1 if re.match(r'^\d{2,4}TW$', c)}
+        laptop_suffix2 = {c for c in codes2 if re.match(r'^\d{2,4}TW$', c)}
+        if laptop_suffix1 and laptop_suffix2 and not (laptop_suffix1 & laptop_suffix2):
+            return True, f"R3型號代碼衝突: {codes1} vs {codes2}"
+        # 如果有共同代碼，但雙方有不同的子型號代碼（如 32P vs 52M），仍應衝突
+        # 檢查短代碼（2-4字元字母+數字）是否有完全不同的子型號
+        sub1 = {c for c in codes1 if re.match(r'^([A-Z]{1,2}\d{1,3}[A-Z]?|\d{2,3}[A-Z])$', c) and c not in codes2}
+        sub2 = {c for c in codes2 if re.match(r'^([A-Z]{1,2}\d{1,3}[A-Z]?|\d{2,3}[A-Z])$', c) and c not in codes1}
+        if sub1 and sub2 and not (sub1 & sub2):
+            # 確保這些是子型號而非規格（排除 N150, W11 等已知規格代碼）
+            real_sub1 = {c for c in sub1 if c not in {'N150', 'W11', 'W10', 'W12'}}
+            real_sub2 = {c for c in sub2 if c not in {'N150', 'W11', 'W10', 'W12'}}
+            if real_sub1 and real_sub2:
+                return True, f"R3型號代碼衝突: {codes1} vs {codes2}"
         if not (codes1 & codes2):
             # 筆電例外：如果一方只有長型號代碼（5+字元），另一方只有 CPU 代碼（如 14700HX, 240H），不衝突
             long_codes1 = {c for c in codes1 if len(c) >= 5}
@@ -589,10 +604,17 @@ def veto(name1, name2):
             # 筆電裸機例外：如果雙方都有長型號代碼但不同（如 B14WFK vs 14700HX），
             # 但雙方都有相同的筆電系列 token（KATANA/CYBORG/GAMINGA16 等），不衝突
             elif long_codes1 and long_codes2:
-                laptop_series1 = {t for t in extract_tokens(name1) if t in {'KATANA', 'KATANA15', 'KATANA17', 'CYBORG', 'CYBORG15', 'GAMINGA16', 'AEROX16', 'NITRO', 'VICTUS', 'SWIFT', 'ASPIRE', 'GRAM', 'ZENBOOK'}}
-                laptop_series2 = {t for t in extract_tokens(name2) if t in {'KATANA', 'KATANA15', 'KATANA17', 'CYBORG', 'CYBORG15', 'GAMINGA16', 'AEROX16', 'NITRO', 'VICTUS', 'SWIFT', 'ASPIRE', 'GRAM', 'ZENBOOK'}}
+                laptop_series1 = {t for t in extract_tokens(name1) if t in {'KATANA', 'KATANA15', 'KATANA17', 'CYBORG', 'CYBORG15', 'GAMINGA16', 'AEROX16', 'NITRO', 'VICTUS', 'SWIFT', 'ASPIRE', 'GRAM', 'ZENBOOK', 'LOQ', 'IDEAPAD', 'YOGA', 'THINKPAD', 'THINKBOOK', 'OMNIBOOK', 'ZBOOK', 'ELITEBOOK', 'PROBOOK', 'SPECTRE', 'ENVOY', 'OMEN', 'FIREFLY', 'FURY', 'LEGION'}}
+                laptop_series2 = {t for t in extract_tokens(name2) if t in {'KATANA', 'KATANA15', 'KATANA17', 'CYBORG', 'CYBORG15', 'GAMINGA16', 'AEROX16', 'NITRO', 'VICTUS', 'SWIFT', 'ASPIRE', 'GRAM', 'ZENBOOK', 'LOQ', 'IDEAPAD', 'YOGA', 'THINKPAD', 'THINKBOOK', 'OMNIBOOK', 'ZBOOK', 'ELITEBOOK', 'PROBOOK', 'SPECTRE', 'ENVOY', 'OMEN', 'FIREFLY', 'FURY', 'LEGION'}}
                 if laptop_series1 and laptop_series2 and (laptop_series1 & laptop_series2):
-                    pass  # 同系列筆電，型號代碼不同不衝突
+                    # 同系列筆電，但型號代碼中的數字後綴不同（如 288TW vs 884TW）仍應衝突
+                    # 只有不含數字的長型號代碼（如 B14WFK）相同時才允許
+                    # 檢查是否有含數字的長代碼不同
+                    digit_codes1 = {c for c in long_codes1 if re.search(r'\d', c) and c not in long_codes2}
+                    digit_codes2 = {c for c in long_codes2 if re.search(r'\d', c) and c not in long_codes1}
+                    if digit_codes1 and digit_codes2:
+                        return True, f"R3型號代碼衝突: {codes1} vs {codes2}"
+                    pass  # 同系列筆電，型號代碼不含數字部分相同，不衝突
                 # 筆電型號代碼例外：如果雙方有共同的 5+ 字元筆電型號代碼（如 16Z90TS），
                 # 即使其他代碼不同（如 AU89C2 vs 258V），也不衝突
                 elif long_codes1 & long_codes2:
@@ -610,11 +632,18 @@ def veto(name1, name2):
             return True, f"R4型號後綴衝突: {suf1} vs {suf2}"
     
     # R5. 顏色衝突（兩邊都有顏色且無交集才否決）
+    # 筆電例外：筆電顏色命名不一致（如「黑」vs「灰」），不視為衝突
     col1 = extract_colors(name1)
     col2 = extract_colors(name2)
     if col1 and col2:
         if not (col1 & col2):
-            return True, f"R5顏色衝突: {col1} vs {col2}"
+            # 筆電例外：如果雙方都有筆電系列 token，顏色不衝突
+            lt1 = {t for t in extract_tokens(name1) if t in {'KATANA', 'KATANA15', 'KATANA17', 'CYBORG', 'CYBORG15', 'GAMINGA16', 'AEROX16', 'NITRO', 'VICTUS', 'SWIFT', 'ASPIRE', 'GRAM', 'ZENBOOK', 'LOQ', 'IDEAPAD', 'YOGA', 'THINKPAD', 'THINKBOOK', 'OMNIBOOK', 'ZBOOK', 'ELITEBOOK', 'PROBOOK', 'SPECTRE', 'ENVOY', 'OMEN', 'FIREFLY', 'FURY', 'LEGION'}}
+            lt2 = {t for t in extract_tokens(name2) if t in {'KATANA', 'KATANA15', 'KATANA17', 'CYBORG', 'CYBORG15', 'GAMINGA16', 'AEROX16', 'NITRO', 'VICTUS', 'SWIFT', 'ASPIRE', 'GRAM', 'ZENBOOK', 'LOQ', 'IDEAPAD', 'YOGA', 'THINKPAD', 'THINKBOOK', 'OMNIBOOK', 'ZBOOK', 'ELITEBOOK', 'PROBOOK', 'SPECTRE', 'ENVOY', 'OMEN', 'FIREFLY', 'FURY', 'LEGION'}}
+            if lt1 and lt2 and (lt1 & lt2):
+                pass  # 同系列筆電，顏色不一致不衝突
+            else:
+                return True, f"R5顏色衝突: {col1} vs {col2}"
     
     # R6. 整機 vs 單品
     sys1 = is_system(name1)
@@ -673,7 +702,10 @@ def compute_score(name1, name2):
     laptop_series = {'KATANA', 'KATANA15', 'KATANA17', 'CYBORG', 'CYBORG15', 
                      'GAMINGA16', 'AEROX16', 'NITRO', 'VICTUS', 'SWIFT', 
                      'ASPIRE', 'GRAM', 'ZENBOOK', 'CREATOR', 'RAIDER', 
-                     'VECTOR', 'STEALTH', 'PULSE', 'BRAVO', 'LEGION'}
+                     'VECTOR', 'STEALTH', 'PULSE', 'BRAVO', 'LEGION',
+                     'LOQ', 'IDEAPAD', 'YOGA', 'THINKPAD', 'THINKBOOK',
+                     'OMNIBOOK', 'ZBOOK', 'ELITEBOOK', 'PROBOOK', 'SPECTRE',
+                     'ENVOY', 'OMEN', 'FIREFLY', 'FURY'}
     laptop_tokens1 = tokens1 & laptop_series
     laptop_tokens2 = tokens2 & laptop_series
     if laptop_tokens1 and laptop_tokens2 and (laptop_tokens1 & laptop_tokens2):
@@ -890,6 +922,76 @@ def match_products_v2(sinya_products, coolpc_products, category_compat=None):
                 "reason": reason,
                 "score": 0,
             })
+    
+    # ── 步驟 6b: 第二輪 — 升級版/組合包變體配對 ──
+    # 32G升級版等變體品名與基礎版相同型號代碼，但基礎版已配走 CoolPC 商品。
+    # 允許升級版配對同一 CoolPC 商品（一對多），因為它們是同一型號的不同容量版本。
+    for si_orig in sorted(sinya_valid.keys()):
+        if si_orig in sinya_matched:
+            continue
+        sp = sinya_products[si_orig]
+        sinya_name = sp["name"]
+        
+        # 只處理升級版/組合包變體
+        if '升級版' not in sinya_name and '雙營組' not in sinya_name and '雙螢組' not in sinya_name:
+            continue
+        
+        bare_name = extract_bare_laptop(sinya_name)
+        match_name = bare_name if bare_name else sinya_name
+        sinya_tokens = extract_tokens(match_name)
+        
+        candidate_positions = set()
+        for tok in sinya_tokens:
+            if tok in coolpc_index:
+                candidate_positions.update(coolpc_index[tok])
+        if not candidate_positions:
+            continue
+        
+        best_score = -1
+        best_ci = -1
+        for ci_pos in candidate_positions:
+            ci_orig = coolpc_pos_to_orig[ci_pos]
+            # 第二輪：允許配對已配對的 CoolPC 商品
+            cp = coolpc_products[ci_orig]
+            
+            # Category compatibility check
+            if category_compat:
+                cat_s = sp.get("category", "")
+                cat_c = cp.get("category", "")
+                if cat_s and cat_c and cat_s != cat_c:
+                    if (cat_s, cat_c) not in category_compat and (cat_c, cat_s) not in category_compat:
+                        continue
+            
+            is_vetoed, reason = veto(match_name, cp["name"])
+            if is_vetoed:
+                continue
+            
+            score, details = compute_score(match_name, cp["name"])
+            if score > best_score:
+                best_score = score
+                best_ci = ci_orig
+        
+        if best_ci >= 0 and best_score >= MATCH_THRESHOLD:
+            cp = coolpc_products[best_ci]
+            price_diff = sp["price"] - cp["price"]
+            cheaper = "sinya" if sp["price"] < cp["price"] else ("coolpc" if cp["price"] < sp["price"] else "tie")
+            matched.append({
+                "name": sp["name"],
+                "sinya_name": sp["name"],
+                "coolpc_name": cp["name"],
+                "sinya_price": sp["price"],
+                "coolpc_price": cp["price"],
+                "price_diff": price_diff,
+                "cheaper": cheaper,
+                "sinya_url": sp.get("url", ""),
+                "coolpc_url": cp.get("url", ""),
+                "sinya_image": sp.get("image", ""),
+                "coolpc_image": cp.get("image", ""),
+                "category": sp.get("category") or cp.get("category", ""),
+                "score": round(best_score, 4),
+                "is_bare_match": bool(bare_name),
+            })
+            sinya_matched.add(si_orig)
     
     # ── 步驟 7: 後處理 ──
     # 7a. 價差合理性
