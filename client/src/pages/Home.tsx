@@ -144,6 +144,7 @@ export default function Home() {
   const [cheaperFilter, setCheaperFilter] = useState<CheaperFilter>("all");
   const [scoreFilter, setScoreFilter] = useState<ScoreFilter>("all");
   const [overrideFilter, setOverrideFilter] = useState<OverrideFilter>("all");
+  const [specDiffFilter, setSpecDiffFilter] = useState(false);
   const [sortField, setSortField] = useState<SortField>("price_diff");
   const [sortOrder, setSortOrder] = useState<SortOrder>("asc");
   const [currentPage, setCurrentPage] = useState(1);
@@ -336,6 +337,11 @@ export default function Home() {
       });
     }
 
+    // Spec diff filter
+    if (specDiffFilter) {
+      result = result.filter((m) => m.spec_diff && m.spec_diff.length > 0);
+    }
+
     // Sort
     result.sort((a, b) => {
       let cmp = 0;
@@ -363,7 +369,7 @@ export default function Home() {
     });
 
     return result;
-  }, [processedMatches, searchQuery, categoryFilter, coolpcCategoryFilter, cheaperFilter, scoreFilter, overrideFilter, sortField, sortOrder, coolpcProductMap, overrides]);
+  }, [processedMatches, searchQuery, categoryFilter, coolpcCategoryFilter, cheaperFilter, scoreFilter, overrideFilter, specDiffFilter, sortField, sortOrder, coolpcProductMap, overrides]);
 
   const totalPages = Math.ceil(filteredAndSorted.length / itemsPerPage);
   const paginatedItems = filteredAndSorted.slice(
@@ -374,7 +380,7 @@ export default function Home() {
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, categoryFilter, coolpcCategoryFilter, cheaperFilter, scoreFilter, overrideFilter, sortField, sortOrder]);
+  }, [searchQuery, categoryFilter, coolpcCategoryFilter, cheaperFilter, scoreFilter, overrideFilter, specDiffFilter, sortField, sortOrder]);
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -712,6 +718,17 @@ export default function Home() {
               <SelectItem value="none">未處理</SelectItem>
             </SelectContent>
           </Select>
+          <button
+            onClick={() => setSpecDiffFilter(!specDiffFilter)}
+            className={`inline-flex h-9 items-center gap-1.5 rounded-md border px-3 text-sm font-medium transition-colors ${
+              specDiffFilter
+                ? "border-amber-500 bg-amber-500/10 text-amber-700 dark:text-amber-400"
+                : "border-input bg-transparent text-muted-foreground hover:bg-muted/50"
+            }`}
+          >
+            <AlertTriangle className="size-3.5" />
+            規格差異
+          </button>
         </div>
       </section>
 
