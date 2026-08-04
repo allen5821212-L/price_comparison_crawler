@@ -92,6 +92,9 @@ def norm(s):
     # 容量單位統一（不可用 \b，中文字元會使詞邊界失效）
     s = re.sub(r'(\d)\s*GB(?![A-Z0-9])', r'\1G', s)              # 16GB → 16G
     s = re.sub(r'(\d)\s*TB(?![A-Z0-9])', r'\1T', s)             # 2TB → 2T
+    # 筆電系列名稱正規化
+    s = re.sub(r'IDEAPAD\s*SLIM\s*', 'IDEAPAD ', s)               # IdeaPad Slim 3 → IdeaPad 3
+    s = re.sub(r'YOGA\s*SLIM\s*', 'YOGA ', s)                   # Yoga Slim 7 → Yoga 7
     return s
 
 
@@ -583,6 +586,13 @@ def veto(name1, name2):
     codes1 = extract_model_codes(name1)
     codes2 = extract_model_codes(name2)
     if codes1 and codes2:
+        # HP ZBook 子系列區分：FURY/FIREFLY vs ZBook 8/X/POWER 是不同產品線
+        all_t1 = extract_tokens(name1)
+        all_t2 = extract_tokens(name2)
+        zbook_sub1 = {t for t in all_t1 if t in {'FURY', 'FIREFLY'}}
+        zbook_sub2 = {t for t in all_t2 if t in {'FURY', 'FIREFLY'}}
+        if bool(zbook_sub1) != bool(zbook_sub2):
+            return True, f"R3型號代碼衝突(ZBook子系列): {zbook_sub1} vs {zbook_sub2}"
         # 即使有共同代碼，如果雙方有不同的筆電型號後綴代碼（如 288TW vs 884TW），仍應衝突
         laptop_suffix1 = {c for c in codes1 if re.match(r'^\d{2,4}TW$', c)}
         laptop_suffix2 = {c for c in codes2 if re.match(r'^\d{2,4}TW$', c)}
@@ -628,6 +638,11 @@ def veto(name1, name2):
                 laptop_series1 = {t for t in extract_tokens(name1) if t in {'KATANA', 'KATANA15', 'KATANA17', 'CYBORG', 'CYBORG15', 'GAMINGA16', 'AEROX16', 'NITRO', 'VICTUS', 'SWIFT', 'ASPIRE', 'GRAM', 'ZENBOOK', 'LOQ', 'IDEAPAD', 'YOGA', 'THINKPAD', 'THINKBOOK', 'OMNIBOOK', 'ZBOOK', 'ELITEBOOK', 'PROBOOK', 'SPECTRE', 'ENVOY', 'OMEN', 'FIREFLY', 'FURY', 'LEGION'}}
                 laptop_series2 = {t for t in extract_tokens(name2) if t in {'KATANA', 'KATANA15', 'KATANA17', 'CYBORG', 'CYBORG15', 'GAMINGA16', 'AEROX16', 'NITRO', 'VICTUS', 'SWIFT', 'ASPIRE', 'GRAM', 'ZENBOOK', 'LOQ', 'IDEAPAD', 'YOGA', 'THINKPAD', 'THINKBOOK', 'OMNIBOOK', 'ZBOOK', 'ELITEBOOK', 'PROBOOK', 'SPECTRE', 'ENVOY', 'OMEN', 'FIREFLY', 'FURY', 'LEGION'}}
                 if laptop_series1 and laptop_series2 and (laptop_series1 & laptop_series2):
+                    # HP ZBook 子系列區分：FURY vs 8 vs X vs POWER 是不同產品線
+                    zbook_sub1 = {t for t in laptop_series1 if t in {'FURY', 'FIREFLY'}}
+                    zbook_sub2 = {t for t in laptop_series2 if t in {'FURY', 'FIREFLY'}}
+                    if bool(zbook_sub1) != bool(zbook_sub2):
+                        return True, f"R3型號代碼衝突(ZBook子系列): {zbook_sub1} vs {zbook_sub2}"
                     # 同系列筆電，但型號代碼中的數字後綴不同（如 288TW vs 884TW）仍應衝突
                     # 只有不含數字的長型號代碼（如 B14WFK）相同時才允許
                     # 檢查是否有含數字的長代碼不同
@@ -738,6 +753,13 @@ def compute_score(name1, name2):
         # 筆電系列匹配：提升 overlap 至至少 0.50，head 至至少 0.60
         overlap = max(overlap, 0.50)
         rHead = max(rHead, 0.60)
+        # 商務筆電系列（ZBook/EliteBook/ProBook/ThinkPad/OmniBook）：同系列即強信號
+        biz_series = {'ZBOOK', 'ELITEBOOK', 'PROBOOK', 'THINKPAD', 'THINKBOOK', 'OMNIBOOK', 'SPECTRE', 'FIREFLY', 'FURY'}
+        biz1 = laptop_tokens1 & biz_series
+        biz2 = laptop_tokens2 & biz_series
+        if biz1 and biz2 and (biz1 & biz2):
+            overlap = max(overlap, 0.65)
+            rHead = max(rHead, 0.70)
     
     # 筆電型號代碼匹配：如果雙方有相同的 5+ 字元筆電型號代碼（如 B14WFK, FA617NT, G614PR），
     # 這是極強的信號，直接提升分數
