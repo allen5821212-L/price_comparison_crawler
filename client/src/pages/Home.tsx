@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { SearchableSelect } from "@/components/SearchableSelect";
 import {
   Select,
   SelectContent,
@@ -765,35 +766,32 @@ export default function Home() {
               className="pl-10"
             />
           </div>
-          <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-            <SelectTrigger className="w-full md:w-52">
-              <SelectValue placeholder="欣亞分類" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">全部分類 ({filterCounts.total})</SelectItem>
-              {categories.map((cat) => {
-                const count = categoryCounts[cat] || 0;
-                return (
-                  <SelectItem key={cat} value={cat}>
-                    {cat} {count > 0 ? `(${count})` : ""}
-                  </SelectItem>
-                );
-              })}
-            </SelectContent>
-          </Select>
-          <Select value={coolpcCategoryFilter} onValueChange={setCoolpcCategoryFilter}>
-            <SelectTrigger className="w-full md:w-52">
-              <SelectValue placeholder="原價屋分類" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">原價屋全部分類 ({data?.coolpc_products?.length ?? 0})</SelectItem>
-              {coolpcCategories.map((cat) => (
-                <SelectItem key={cat.name} value={cat.name}>
-                  {cat.name} ({cat.count})
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <SearchableSelect
+            value={categoryFilter}
+            onValueChange={setCategoryFilter}
+            placeholder="欣亞分類"
+            searchPlaceholder="搜尋分類..."
+            options={[
+              { value: "all", label: `全部分類 (${filterCounts.total})` },
+              ...categories.map((cat) => ({
+                value: cat,
+                label: `${cat} (${categoryCounts[cat] || 0})`,
+              })),
+            ]}
+          />
+          <SearchableSelect
+            value={coolpcCategoryFilter}
+            onValueChange={setCoolpcCategoryFilter}
+            placeholder="原價屋分類"
+            searchPlaceholder="搜尋分類..."
+            options={[
+              { value: "all", label: `原價屋全部分類 (${data?.coolpc_products?.length ?? 0})` },
+              ...coolpcCategories.map((cat) => ({
+                value: cat.name,
+                label: `${cat.name} (${cat.count})`,
+              })),
+            ]}
+          />
           <Select
             value={cheaperFilter}
             onValueChange={(v) => setCheaperFilter(v as CheaperFilter)}
