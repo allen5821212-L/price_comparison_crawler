@@ -398,6 +398,12 @@ def extract_tokens(name):
     for m in re.finditer(r'\b(\d{2,4}[A-Z]\d{2,4}[A-Z]{2,4})[.-]([A-Z]\d{2,4}[A-Z]{2,4})\b', n_full):
         tokens.add(m.group(1))
         tokens.add(m.group(2))
+    # 提取 GIGABYTE 長型號代碼（10+ 字元英數混合，如 CTHH3TW893SH, 6YJM5TWE64SH）
+    for m in re.finditer(r'\b([A-Z0-9]{10,})\b', n_full):
+        tok = m.group(1)
+        # 排除純數字和通用規格詞
+        if not tok.isdigit() and tok not in GENERIC_CODE:
+            tokens.add(tok)
     
     return tokens
 
@@ -683,6 +689,26 @@ def compute_score(name1, name2):
     if code_tokens1 and code_tokens2 and (code_tokens1 & code_tokens2):
         overlap = max(overlap, 0.80)
         rHead = max(rHead, 0.80)
+    
+    # GIGABYTE 筆電型號代碼模糊匹配：
+    # GIGABYTE 使用 12 字元型號代碼（如 CTHH3TW893SH），欣亞和原價屋可能末 1-3 碼不同
+    # 如果雙方都有 10+ 字元的型號代碼，且前 8 碼相同，視為匹配
+    long_code_pattern = re.compile(r'^[A-Z0-9]{10,}$')
+    long_codes1 = {t for t in tokens1 if long_code_pattern.match(t) and len(t) >= 10}
+    long_codes2 = {t for t in tokens2 if long_code_pattern.match(t) and len(t) >= 10}
+    if long_codes1 and long_codes2:
+        # 檢查前 8 碼是否相同
+        matched = False
+        for c1 in long_codes1:
+            for c2 in long_codes2:
+                if len(c1) >= 8 and len(c2) >= 8 and c1[:8] == c2[:8]:
+                    matched = True
+                    break
+            if matched:
+                break
+        if matched:
+            overlap = max(overlap, 0.80)
+            rHead = max(rHead, 0.80)
     
     score = 0.45 * overlap + 0.40 * rHead + 0.15 * rFull
     return score, {"overlap": overlap, "rHead": rHead, "rFull": rFull}
