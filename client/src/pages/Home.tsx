@@ -942,11 +942,11 @@ export default function Home() {
                 {totalPages || 1} 頁
               </span>
             </div>
-            <div className="overflow-x-auto rounded-xl border border-border">
-              <Table>
+            <div className="overflow-auto rounded-xl border border-border" style={{ maxHeight: "calc(100vh - 200px)" }}>
+              <Table className="table-fixed">
                 <TableHeader>
-                  <TableRow className="bg-muted/50 hover:bg-muted/50">
-                    <TableHead className="w-[30%]">
+                  <TableRow className="bg-muted/50 hover:bg-muted/50 sticky top-0 z-10">
+                    <TableHead className="w-[32%]">
                       <button
                         onClick={() => handleSort("name")}
                         className="flex items-center gap-1.5 font-semibold hover:text-foreground"
@@ -954,8 +954,8 @@ export default function Home() {
                         商品名稱 {getSortIcon("name")}
                       </button>
                     </TableHead>
-                    <TableHead className="w-[10%]">分類</TableHead>
-                    <TableHead className="text-right">
+                    <TableHead className="w-[8%]">分類</TableHead>
+                    <TableHead className="w-[10%] text-right">
                       <button
                         onClick={() => handleSort("sinya_price")}
                         className="flex items-center justify-end gap-1.5 font-semibold hover:text-foreground"
@@ -963,7 +963,7 @@ export default function Home() {
                         欣亞價格 {getSortIcon("sinya_price")}
                       </button>
                     </TableHead>
-                    <TableHead className="text-right">
+                    <TableHead className="w-[10%] text-right">
                       <button
                         onClick={() => handleSort("coolpc_price")}
                         className="flex items-center justify-end gap-1.5 font-semibold hover:text-foreground"
@@ -971,7 +971,7 @@ export default function Home() {
                         原價屋價格 {getSortIcon("coolpc_price")}
                       </button>
                     </TableHead>
-                    <TableHead className="text-right">
+                    <TableHead className="w-[9%] text-right">
                       <button
                         onClick={() => handleSort("price_diff")}
                         className="flex items-center justify-end gap-1.5 font-semibold hover:text-foreground"
@@ -979,8 +979,8 @@ export default function Home() {
                         價差 {getSortIcon("price_diff")}
                       </button>
                     </TableHead>
-                    <TableHead className="text-center">較便宜</TableHead>
-                    <TableHead className="text-center">
+                    <TableHead className="w-[7%] text-center">較便宜</TableHead>
+                    <TableHead className="w-[9%] text-center">
                       <button
                         onClick={() => handleSort("score")}
                         className="flex items-center justify-center gap-1.5 font-semibold hover:text-foreground"
@@ -988,8 +988,8 @@ export default function Home() {
                         相似度 {getSortIcon("score")}
                       </button>
                     </TableHead>
-                    <TableHead className="text-center">連結</TableHead>
-                    <TableHead className="text-center w-[80px]">配對</TableHead>
+                    <TableHead className="w-[6%] text-center">連結</TableHead>
+                    <TableHead className="w-[9%] text-center">配對</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -1006,7 +1006,7 @@ export default function Home() {
                           confirmedThisPair ? "bg-green-500/5" : ""
                         }`}
                       >
-                        <TableCell>
+                        <TableCell className="whitespace-normal">
                           <div className="flex items-start gap-3">
                             {item.sinya_image && (
                               <img
@@ -1021,11 +1021,11 @@ export default function Home() {
                               />
                             )}
                             <div className="min-w-0">
-                              <p className="truncate text-sm font-medium">
+                              <p className="line-clamp-2 text-sm font-medium leading-tight">
                                 {item.name}
                               </p>
                               {item.sinya_name !== item.coolpc_name && (
-                                <p className="truncate text-xs text-muted-foreground">
+                                <p className="line-clamp-1 text-xs text-muted-foreground leading-tight mt-0.5">
                                   {item.coolpc_name}
                                 </p>
                               )}

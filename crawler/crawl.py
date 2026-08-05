@@ -857,12 +857,12 @@ def match_products(sinya_products, coolpc_products):
         sinya_products, coolpc_products, category_compat=compat_set
     )
 
-    # Store rejected/review data for audit
+    # Store rejected/review data for audit (limit to 500 per category to keep file size small)
     import json
     audit_data = {
-        "rejected": rejected,
-        "review": review,
-        "price_review": price_review,
+        "rejected": rejected[:500],
+        "review": review[:500],
+        "price_review": price_review[:500],
     }
     audit_file = OUTPUT_DIR / "audit.json"
     with open(audit_file, "w", encoding="utf-8") as f:
