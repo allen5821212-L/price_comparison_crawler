@@ -582,6 +582,20 @@ def veto(name1, name2):
                 else:
                     return True, f"R2數字型號衝突: {pat} {vals1} vs {vals2}"
     
+    # R3. 主機板型號後綴衝突（如 B850-G vs B850-I, Z790-A vs Z790-E）
+    # 華碩/微星主機板晶片組後接 dash + 單字母代表不同版型（-G=M-ATX, -I=Mini-ITX, -A=ATX 等）
+    MB_FF_RE = re.compile(r'\b([A-Z]\d{3,4}E?)-([A-Z])\b')
+    mb_ff1 = set(MB_FF_RE.findall(norm(name1)))
+    mb_ff2 = set(MB_FF_RE.findall(norm(name2)))
+    if mb_ff1 and mb_ff2:
+        bases1 = {b for b, s in mb_ff1}
+        bases2 = {b for b, s in mb_ff2}
+        for base in (bases1 & bases2):
+            sufs1 = {s for b, s in mb_ff1 if b == base}
+            sufs2 = {s for b, s in mb_ff2 if b == base}
+            if sufs1 and sufs2 and not (sufs1 & sufs2):
+                return True, f"R3主機板後綴衝突: {base}-{min(sufs1)} vs {base}-{min(sufs2)}"
+
     # R3. 型號代型號代碼衝突（筆電例外：長型號代碼 vs CPU 代碼不衝突）
     codes1 = extract_model_codes(name1)
     codes2 = extract_model_codes(name2)
