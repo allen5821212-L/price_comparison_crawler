@@ -888,18 +888,92 @@ def main(max_cats=None):
     # Step 3: 爬取原價屋商品
     coolpc_products = crawl_coolpc(max_cats=max_cats)
 
-    # Step 4: 比對商品
-    matched = match_products(sinya_products, coolpc_products)
+    # Step 4: 爬取 PCHOME 24h 商品
+    import sys as _sys2, os as _os2
+    _sys2.path.insert(0, _os2.path.dirname(_os2.path.abspath(__file__)))
+    from crawl_pchome import crawl_pchome
+    from crawl_momo import crawl_momo
+    pchome_products = crawl_pchome()
+    momo_products = crawl_momo()
+
+    # Step 5: 多平台比對商品
+    from multi_matcher import match_all_platforms
+    # Build category compat set (same as match_products)
+    CATEGORY_COMPAT = {
+        ("CPU 中央處理器", "處理器 CPU"),
+        ("MB 主機板", "主機板 MB"),
+        ("RAM 記憶體", "記憶體 RAM"),
+        ("VGA 顯示卡", "顯示卡 VGA"),
+        ("SSD 固態硬碟", "固態硬碟 M.2｜SSD"),
+        ("HDD 機械硬碟", "傳統內接硬碟 HDD"),
+        ("電源供應器/不斷電系統", "電源供應器"),
+        ("電源供應器/不斷電系統", "UPS不斷電｜印表機｜掃描"),
+        ("電腦機殼", "CASE 機殼(+電源)"),
+        ("機殼風扇/機殼配件/顯卡支架", "機殼風扇｜機殼配件"),
+        ("空冷散熱器/散熱膏", "散熱器｜散熱墊｜散熱膏"),
+        ("水冷散熱器", "封閉式｜開放式水冷"),
+        ("液晶螢幕/支架", "螢幕｜投影機｜壁掛"),
+        ("鍵盤", "鍵盤+鼠｜搖桿｜桌+椅"),
+        ("滑鼠/滑鼠墊", "滑鼠｜鼠墊｜數位板"),
+        ("滑鼠/滑鼠墊", "鍵盤+鼠｜搖桿｜桌+椅"),
+        ("耳機", "喇叭｜耳機｜麥克風"),
+        ("喇叭", "喇叭｜耳機｜麥克風"),
+        ("外接硬碟/隨身碟/記憶卡", "隨身碟｜隨身硬碟｜記憶卡"),
+        ("外接硬碟/隨身碟/記憶卡", "USB週邊｜硬碟座｜讀卡機"),
+        ("網通設備/NAS", "IP分享器｜網卡｜網通設備"),
+        ("網通設備/NAS", "網路NAS｜網路IPCAM"),
+        ("各式線材/轉接頭/外接盒", "網路、傳輸線、轉頭｜KVM"),
+        ("各式線材/轉接頭/外接盒", "USB週邊｜硬碟座｜讀卡機"),
+        ("作業系統/文書軟體/遊戲點數", "OS+應用軟體｜禮物卡"),
+        ("光碟燒錄機", "燒錄器 CD/DVD/BD"),
+        ("視訊/網路攝影機", "行車紀錄器｜USB視訊鏡頭"),
+        ("最夯遊戲推薦筆電", "筆電｜平板｜穿戴配件"),
+        ("商務筆記型電腦", "筆電｜平板｜穿戴配件"),
+        ("桌上型電腦", "品牌小主機、AIO｜VR虛擬"),
+        ("桌上型電腦", "酷！PC 套裝產線"),
+        ("Sinya 精選電腦主機", "品牌小主機、AIO｜VR虛擬"),
+        ("Sinya 精選電腦主機", "酷！PC 套裝產線"),
+        ("商用桌上型電腦", "品牌小主機、AIO｜VR虛擬"),
+        ("商用桌上型電腦", "酷！PC 套裝產線"),
+        ("電競桌椅/方向盤/手把", "鍵盤+鼠｜搖桿｜桌+椅"),
+        ("直播設備", "喇叭｜耳機｜麥克風"),
+        ("直播設備", "行車紀錄器｜USB視訊鏡頭"),
+        ("商用防火牆/交換器/無線基地台", "IP分享器｜網卡｜網通設備"),
+    }
+    compat_set = set()
+    for a, b in CATEGORY_COMPAT:
+        compat_set.add((a, b))
+        compat_set.add((b, a))
+    matched, rejected, review, price_review = match_all_platforms(
+        sinya_products, coolpc_products, pchome_products, momo_products,
+        category_compat=compat_set
+    )
+    # Store audit data
+    audit_data = {
+        "rejected": rejected[:500],
+        "review": review[:500],
+        "price_review": price_review[:500],
+    }
+    audit_file = OUTPUT_DIR / "audit.json"
+    with open(audit_file, "w", encoding="utf-8") as f:
+        json.dump(audit_data, f, ensure_ascii=False, separators=(',', ':'))
+    print(f"  複核清單已儲存至 {audit_file}")
 
     # Generate statistics
     stats = {
         "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "sinya_total": len(sinya_products),
         "coolpc_total": len(coolpc_products),
+        "pchome_total": len(pchome_products),
+        "momo_total": len(momo_products),
         "matched_total": len(matched),
         "sinya_cheaper": sum(1 for m in matched if m["cheaper"] == "sinya"),
         "coolpc_cheaper": sum(1 for m in matched if m["cheaper"] == "coolpc"),
+        "pchome_cheaper": sum(1 for m in matched if m["cheaper"] == "pchome"),
+        "momo_cheaper": sum(1 for m in matched if m["cheaper"] == "momo"),
         "same_price": sum(1 for m in matched if m["cheaper"] == "tie"),
+        "pchome_matched": sum(1 for m in matched if m.get("pchome_price", 0) > 0),
+        "momo_matched": sum(1 for m in matched if m.get("momo_price", 0) > 0),
         "avg_price_diff": sum(abs(m["price_diff"]) for m in matched) / max(len(matched), 1),
     }
 
@@ -911,6 +985,8 @@ def main(max_cats=None):
         "matched": matched,
         "sinya_products": sinya_products,
         "coolpc_products": coolpc_products,
+        "pchome_products": pchome_products,
+        "momo_products": momo_products,
         "sinya_categories": sinya_categories,
     }
 
@@ -963,9 +1039,15 @@ def main(max_cats=None):
     print(f"\n統計摘要:")
     print(f"  欣亞商品數: {stats['sinya_total']}")
     print(f"  原價屋商品數: {stats['coolpc_total']}")
+    print(f"  PCHOME商品數: {stats['pchome_total']}")
+    print(f"  momo商品數: {stats['momo_total']}")
     print(f"  比對成功: {stats['matched_total']}")
+    print(f"  PCHOME配對: {stats['pchome_matched']}")
+    print(f"  momo配對: {stats['momo_matched']}")
     print(f"  欣亞較便宜: {stats['sinya_cheaper']}")
     print(f"  原價屋較便宜: {stats['coolpc_cheaper']}")
+    print(f"  PCHOME較便宜: {stats['pchome_cheaper']}")
+    print(f"  momo較便宜: {stats['momo_cheaper']}")
     print(f"  價格相同: {stats['same_price']}")
     print(f"  平均價差: NT${stats['avg_price_diff']:.0f}")
 

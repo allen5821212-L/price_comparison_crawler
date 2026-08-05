@@ -70,7 +70,7 @@ interface MatchedProduct {
   sinya_price: number;
   coolpc_price: number;
   price_diff: number;
-  cheaper: "sinya" | "coolpc" | "tie";
+  cheaper: "sinya" | "coolpc" | "pchome" | "momo" | "tie";
   sinya_url: string;
   coolpc_url: string;
   sinya_image: string;
@@ -78,17 +78,33 @@ interface MatchedProduct {
   category: string;
   score?: number;
   spec_diff?: string[];
+  pchome_name?: string;
+  pchome_price?: number;
+  pchome_url?: string;
+  pchome_image?: string;
+  pchome_score?: number;
+  momo_name?: string;
+  momo_price?: number;
+  momo_url?: string;
+  momo_image?: string;
+  momo_score?: number;
 }
 
 interface Stats {
   update_time: string;
   sinya_total: number;
   coolpc_total: number;
+  pchome_total?: number;
+  momo_total?: number;
   matched_total: number;
   sinya_cheaper: number;
   coolpc_cheaper: number;
+  pchome_cheaper?: number;
+  momo_cheaper?: number;
   same_price: number;
   avg_price_diff: number;
+  pchome_matched?: number;
+  momo_matched?: number;
 }
 
 interface CoolpcProduct {
@@ -108,12 +124,14 @@ interface ComparisonData {
   matched: MatchedProduct[];
   sinya_products: Array<Record<string, unknown>>;
   coolpc_products: CoolpcProduct[];
+  pchome_products?: CoolpcProduct[];
+  momo_products?: CoolpcProduct[];
   sinya_categories: string[];
 }
 
-type SortField = "price_diff" | "sinya_price" | "coolpc_price" | "name" | "score" | "price_diff_abs";
+type SortField = "price_diff" | "sinya_price" | "coolpc_price" | "pchome_price" | "momo_price" | "name" | "score" | "price_diff_abs";
 type SortOrder = "asc" | "desc";
-type CheaperFilter = "all" | "sinya" | "coolpc" | "tie";
+type CheaperFilter = "all" | "sinya" | "coolpc" | "pchome" | "momo" | "tie";
 type ScoreFilter = "all" | "high" | "medium" | "low";
 type OverrideFilter = "all" | "confirmed" | "rejected" | "no_match" | "none";
 
@@ -291,7 +309,7 @@ export default function Home() {
 
   // Compute counts for each filter option
   const filterCounts = useMemo(() => {
-    let cheaper = { sinya: 0, coolpc: 0, tie: 0 };
+    let cheaper = { sinya: 0, coolpc: 0, pchome: 0, momo: 0, tie: 0 };
     let score = { high: 0, medium: 0, low: 0 };
     let override = { confirmed: 0, rejected: 0, no_match: 0, none: 0 };
     let specDiff = 0;
@@ -300,6 +318,8 @@ export default function Home() {
       // Cheaper counts
       if (m.cheaper === "sinya") cheaper.sinya++;
       else if (m.cheaper === "coolpc") cheaper.coolpc++;
+      else if (m.cheaper === "pchome") cheaper.pchome++;
+      else if (m.cheaper === "momo") cheaper.momo++;
       else if (m.cheaper === "tie") cheaper.tie++;
 
       // Score counts
@@ -409,6 +429,12 @@ export default function Home() {
           break;
         case "coolpc_price":
           cmp = a.coolpc_price - b.coolpc_price;
+          break;
+        case "pchome_price":
+          cmp = (a.pchome_price ?? 0) - (b.pchome_price ?? 0);
+          break;
+        case "momo_price":
+          cmp = (a.momo_price ?? 0) - (b.momo_price ?? 0);
           break;
         case "name":
           cmp = a.name.localeCompare(b.name, "zh-TW");
@@ -677,8 +703,8 @@ export default function Home() {
               <span className="text-primary"> 3C 零件</span>
             </h2>
             <p className="mt-4 text-base text-muted-foreground md:text-lg">
-              自動爬取欣亞數位與原價屋的全站商品，即時比對同一型號的價格差異，
-              幫你在買電腦零件時省下最多錢。
+              自動爬取欣亞數位、原價屋、PCHOME 24h 與 momo 購物網的全站商品，
+              即時比對同一型號的四平台價格差異，幫你在買電腦零件時省下最多錢。
             </p>
             {data && (
               <p className="mt-3 text-sm text-muted-foreground">
@@ -694,7 +720,7 @@ export default function Home() {
 
       {/* ── Stats Cards ── */}
       <section className="container py-8">
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-4 lg:grid-cols-6">
+        <div className="grid grid-cols-2 gap-4 md:grid-cols-4 lg:grid-cols-9">
           <StatCard
             icon={<Package className="size-4" />}
             label="欣亞商品數"
@@ -706,6 +732,20 @@ export default function Home() {
             icon={<Package className="size-4" />}
             label="原價屋商品數"
             value={data ? data.stats.coolpc_total : null}
+            color="text-primary"
+            loading={loading}
+          />
+          <StatCard
+            icon={<Package className="size-4" />}
+            label="PCHOME商品數"
+            value={data ? data.stats.pchome_total ?? null : null}
+            color="text-primary"
+            loading={loading}
+          />
+          <StatCard
+            icon={<Package className="size-4" />}
+            label="momo商品數"
+            value={data ? data.stats.momo_total ?? null : null}
             color="text-primary"
             loading={loading}
           />
@@ -731,10 +771,17 @@ export default function Home() {
             loading={loading}
           />
           <StatCard
-            icon={<Minus className="size-4" />}
-            label="價格相同"
-            value={data ? data.stats.same_price : null}
-            color="text-muted-foreground"
+            icon={<TrendingDown className="size-4" />}
+            label="PCHOME較便宜"
+            value={data ? data.stats.pchome_cheaper ?? null : null}
+            color="text-blue-500"
+            loading={loading}
+          />
+          <StatCard
+            icon={<TrendingDown className="size-4" />}
+            label="momo較便宜"
+            value={data ? data.stats.momo_cheaper ?? null : null}
+            color="text-purple-500"
             loading={loading}
           />
         </div>
@@ -803,6 +850,8 @@ export default function Home() {
               <SelectItem value="all">全部 ({filterCounts.total})</SelectItem>
               <SelectItem value="sinya">欣亞較便宜 ({filterCounts.cheaper.sinya})</SelectItem>
               <SelectItem value="coolpc">原價屋較便宜 ({filterCounts.cheaper.coolpc})</SelectItem>
+              <SelectItem value="pchome">PCHOME較便宜 ({filterCounts.cheaper.pchome || 0})</SelectItem>
+              <SelectItem value="momo">momo較便宜 ({filterCounts.cheaper.momo || 0})</SelectItem>
               <SelectItem value="tie">價格相同 ({filterCounts.cheaper.tie})</SelectItem>
             </SelectContent>
           </Select>
@@ -946,7 +995,7 @@ export default function Home() {
               <Table className="table-fixed">
                 <TableHeader>
                   <TableRow className="bg-muted/50 hover:bg-muted/50 sticky top-0 z-10">
-                    <TableHead className="w-[32%]">
+                    <TableHead className="w-[22%]">
                       <button
                         onClick={() => handleSort("name")}
                         className="flex items-center gap-1.5 font-semibold hover:text-foreground"
@@ -954,24 +1003,40 @@ export default function Home() {
                         商品名稱 {getSortIcon("name")}
                       </button>
                     </TableHead>
-                    <TableHead className="w-[8%]">分類</TableHead>
-                    <TableHead className="w-[10%] text-right">
+                    <TableHead className="w-[6%]">分類</TableHead>
+                    <TableHead className="w-[8%] text-right">
                       <button
                         onClick={() => handleSort("sinya_price")}
                         className="flex items-center justify-end gap-1.5 font-semibold hover:text-foreground"
                       >
-                        欣亞價格 {getSortIcon("sinya_price")}
+                        欣亞 {getSortIcon("sinya_price")}
                       </button>
                     </TableHead>
-                    <TableHead className="w-[10%] text-right">
+                    <TableHead className="w-[8%] text-right">
                       <button
                         onClick={() => handleSort("coolpc_price")}
                         className="flex items-center justify-end gap-1.5 font-semibold hover:text-foreground"
                       >
-                        原價屋價格 {getSortIcon("coolpc_price")}
+                        原價屋 {getSortIcon("coolpc_price")}
                       </button>
                     </TableHead>
-                    <TableHead className="w-[9%] text-right">
+                    <TableHead className="w-[8%] text-right">
+                      <button
+                        onClick={() => handleSort("pchome_price")}
+                        className="flex items-center justify-end gap-1.5 font-semibold hover:text-foreground"
+                      >
+                        PCHOME {getSortIcon("pchome_price")}
+                      </button>
+                    </TableHead>
+                    <TableHead className="w-[8%] text-right">
+                      <button
+                        onClick={() => handleSort("momo_price")}
+                        className="flex items-center justify-end gap-1.5 font-semibold hover:text-foreground"
+                      >
+                        momo {getSortIcon("momo_price")}
+                      </button>
+                    </TableHead>
+                    <TableHead className="w-[7%] text-right">
                       <button
                         onClick={() => handleSort("price_diff")}
                         className="flex items-center justify-end gap-1.5 font-semibold hover:text-foreground"
@@ -979,8 +1044,8 @@ export default function Home() {
                         價差 {getSortIcon("price_diff")}
                       </button>
                     </TableHead>
-                    <TableHead className="w-[7%] text-center">較便宜</TableHead>
-                    <TableHead className="w-[9%] text-center">
+                    <TableHead className="w-[6%] text-center">最便宜</TableHead>
+                    <TableHead className="w-[7%] text-center">
                       <button
                         onClick={() => handleSort("score")}
                         className="flex items-center justify-center gap-1.5 font-semibold hover:text-foreground"
@@ -988,8 +1053,8 @@ export default function Home() {
                         相似度 {getSortIcon("score")}
                       </button>
                     </TableHead>
-                    <TableHead className="w-[6%] text-center">連結</TableHead>
-                    <TableHead className="w-[9%] text-center">配對</TableHead>
+                    <TableHead className="w-[5%] text-center">連結</TableHead>
+                    <TableHead className="w-[7%] text-center">配對</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -1060,6 +1125,28 @@ export default function Home() {
                           </span>
                         </TableCell>
                         <TableCell className="text-right">
+                          {item.pchome_price ? (
+                            <span
+                              className={`font-mono text-sm ${item.cheaper === "pchome" ? "text-blue-500 font-bold" : ""}`}
+                            >
+                              {formatPrice(item.pchome_price)}
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground text-xs">—</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {item.momo_price ? (
+                            <span
+                              className={`font-mono text-sm ${item.cheaper === "momo" ? "text-purple-500 font-bold" : ""}`}
+                            >
+                              {formatPrice(item.momo_price)}
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground text-xs">—</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right">
                           <span
                             className={`font-mono text-sm ${item.price_diff < 0 ? "price-diff-positive" : item.price_diff > 0 ? "price-diff-negative" : "text-muted-foreground"}`}
                           >
@@ -1075,6 +1162,16 @@ export default function Home() {
                           {item.cheaper === "coolpc" && (
                             <Badge className="bg-orange-500/15 text-orange-500 hover:bg-orange-500/20">
                               原價屋
+                            </Badge>
+                          )}
+                          {item.cheaper === "pchome" && (
+                            <Badge className="bg-blue-500/15 text-blue-500 hover:bg-blue-500/20">
+                              PCHOME
+                            </Badge>
+                          )}
+                          {item.cheaper === "momo" && (
+                            <Badge className="bg-purple-500/15 text-purple-500 hover:bg-purple-500/20">
+                              momo
                             </Badge>
                           )}
                           {item.cheaper === "tie" && (
@@ -1138,6 +1235,28 @@ export default function Home() {
                                 title="原價屋購買頁"
                               >
                                 <ShoppingCart className="size-4" />
+                              </a>
+                            )}
+                            {item.pchome_url && (
+                              <a
+                                href={item.pchome_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-blue-500 hover:opacity-70"
+                                title="PCHOME購買頁"
+                              >
+                                <ExternalLink className="size-3.5" />
+                              </a>
+                            )}
+                            {item.momo_url && (
+                              <a
+                                href={item.momo_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-purple-500 hover:opacity-70"
+                                title="momo購買頁"
+                              >
+                                <ShoppingCart className="size-3.5" />
                               </a>
                             )}
                           </div>
