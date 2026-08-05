@@ -129,7 +129,7 @@ interface ComparisonData {
   sinya_categories: string[];
 }
 
-type SortField = "price_diff" | "sinya_price" | "coolpc_price" | "pchome_price" | "momo_price" | "name" | "score" | "price_diff_abs";
+type SortField = "price_diff" | "sinya_price" | "coolpc_price" | "pchome_price" | "momo_price" | "name" | "score" | "price_diff_abs" | "best_price";
 type SortOrder = "asc" | "desc";
 type CheaperFilter = "all" | "sinya" | "coolpc" | "pchome" | "momo" | "tie";
 type ScoreFilter = "all" | "high" | "medium" | "low";
@@ -442,6 +442,15 @@ export default function Home() {
         case "score":
           cmp = (a.score ?? 0) - (b.score ?? 0);
           break;
+        case "best_price": {
+          // 最低價格 = 四平台中可用的最低價
+          const aPrices = [a.sinya_price, a.coolpc_price, a.pchome_price || Infinity, a.momo_price || Infinity].filter(p => p > 0);
+          const bPrices = [b.sinya_price, b.coolpc_price, b.pchome_price || Infinity, b.momo_price || Infinity].filter(p => p > 0);
+          const aMin = aPrices.length ? Math.min(...aPrices) : Infinity;
+          const bMin = bPrices.length ? Math.min(...bPrices) : Infinity;
+          cmp = aMin - bMin;
+          break;
+        }
       }
       return sortOrder === "asc" ? cmp : -cmp;
     });
@@ -953,6 +962,21 @@ export default function Home() {
             </button>
             </>
           )}
+          <button
+            onClick={() => {
+              setSortField("best_price");
+              setSortOrder("asc");
+              toast.info("已切換至四平台最低價排序");
+            }}
+            className={`inline-flex h-9 items-center gap-1.5 rounded-md border px-3 text-sm font-medium transition-colors ${
+              sortField === "best_price"
+                ? "border-green-500 bg-green-500/10 text-green-700 dark:text-green-400"
+                : "border-input bg-transparent text-muted-foreground hover:bg-muted/50"
+            }`}
+          >
+            <TrendingDown className="size-3.5" />
+            四平台最低價
+          </button>
           <button
             onClick={() => setShowPriceHistory(true)}
             className="inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-transparent px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted/50"

@@ -17,33 +17,87 @@ USER_AGENT = (
 MOMO_SEARCH_URL = "https://www.momoshop.com.tw/search/searchShop.jsp"
 MOMO_GOODS_URL = "https://www.momoshop.com.tw/goods/GoodsDetail.jsp?i_code="
 
-# 3C 零件搜尋關鍵字
+# 3C 零件搜尋關鍵字 — 使用更精確的品牌+品類關鍵字提升商品覆蓋率
 MOMO_KEYWORDS = [
-    "CPU 處理器",
-    "主機板",
-    "記憶體",
-    "顯示卡",
-    "SSD 固態硬碟",
-    "硬碟 HDD",
-    "電源供應器",
-    "電腦機殼",
-    "機殼風扇",
-    "CPU散熱器",
+    # CPU
+    "Intel CPU 處理器",
+    "AMD Ryzen CPU",
+    # 主機板
+    "ASUS 主機板",
+    "MSI 主機板",
+    "GIGABYTE 主機板",
+    "ASRock 主機板",
+    # 記憶體
+    "DDR5 記憶體",
+    "DDR4 記憶體",
+    # 顯示卡
+    "RTX 顯示卡",
+    "RX 顯示卡",
+    "ASUS 顯示卡",
+    "MSI 顯示卡",
+    "GIGABYTE 顯示卡",
+    # SSD
+    "M.2 SSD 固態硬碟",
+    "SATA SSD",
+    # HDD
+    "HDD 硬碟",
+    # 電源供應器
+    "電源供應器 80PLUS",
+    # 機殼
+    "電腦機殼 ATX",
+    "電腦機殼 ITX",
+    # 散熱
+    "CPU散熱器 塔式",
     "水冷散熱器",
-    "螢幕",
-    "鍵盤",
-    "滑鼠",
-    "耳機",
-    "喇叭",
-    "隨身碟",
-    "NAS 網路設備",
-    "網路線",
-    "光碟機",
+    "機殼風扇 ARGB",
+    # 螢幕
+    "電競螢幕 144Hz",
+    "螢幕 4K",
+    "曲面螢幕",
+    # 鍵盤
+    "機械鍵盤",
+    "電競鍵盤",
+    # 滑鼠
+    "電競滑鼠",
+    "無線滑鼠",
+    # 耳機
+    "電競耳機",
+    "藍牙耳機",
+    # 喇叭
+    "藍牙喇叭",
+    "電腦喇叭",
+    # 隨身碟/記憶卡
+    "SSD 隨身硬碟",
+    "microSD 記憶卡",
+    # 網路
+    "NAS 網路儲存",
+    "WiFi 路由器",
+    # 線材
+    "HDMI 線",
+    "DP 線",
+    "USB Type-C 線",
+    # 光碟機
+    "外接光碟機",
+    # 視訊
     "視訊攝影機",
-    "筆電",
+    # 筆電
+    "ASUS 筆電 電競",
+    "MSI 筆電 電競",
+    "Lenovo 筆電",
+    "Acer 筆電",
+    "HP 筆電",
+    # 桌機
     "套裝電腦",
+    # 電競椅
     "電競椅",
-    "作業系統 軟體",
+    # 軟體
+    "Windows 作業系統",
+    # 散熱膏
+    "散熱膏",
+    # UPS
+    "UPS 不斷電系統",
+    # 延長線
+    "延長線",
 ]
 
 
@@ -140,7 +194,7 @@ def parse_momo_products(html):
     return products
 
 
-def crawl_momo(max_keywords=None, max_pages_per_keyword=3):
+def crawl_momo(max_keywords=None, max_pages_per_keyword=5):
     """
     Crawl momo shopping by search keywords.
     Returns list of product dicts with standardized fields.
@@ -175,10 +229,10 @@ def crawl_momo(max_keywords=None, max_pages_per_keyword=3):
                 seen_ids.add(p["id"])
                 kw_count += 1
 
-            time.sleep(1.0)  # polite delay
+            time.sleep(0.8)  # polite delay
 
         print(f"{kw_count} 件 (累計 {len(products)})")
-        time.sleep(1.2)
+        time.sleep(1.0)
 
     print(f"=== momo 購物網 完成: {len(products)} 件 ===\n")
     return products

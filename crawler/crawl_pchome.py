@@ -20,33 +20,95 @@ PCHOME_SEARCH_API = "https://ecshweb.pchome.com.tw/search/v3.3/all/results"
 PCHOME_PROD_URL = "https://24h.pchome.com.tw/prod/"
 PCHOME_IMG_BASE = "https://cs-d.ecshopcdn.com.tw"
 
-# 3C 零件搜尋關鍵字（以欣亞 DIY 分類為基準）
+# 3C 零件搜尋關鍵字 — 使用更精確的品牌+品類關鍵字提升商品覆蓋率
 PCHOME_KEYWORDS = [
-    "CPU 處理器",
-    "主機板",
-    "記憶體 RAM",
-    "顯示卡 VGA",
-    "SSD 固態硬碟",
-    "HDD 硬碟",
-    "電源供應器",
-    "電腦機殼",
-    "機殼風扇",
-    "CPU 散熱器",
-    "水冷散熱器",
-    "螢幕 顯示器",
-    "鍵盤",
-    "滑鼠",
-    "耳機",
-    "喇叭",
-    "隨身碟 記憶卡",
-    "網路設備 NAS",
-    "網路線 轉接頭",
-    "光碟機",
-    "視訊攝影機",
-    "筆電",
-    "桌機 套裝電腦",
-    "電競椅",
-    "作業系統 軟體",
+    # CPU
+    "Intel CPU 處理器",
+    "AMD Ryzen CPU",
+    # 主機板
+    "ASUS 主機板",
+    "MSI 主機板",
+    "GIGABYTE 主機板",
+    "ASRock 主機板",
+    # 記憶體
+    "DDR5 記憶體",
+    "DDR4 記憶體",
+    # 顯示卡
+    "RTX 顯示卡",
+    "RX 顯示卡",
+    "ASUS 顯示卡",
+    "MSI 顯示卡",
+    "GIGABYTE 顯示卡",
+    # SSD
+    "M.2 SSD 固態硬碟",
+    "SATA SSD 固態硬碟",
+    # HDD
+    "HDD 硬碟 3.5",
+    "HDD 硬碟 2.5",
+    # 電源供應器
+    "電源供應器 80PLUS",
+    "POWER 供應器 模組化",
+    # 機殼
+    "電腦機殼 ATX",
+    "電腦機殼 M-ATX",
+    "電腦機殼 ITX",
+    # 散熱
+    "CPU 散熱器 塔式",
+    "水冷散熱器 240",
+    "水冷散熱器 360",
+    "機殼風扇 ARGB",
+    # 螢幕
+    "電競螢幕 144Hz",
+    "螢幕 4K 顯示器",
+    "曲面螢幕",
+    # 鍵盤
+    "機械鍵盤",
+    "電競鍵盤",
+    # 滑鼠
+    "電競滑鼠",
+    "無線滑鼠",
+    # 耳機
+    "電競耳機",
+    "藍牙耳機",
+    # 喇叭
+    "藍牙喇叭",
+    "電腦喇叭",
+    # 隨身碟/記憶卡
+    "SSD 隨身硬碟",
+    "microSD 記憶卡",
+    # 網路
+    "NAS 網路儲存",
+    "WiFi 路由器",
+    "網路交換器",
+    # 線材
+    "HDMI 線",
+    "DP 線 DisplayPort",
+    "USB Type-C 線",
+    # 光碟機
+    "外接光碟機",
+    "DVD 燒錄器",
+    # 視訊
+    "視訊攝影機 webcam",
+    # 筆電
+    "ASUS 筆電 電競",
+    "MSI 筆電 電競",
+    "Lenovo 筆電",
+    "Acer 筆電",
+    "HP 筆電",
+    # 桌機
+    "套裝電腦 桌機",
+    # 電競椅
+    "電競椅 電腦椅",
+    # 軟體
+    "Windows 作業系統",
+    # 散熱膏
+    "散熱膏",
+    # 機殼配件
+    "顯卡支架 支撐架",
+    # UPS
+    "UPS 不斷電系統",
+    # 延長線
+    "延長線 防雷擊",
 ]
 
 
@@ -73,7 +135,7 @@ def fetch_url(url, retries=3):
                 return None
 
 
-def crawl_pchome(max_keywords=None, max_pages_per_keyword=5):
+def crawl_pchome(max_keywords=None, max_pages_per_keyword=10):
     """
     Crawl PCHOME 24h by search keywords.
     Returns list of product dicts with standardized fields.
@@ -125,14 +187,14 @@ def crawl_pchome(max_keywords=None, max_pages_per_keyword=5):
                 seen_ids.add(prod_id)
                 kw_count += 1
 
-            time.sleep(0.5)  # polite delay
+            time.sleep(0.4)  # polite delay
 
             total_pages = data.get("totalPage", 1)
             if page >= total_pages:
                 break
 
         print(f"{kw_count} 件 (累計 {len(products)})")
-        time.sleep(0.8)
+        time.sleep(0.6)
 
     print(f"=== PCHOME 24h 完成: {len(products)} 件 ===\n")
     return products
