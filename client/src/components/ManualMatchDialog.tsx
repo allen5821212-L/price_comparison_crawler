@@ -191,9 +191,13 @@ export function ManualMatchDialog({
                 return (
                   <div
                     key={id}
-                    className={`flex items-center gap-3 rounded-lg border border-border p-2 transition-colors hover:bg-muted/30 ${
+                    className={`group flex items-center gap-3 rounded-lg border border-border p-2 transition-all hover:border-primary/50 hover:bg-primary/5 cursor-pointer ${
                       isRejected ? "opacity-40" : ""
                     }`}
+                    onClick={() => {
+                      onConfirm(id, p.name);
+                      onOpenChange(false);
+                    }}
                   >
                     {p.image && (
                       <img
@@ -224,11 +228,10 @@ export function ManualMatchDialog({
                         )}
                       </div>
                     </div>
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                       <Button
                         size="sm"
-                        variant="ghost"
-                        className="text-green-600 hover:bg-green-500/10"
+                        className="bg-green-600 text-white hover:bg-green-700 opacity-0 group-hover:opacity-100 transition-opacity"
                         onClick={() => {
                           onConfirm(id, p.name);
                           onOpenChange(false);
@@ -236,11 +239,12 @@ export function ManualMatchDialog({
                         title="確認配對正確"
                       >
                         <Check className="size-4" />
+                        選擇
                       </Button>
                       <Button
                         size="sm"
                         variant="ghost"
-                        className="text-destructive hover:bg-destructive/10"
+                        className="text-destructive hover:bg-destructive/10 opacity-0 group-hover:opacity-100 transition-opacity"
                         onClick={() => {
                           onReject(id, p.name);
                         }}
