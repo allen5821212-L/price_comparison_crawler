@@ -7,6 +7,7 @@ import {
   getDynamicPriceHistory,
   getLatestCrawlerStatus,
   getLatestDynamicComparison,
+  searchDynamicProducts,
   listActiveMatchingFeedback,
   listMatchingFeedbackForAdmin,
   setMatchingFeedbackActive,
@@ -76,12 +77,19 @@ export const appRouter = router({
       pageSize: z.number().int().min(10).max(100).default(25),
       search: z.string().max(200).optional(),
       category: z.string().max(512).optional(),
+      coolpcCategory: z.string().max(512).optional(),
       cheaper: z.enum(["sinya", "coolpc", "pchome", "momo", "tie"]).optional(),
       score: z.enum(["high", "medium", "low"]).optional(),
       hasSpecDiff: z.boolean().optional(),
       sort: z.enum(["price_diff", "price_diff_abs", "sinya_price", "coolpc_price", "pchome_price", "momo_price", "name", "score", "best_price"]).default("price_diff"),
       order: z.enum(["asc", "desc"]).default("asc"),
     }).optional()).query(async ({ input }) => getLatestDynamicComparison(input ?? { page: 1, pageSize: 25 })),
+    /** Limits manual-match lookup to one requested platform rather than returning the entire catalog. */
+    searchProducts: publicProcedure.input(z.object({
+      platform: z.enum(["coolpc", "pchome", "momo"]),
+      query: z.string().min(1).max(200),
+      limit: z.number().int().min(1).max(50).optional(),
+    })).query(async ({ input }) => searchDynamicProducts(input)),
     /** Database-backed history replaces price_history.json. */
     history: publicProcedure.query(async () => getDynamicPriceHistory()),
     /** Lightweight polling endpoint for crawler status and recent completion time. */

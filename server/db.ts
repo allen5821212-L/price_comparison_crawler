@@ -238,6 +238,7 @@ export interface DynamicComparisonQuery {
   pageSize: number;
   search?: string;
   category?: string;
+  coolpcCategory?: string;
   cheaper?: "sinya" | "coolpc" | "pchome" | "momo" | "tie";
   score?: "high" | "medium" | "low";
   hasSpecDiff?: boolean;
@@ -270,6 +271,15 @@ export async function getLatestDynamicComparison(query: DynamicComparisonQuery =
     )!);
   }
   if (query.category) conditions.push(eq(comparisonMatches.category, query.category));
+  if (query.coolpcCategory) {
+    conditions.push(sql`EXISTS (
+      SELECT 1 FROM comparison_products AS current_coolpc
+      WHERE current_coolpc.last_seen_run_id = ${run.id}
+        AND current_coolpc.platform = 'coolpc'
+        AND current_coolpc.category = ${query.coolpcCategory}
+        AND current_coolpc.name = ${comparisonMatches.coolpcName}
+    )`);
+  }
   if (query.cheaper) conditions.push(eq(comparisonMatches.cheaper, query.cheaper));
   if (query.score === "high") conditions.push(sql`${comparisonMatches.score} >= 0.85`);
   if (query.score === "medium") conditions.push(sql`${comparisonMatches.score} >= 0.70 AND ${comparisonMatches.score} < 0.85`);
@@ -290,32 +300,24 @@ export async function getLatestDynamicComparison(query: DynamicComparisonQuery =
   }[query.sort ?? "price_diff"];
   const orderBy = query.order === "desc" ? desc(sortExpression) : asc(sortExpression);
 
-  const [matchRows, productRows, countRows] = await Promise.all([
+  const [matchRows, countRows, coolpcCategoryRows] = await Promise.all([
     db.select({ payload: comparisonMatches.payload }).from(comparisonMatches)
       .where(whereClause)
       .orderBy(orderBy)
       .limit(pageSize)
       .offset((page - 1) * pageSize),
-    db.select({
-      platform: comparisonProducts.platform,
-      externalId: comparisonProducts.externalId,
-      name: comparisonProducts.name,
-      subtitle: comparisonProducts.subtitle,
-      price: comparisonProducts.price,
-      originalPrice: comparisonProducts.originalPrice,
-      url: comparisonProducts.url,
-      image: comparisonProducts.image,
-      category: comparisonProducts.category,
-    }).from(comparisonProducts).where(eq(comparisonProducts.lastSeenRunId, run.id)),
     db.select({ total: sql<number>`count(*)` }).from(comparisonMatches).where(whereClause),
+    db.select({
+      name: comparisonProducts.category,
+      count: sql<number>`count(*)`,
+    }).from(comparisonProducts)
+      .where(and(
+        eq(comparisonProducts.lastSeenRunId, run.id),
+        eq(comparisonProducts.platform, "coolpc"),
+      ))
+      .groupBy(comparisonProducts.category)
+      .orderBy(desc(sql`count(*)`)),
   ]);
-
-  const productsByPlatform: Record<string, DynamicProduct[]> = {
-    sinya: [], coolpc: [], pchome: [], momo: [],
-  };
-  productRows.forEach(row => {
-    productsByPlatform[row.platform]?.push(mapDynamicProduct(row));
-  });
 
   const matched = matchRows.flatMap(row => {
     try {
@@ -348,11 +350,10 @@ export async function getLatestDynamicComparison(query: DynamicComparisonQuery =
       avg_price_diff: Number(run.avgPriceDiff),
     },
     matched,
-    sinya_products: productsByPlatform.sinya,
-    coolpc_products: productsByPlatform.coolpc,
-    pchome_products: productsByPlatform.pchome,
-    momo_products: productsByPlatform.momo,
     sinya_categories: sinyaCategories,
+    coolpc_categories: coolpcCategoryRows
+      .filter(row => Boolean(row.name))
+      .map(row => ({ name: row.name!, count: Number(row.count) })),
     pagination: {
       page,
       pageSize,
@@ -366,6 +367,46 @@ export async function getLatestDynamicComparison(query: DynamicComparisonQuery =
       status: run.status,
     },
   };
+}
+
+/** Searches only the active platform catalog needed by the manual-match dialog. */
+export async function searchDynamicProducts(input: {
+  platform: "coolpc" | "pchome" | "momo";
+  query: string;
+  limit?: number;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+
+  const [run] = await db.select({ id: comparisonRuns.id }).from(comparisonRuns)
+    .where(eq(comparisonRuns.status, "completed"))
+    .orderBy(desc(comparisonRuns.finishedAt), desc(comparisonRuns.id))
+    .limit(1);
+  if (!run) return [];
+
+  const query = input.query.trim();
+  if (!query) return [];
+  const pattern = `%${query}%`;
+  const rows = await db.select({
+    platform: comparisonProducts.platform,
+    externalId: comparisonProducts.externalId,
+    name: comparisonProducts.name,
+    subtitle: comparisonProducts.subtitle,
+    price: comparisonProducts.price,
+    originalPrice: comparisonProducts.originalPrice,
+    url: comparisonProducts.url,
+    image: comparisonProducts.image,
+    category: comparisonProducts.category,
+  }).from(comparisonProducts)
+    .where(and(
+      eq(comparisonProducts.lastSeenRunId, run.id),
+      eq(comparisonProducts.platform, input.platform),
+      or(like(comparisonProducts.name, pattern), like(comparisonProducts.subtitle, pattern))!,
+    ))
+    .orderBy(asc(comparisonProducts.name))
+    .limit(Math.min(50, Math.max(1, input.limit ?? 50)));
+
+  return rows.map(mapDynamicProduct);
 }
 
 /** Dynamic four-platform history grouped into the current dialog's day-based response shape. */

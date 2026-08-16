@@ -22,6 +22,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { trpc } from "@/lib/trpc";
 import { Search, Check, X, PackageX, Edit3, ChevronDown, ChevronUp } from "lucide-react";
 
 interface CoolpcProduct {
@@ -47,9 +48,6 @@ interface ManualMatchDialogProps {
     url: string;
     image: string;
   } | null;
-  coolpcProducts: CoolpcProduct[];
-  pchomeProducts?: CoolpcProduct[];
-  momoProducts?: CoolpcProduct[];
   onConfirm: (their_id: string, their_name: string, platform?: Platform) => void;
   onReject: (their_id: string, their_name: string) => void;
   onNoMatch: () => void;
@@ -227,9 +225,6 @@ export function ManualMatchDialog({
   open,
   onOpenChange,
   sinyaProduct,
-  coolpcProducts,
-  pchomeProducts = [],
-  momoProducts = [],
   onConfirm,
   onReject,
   onNoMatch,
@@ -258,26 +253,18 @@ export function ManualMatchDialog({
     }
   }, [open, sinyaProduct]);
 
-  // Get products for the active platform
-  const platformProducts = useMemo(() => {
-    switch (activePlatform) {
-      case "coolpc": return coolpcProducts;
-      case "pchome": return pchomeProducts;
-      case "momo": return momoProducts;
-    }
-  }, [activePlatform, coolpcProducts, pchomeProducts, momoProducts]);
+  const normalizedQuery = searchQuery.trim();
+  const { data: remoteProducts = [], isFetching: isSearching } = trpc.comparison.searchProducts.useQuery(
+    { platform: activePlatform, query: normalizedQuery, limit: 50 },
+    { enabled: open && normalizedQuery.length > 0 },
+  );
 
-  // Filter products by search query
+  // The server returns at most 50 items from the selected platform. The client
+  // only ranks those candidates and calculates comparison-specific annotations.
   const searchResults = useMemo(() => {
     if (!searchQuery.trim()) return [];
-    const q = searchQuery.toLowerCase();
-    const tokens = q.split(/\s+/).filter(Boolean);
 
-    const results = platformProducts
-      .filter((p) => {
-        const name = p.name.toLowerCase();
-        return tokens.every((t) => name.includes(t));
-      })
+    const results = remoteProducts
       .map((p) => ({
         ...p,
         sim: similarity(sinyaProduct?.name || "", p.name),
@@ -294,9 +281,8 @@ export function ManualMatchDialog({
         const priceA = sinyaProduct ? Math.abs(a.price - sinyaProduct.price) : 0;
         const priceB = sinyaProduct ? Math.abs(b.price - sinyaProduct.price) : 0;
         return priceA - priceB;
-      })
-      .slice(0, 50);
-  }, [searchQuery, platformProducts, sinyaProduct, showOnlySpecDiff]);
+      });
+  }, [searchQuery, remoteProducts, sinyaProduct, showOnlySpecDiff]);
 
   // Reset selected index when results change
   useEffect(() => {
@@ -338,13 +324,6 @@ export function ManualMatchDialog({
   }, [searchResults, selectedIndex, activePlatform, onConfirm, onOpenChange, showManualInput]);
 
   if (!sinyaProduct) return null;
-
-  // Count results per platform
-  const platformCounts = {
-    coolpc: coolpcProducts.length,
-    pchome: pchomeProducts.length,
-    momo: momoProducts.length,
-  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -393,7 +372,7 @@ export function ManualMatchDialog({
               }`}
             >
               {PLATFORM_LABELS[p]}
-              <span className="ml-1 text-xs opacity-60">({platformCounts[p].toLocaleString()})</span>
+              <span className="ml-1 text-xs opacity-60">({p === activePlatform ? searchResults.length.toLocaleString() : "—"})</span>
             </button>
           ))}
         </div>
@@ -425,7 +404,7 @@ export function ManualMatchDialog({
           <div className="space-y-1" ref={scrollRef}>
             {searchResults.length === 0 ? (
               <p className="py-8 text-center text-sm text-muted-foreground">
-                {searchQuery.trim() ? `沒有符合的${PLATFORM_LABELS[activePlatform]}商品` : "輸入關鍵字開始搜尋"}
+                {isSearching ? `正在搜尋${PLATFORM_LABELS[activePlatform]}商品…` : searchQuery.trim() ? `沒有符合的${PLATFORM_LABELS[activePlatform]}商品` : "輸入關鍵字開始搜尋"}
               </p>
             ) : (
               searchResults.map((p, idx) => {

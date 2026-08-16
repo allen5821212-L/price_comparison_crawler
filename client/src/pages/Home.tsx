@@ -129,6 +129,7 @@ interface ComparisonData {
   pchome_products?: CoolpcProduct[];
   momo_products?: CoolpcProduct[];
   sinya_categories: string[];
+  coolpc_categories?: Array<{ name: string; count: number }>;
   pagination?: {
     page: number;
     pageSize: number;
@@ -213,6 +214,7 @@ export default function Home() {
     pageSize: itemsPerPage,
     search: searchQuery.trim() || undefined,
     category: categoryFilter === "all" ? undefined : categoryFilter,
+    coolpcCategory: coolpcCategoryFilter === "all" ? undefined : coolpcCategoryFilter,
     cheaper: cheaperFilter === "all" ? undefined : cheaperFilter,
     score: scoreFilter === "all" ? undefined : scoreFilter,
     hasSpecDiff: specDiffFilter || undefined,
@@ -222,7 +224,18 @@ export default function Home() {
     refetchInterval: 60_000,
     refetchOnWindowFocus: true,
   });
-  const data = (comparisonQuery.data ?? null) as ComparisonData | null;
+  const data = useMemo(() => {
+    if (!comparisonQuery.data) return null;
+    return {
+      ...comparisonQuery.data,
+      // Full catalogs are intentionally fetched on demand by ManualMatchDialog.
+      // These empty defaults preserve the existing override and category helpers.
+      sinya_products: [],
+      coolpc_products: [],
+      pchome_products: [],
+      momo_products: [],
+    } as ComparisonData;
+  }, [comparisonQuery.data]);
   const loading = comparisonQuery.isLoading;
   const error = comparisonQuery.error?.message ?? null;
   const fetchData = () => comparisonQuery.refetch();
@@ -275,7 +288,10 @@ export default function Home() {
 
   // Get CoolPC categories from coolpc_products, sorted by product count desc
   const coolpcCategories = useMemo(() => {
-    if (!data || !data.coolpc_products) return [];
+    if (!data) return [];
+    if (data.coolpc_categories && data.coolpc_categories.length > 0) {
+      return data.coolpc_categories;
+    }
     const counts: Record<string, number> = {};
     data.coolpc_products.forEach((p) => {
       if (p.category) counts[p.category] = (counts[p.category] || 0) + 1;
@@ -877,7 +893,7 @@ export default function Home() {
             placeholder="原價屋分類"
             searchPlaceholder="搜尋分類..."
             options={[
-              { value: "all", label: `原價屋全部分類 (${data?.coolpc_products?.length ?? 0})` },
+              { value: "all", label: `原價屋全部分類 (${data?.stats.coolpc_total ?? 0})` },
               ...coolpcCategories.map((cat) => ({
                 value: cat.name,
                 label: `${cat.name} (${cat.count})`,
@@ -1426,9 +1442,6 @@ export default function Home() {
         open={manualMatchOpen}
         onOpenChange={setManualMatchOpen}
         sinyaProduct={activeSinyaProduct}
-        coolpcProducts={data?.coolpc_products || []}
-        pchomeProducts={data?.pchome_products || []}
-        momoProducts={data?.momo_products || []}
         onConfirm={(their_id, their_name, platform) => {
           if (activeSinyaProduct) {
             const sId = sinyaId(activeSinyaProduct.name);
