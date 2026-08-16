@@ -13,6 +13,7 @@ export interface OverrideEntry {
   ours_name: string;
   their_id?: string;
   their_name?: string;
+  platform?: "coolpc" | "pchome" | "momo" | "manual";
   action: "confirm" | "reject" | "no_match";
   note?: string;
   by: string;
@@ -61,15 +62,17 @@ export function useOverrides() {
     (entry: Omit<OverrideEntry, "by" | "at">) => {
       setOverrides((prev) => {
         const data = { ...prev, overrides: [...prev.overrides] };
-        // Remove any existing entry with the same ours_id (and their_id if provided)
-        const filtered = data.overrides.filter(
-          (o) =>
-            !(o.ours_id === entry.ours_id &&
-              (entry.action === "no_match" || o.ours_id === entry.ours_id) &&
-              (entry.action !== "no_match"
-                ? o.their_id === entry.their_id
-                : true))
-        );
+        // 每個欣亞商品只能有一個確認配對；排除紀錄則可保留多筆。
+        const filtered = data.overrides.filter((o) => {
+          if (o.ours_id !== entry.ours_id) return true;
+          if (entry.action === "confirm") {
+            return o.action !== "confirm" && o.action !== "no_match";
+          }
+          if (entry.action === "no_match") {
+            return o.action !== "no_match" && o.action !== "confirm";
+          }
+          return !(o.action === "reject" && o.their_id === entry.their_id);
+        });
         // Add new entry
         filtered.push({
           ...entry,
@@ -86,8 +89,14 @@ export function useOverrides() {
 
   /** Confirm a match is correct */
   const confirmMatch = useCallback(
-    (ours_id: string, ours_name: string, their_id: string, their_name: string) => {
-      setOverride({ ours_id, ours_name, their_id, their_name, action: "confirm" });
+    (
+      ours_id: string,
+      ours_name: string,
+      their_id: string,
+      their_name: string,
+      platform: "coolpc" | "pchome" | "momo" = "coolpc"
+    ) => {
+      setOverride({ ours_id, ours_name, their_id, their_name, platform, action: "confirm" });
     },
     [setOverride]
   );
@@ -117,6 +126,7 @@ export function useOverrides() {
         ours_name,
         their_id: customId,
         their_name,
+        platform: "manual",
         action: "confirm",
         note: their_price ? `手動輸入品名，價格: NT$${their_price}` : "手動輸入品名",
       });

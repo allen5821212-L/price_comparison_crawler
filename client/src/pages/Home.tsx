@@ -109,7 +109,7 @@ interface Stats {
 
 interface CoolpcProduct {
   source: string;
-  id: number;
+  id: number | string;
   name: string;
   subtitle: string;
   price: number;
@@ -161,6 +161,30 @@ function coolpcId(name: string): string {
     hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0;
   }
   return `cool_${Math.abs(hash)}`;
+}
+
+function platformProductId(platform: "coolpc" | "pchome" | "momo", product: CoolpcProduct): string {
+  return `${platform}_${product.id}`;
+}
+
+function getOverridePlatform(theirId?: string, storedPlatform?: string): "coolpc" | "pchome" | "momo" | "manual" {
+  if (storedPlatform === "pchome" || storedPlatform === "momo" || storedPlatform === "manual") return storedPlatform;
+  if (theirId?.startsWith("pchome_")) return "pchome";
+  if (theirId?.startsWith("momo_")) return "momo";
+  if (theirId?.startsWith("manual_")) return "manual";
+  return "coolpc";
+}
+
+function getCheapestPlatform(sinyaPrice: number, coolpcPrice: number, pchomePrice?: number, momoPrice?: number): MatchedProduct["cheaper"] {
+  const prices: Array<[MatchedProduct["cheaper"], number]> = [
+    ["sinya", sinyaPrice],
+    ["coolpc", coolpcPrice],
+  ];
+  if (pchomePrice && pchomePrice > 0) prices.push(["pchome", pchomePrice]);
+  if (momoPrice && momoPrice > 0) prices.push(["momo", momoPrice]);
+  const lowestPrice = Math.min(...prices.map(([, price]) => price));
+  const lowestPlatforms = prices.filter(([, price]) => price === lowestPrice);
+  return lowestPlatforms.length === 1 ? lowestPlatforms[0][0] : "tie";
 }
 
 export default function Home() {
@@ -269,29 +293,63 @@ export default function Home() {
           return null;
         }
 
-        // Check if this sinya product has a confirmed override pointing to a different coolpc product
+        // 已確認的人工配對可覆蓋原價屋、PCHOME 或 momo 的對應品項。
         const confirmed = overrides.getConfirmed(sId);
-        if (confirmed && confirmed.their_id && confirmed.their_id !== cId) {
-          // Find the confirmed coolpc product
-          const confirmedProduct = data.coolpc_products.find(
-            (p) => coolpcId(p.name) === confirmed.their_id
-          );
-          if (confirmedProduct) {
-            const newDiff = m.sinya_price - confirmedProduct.price;
-            const newCheaper =
-              m.sinya_price < confirmedProduct.price
-                ? "sinya"
-                : confirmedProduct.price < m.sinya_price
-                ? "coolpc"
-                : "tie";
+        if (confirmed && confirmed.their_id) {
+          const platform = getOverridePlatform(confirmed.their_id, confirmed.platform);
+          if (platform === "coolpc" && confirmed.their_id !== cId) {
+            const confirmedProduct = data.coolpc_products.find(
+              (p) => coolpcId(p.name) === confirmed.their_id || platformProductId("coolpc", p) === confirmed.their_id
+            );
+            if (confirmedProduct) {
+              const newDiff = m.sinya_price - confirmedProduct.price;
+              return {
+                ...m,
+                coolpc_name: confirmedProduct.name,
+                coolpc_price: confirmedProduct.price,
+                coolpc_url: confirmedProduct.url,
+                coolpc_image: confirmedProduct.image,
+                price_diff: newDiff,
+                cheaper: getCheapestPlatform(m.sinya_price, confirmedProduct.price, m.pchome_price, m.momo_price),
+                _confirmed: true,
+              } as MatchedProduct & { _confirmed?: boolean };
+            }
+          }
+          if (platform === "pchome") {
+            const confirmedProduct = (data.pchome_products || []).find(
+              (p) => platformProductId("pchome", p) === confirmed.their_id
+            );
+            if (confirmedProduct) {
+              return {
+                ...m,
+                pchome_name: confirmedProduct.name,
+                pchome_price: confirmedProduct.price,
+                pchome_url: confirmedProduct.url,
+                pchome_image: confirmedProduct.image,
+                cheaper: getCheapestPlatform(m.sinya_price, m.coolpc_price, confirmedProduct.price, m.momo_price),
+                _confirmed: true,
+              } as MatchedProduct & { _confirmed?: boolean };
+            }
+          }
+          if (platform === "momo") {
+            const confirmedProduct = (data.momo_products || []).find(
+              (p) => platformProductId("momo", p) === confirmed.their_id
+            );
+            if (confirmedProduct) {
+              return {
+                ...m,
+                momo_name: confirmedProduct.name,
+                momo_price: confirmedProduct.price,
+                momo_url: confirmedProduct.url,
+                momo_image: confirmedProduct.image,
+                cheaper: getCheapestPlatform(m.sinya_price, m.coolpc_price, m.pchome_price, confirmedProduct.price),
+                _confirmed: true,
+              } as MatchedProduct & { _confirmed?: boolean };
+            }
+          }
+          if (platform === "coolpc" && confirmed.their_id === cId) {
             return {
               ...m,
-              coolpc_name: confirmedProduct.name,
-              coolpc_price: confirmedProduct.price,
-              coolpc_url: confirmedProduct.url,
-              coolpc_image: confirmedProduct.image,
-              price_diff: newDiff,
-              cheaper: newCheaper,
               _confirmed: true,
             } as MatchedProduct & { _confirmed?: boolean };
           }
@@ -330,9 +388,9 @@ export default function Home() {
 
       // Override counts
       const sId = sinyaId(m.sinya_name);
-      const cId = coolpcId(m.coolpc_name);
       const confirmed = overrides.getConfirmed(sId);
-      if (confirmed && confirmed.their_id === cId) override.confirmed++;
+      const cId = coolpcId(m.coolpc_name);
+      if (confirmed) override.confirmed++;
       else if (overrides.isRejected(sId, cId)) override.rejected++;
       else if (overrides.isNoMatch(sId)) override.no_match++;
       else override.none++;
@@ -393,8 +451,7 @@ export default function Home() {
         const sId = sinyaId(m.sinya_name);
         const cId = coolpcId(m.coolpc_name);
         if (overrideFilter === "confirmed") {
-          const confirmed = overrides.getConfirmed(sId);
-          return confirmed && confirmed.their_id === cId;
+          return Boolean(overrides.getConfirmed(sId));
         }
         if (overrideFilter === "rejected") {
           return overrides.isRejected(sId, cId);
@@ -1086,7 +1143,10 @@ export default function Home() {
                     const sId = sinyaId(item.sinya_name);
                     const cId = coolpcId(item.coolpc_name);
                     const isConfirmed = overrides.getConfirmed(sId);
-                    const confirmedThisPair = isConfirmed && isConfirmed.their_id === cId;
+                    const confirmedThisPair = Boolean(isConfirmed);
+                    const confirmedPlatform = isConfirmed
+                      ? getOverridePlatform(isConfirmed.their_id, isConfirmed.platform)
+                      : null;
 
                     return (
                       <TableRow
@@ -1121,7 +1181,7 @@ export default function Home() {
                               {confirmedThisPair && (
                                 <Badge className="mt-1 gap-1 text-xs bg-green-500/15 text-green-600 hover:bg-green-500/20">
                                   <Check className="size-2.5" />
-                                  已確認
+                                  已確認{confirmedPlatform === "pchome" ? " PCHOME" : confirmedPlatform === "momo" ? " momo" : ""}
                                 </Badge>
                               )}
                             </div>
@@ -1388,10 +1448,12 @@ export default function Home() {
         onOpenChange={setManualMatchOpen}
         sinyaProduct={activeSinyaProduct}
         coolpcProducts={data?.coolpc_products || []}
-        onConfirm={(their_id, their_name) => {
+        pchomeProducts={data?.pchome_products || []}
+        momoProducts={data?.momo_products || []}
+        onConfirm={(their_id, their_name, platform) => {
           if (activeSinyaProduct) {
             const sId = sinyaId(activeSinyaProduct.name);
-            overrides.confirmMatch(sId, activeSinyaProduct.name, their_id, their_name);
+            overrides.confirmMatch(sId, activeSinyaProduct.name, their_id, their_name, platform || "coolpc");
           }
         }}
         onReject={(their_id, their_name) => {
