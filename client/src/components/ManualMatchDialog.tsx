@@ -145,6 +145,28 @@ function extractSpecRows(oursName: string, theirsName: string, theirsSubtitle = 
     ]
   );
 
+  const cpu = (text: string) => unique([
+    ...findMatches(text, /\b(?:AMD\s+)?(?:RYZEN\s*[3579]|R[3579])\s?\d{4,5}[A-Z0-9]*\b/g),
+    ...findMatches(text, /\b(?:INTEL\s+)?(?:CORE\s+)?I[3579]-?\d{4,5}[A-Z0-9]*\b/g),
+    ...findMatches(text, /\b(?:INTEL\s+)?CORE\s+ULTRA\s+[3579]\s+\d{3,4}[A-Z0-9]*\b/g),
+  ]);
+
+  const gpu = (text: string) => unique([
+    ...findMatches(text, /\bRTX\s?\d{4}\s?(?:TI|SUPER)?\b/g),
+    ...findMatches(text, /\bRX\s?\d{4}\s?(?:XT|XTX)?\b/g),
+    ...findMatches(text, /\bARC\s?[A-Z]\d{3,4}\b/g),
+  ]);
+
+  const chipset = (text: string) => unique([
+    ...findMatches(text, /\b(?:X|B|A|Z|H|W)\d{3,4}E?\b/g),
+    ...findMatches(text, /\b(?:TRX|WRX)\d{2,3}\b/g),
+  ]);
+
+  const socket = (text: string) => unique([
+    ...findMatches(text, /\bAM[45]\b/g),
+    ...findMatches(text, /\bLGA\s?1[7-9]\d{2}\b/g),
+  ]);
+
   const compare = (label: string, ours: string[], theirs: string[]): SpecRow => {
     if (ours.length === 0 || theirs.length === 0) return { label, ours, theirs, status: "missing" };
     const oursKey = [...ours].sort().join("|");
@@ -154,6 +176,10 @@ function extractSpecRows(oursName: string, theirsName: string, theirsSubtitle = 
 
   return [
     compare("型號 / 系列", modelCodes(oursText), modelCodes(theirsText)),
+    compare("CPU", cpu(oursText), cpu(theirsText)),
+    compare("GPU", gpu(oursText), gpu(theirsText)),
+    compare("主機板晶片組", chipset(oursText), chipset(theirsText)),
+    compare("CPU 插槽", socket(oursText), socket(theirsText)),
     compare("容量 / 記憶體", capacity(oursText), capacity(theirsText)),
     compare("尺寸", size(oursText), size(theirsText)),
     compare("頻率", frequency(oursText), frequency(theirsText)),
@@ -194,6 +220,7 @@ export function ManualMatchDialog({
   const [manualPrice, setManualPrice] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [showOnlySpecDiff, setShowOnlySpecDiff] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -204,6 +231,7 @@ export function ManualMatchDialog({
       setActivePlatform("coolpc");
       setSelectedIndex(0);
       setExpandedId(null);
+      setShowOnlySpecDiff(false);
     }
   }, [open, sinyaProduct]);
 
@@ -222,7 +250,7 @@ export function ManualMatchDialog({
     const q = searchQuery.toLowerCase();
     const tokens = q.split(/\s+/).filter(Boolean);
 
-    return platformProducts
+    const results = platformProducts
       .filter((p) => {
         const name = p.name.toLowerCase();
         return tokens.every((t) => name.includes(t));
@@ -230,7 +258,14 @@ export function ManualMatchDialog({
       .map((p) => ({
         ...p,
         sim: similarity(sinyaProduct?.name || "", p.name),
+        specRows: sinyaProduct ? extractSpecRows(sinyaProduct.name, p.name, p.subtitle) : [],
       }))
+      .map((p) => ({
+        ...p,
+        hasSpecDiff: p.specRows.some((row) => row.status === "diff"),
+      }));
+
+    return (showOnlySpecDiff ? results.filter((p) => p.hasSpecDiff) : results)
       .sort((a, b) => {
         if (b.sim !== a.sim) return b.sim - a.sim;
         const priceA = sinyaProduct ? Math.abs(a.price - sinyaProduct.price) : 0;
@@ -238,7 +273,7 @@ export function ManualMatchDialog({
         return priceA - priceB;
       })
       .slice(0, 50);
-  }, [searchQuery, platformProducts, sinyaProduct]);
+  }, [searchQuery, platformProducts, sinyaProduct, showOnlySpecDiff]);
 
   // Reset selected index when results change
   useEffect(() => {
@@ -352,6 +387,15 @@ export function ManualMatchDialog({
             autoFocus
           />
         </div>
+        <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={showOnlySpecDiff}
+            onChange={(e) => setShowOnlySpecDiff(e.target.checked)}
+            className="size-3.5 rounded border-input accent-amber-500"
+          />
+          僅顯示有規格差異的商品
+        </label>
 
         {/* Results */}
         <ScrollArea className="flex-1 min-h-0 max-h-[40vh]">
@@ -366,9 +410,7 @@ export function ManualMatchDialog({
                 const isRejected = rejectedIds.has(id);
                 const isSelected = idx === selectedIndex;
                 const isExpanded = expandedId === id;
-                const specRows = isExpanded
-                  ? extractSpecRows(sinyaProduct.name, p.name, p.subtitle)
-                  : [];
+                const specRows = isExpanded ? p.specRows : [];
                 const detectedSpecRows = specRows.filter((row) => row.ours.length > 0 || row.theirs.length > 0);
                 const diffCount = detectedSpecRows.filter((row) => row.status === "diff").length;
                 return (

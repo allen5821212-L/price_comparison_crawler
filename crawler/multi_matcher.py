@@ -96,8 +96,147 @@ def find_best_match_multi_query(query_names, products, product_index, pos_to_ori
     return best_prod, best_score
 
 
+def _extract_rule_alias(name):
+    """Return one high-signal model alias; deliberately never returns generic product words."""
+    cleaned = re.sub(r'【[^】]*】', ' ', name or '').upper()
+    cleaned = re.split(r'[/\(（〈]', cleaned)[0]
+    codes = re.findall(r'\b(?=[A-Z0-9-]{4,}\b)(?=[A-Z0-9-]*[A-Z])(?=[A-Z0-9-]*\d)[A-Z0-9]+(?:-[A-Z0-9]+)*\b', cleaned)
+    if codes:
+        return sorted(codes, key=len, reverse=True)[0]
+    series = re.search(r'\b(?:ROG|TUF|STRIX|ISKUR|KATANA|THINKPAD|ELITEBOOK|IDEAPAD|NITRO|PREDATOR|PRIME|MORTAR)\s+[A-Z0-9-]+(?:\s+[A-Z0-9-]+)?\b', cleaned)
+    return series.group(0) if series else ''
+
+
+def _find_rule_product(products, target_name, target_id, target_alias, platform):
+    """Find a current crawler product from a saved feedback rule without fuzzy matching."""
+    clean_id = str(target_id or "")
+    if clean_id.startswith(f"{platform}_"):
+        clean_id = clean_id[len(platform) + 1:]
+    for product in products:
+        if clean_id and str(product.get("id", "")) == clean_id:
+            return product
+    for product in products:
+        if product.get("name") == target_name:
+            return product
+    if target_alias:
+        alias_candidates = [
+            product for product in products
+            if _extract_rule_alias(product.get("name", "")) == target_alias.upper()
+        ]
+        if len(alias_candidates) == 1:
+            return alias_candidates[0]
+    return None
+
+
+def _recalculate_cheaper(match):
+    prices = {
+        "sinya": match.get("sinya_price", 0),
+        "coolpc": match.get("coolpc_price", 0),
+    }
+    if match.get("pchome_price", 0) > 0:
+        prices["pchome"] = match["pchome_price"]
+    if match.get("momo_price", 0) > 0:
+        prices["momo"] = match["momo_price"]
+    prices = {platform: price for platform, price in prices.items() if price > 0}
+    if not prices:
+        match["cheaper"] = "tie"
+        return
+    lowest = min(prices.values())
+    platforms = [platform for platform, price in prices.items() if price == lowest]
+    match["cheaper"] = platforms[0] if len(platforms) == 1 else "tie"
+
+
+def apply_confirmed_rules(matched, sinya_products, coolpc_products, pchome_products,
+                          momo_products, confirmed_rules, platforms):
+    """Apply exact administrator confirmations. Rules never bypass target availability checks."""
+    if not confirmed_rules:
+        return 0, 0
+
+    products_by_platform = {
+        "coolpc": coolpc_products,
+        "pchome": pchome_products,
+        "momo": momo_products,
+    }
+    sinya_by_name = {product.get("name"): product for product in sinya_products if product.get("name")}
+    matched_by_sinya = {match.get("sinya_name"): match for match in matched}
+    applied = 0
+    skipped = 0
+
+    for rule in confirmed_rules:
+        platform = rule.get("platform")
+        if platform not in platforms or platform not in products_by_platform:
+            continue
+        sinya_name = rule.get("sinyaName") or rule.get("sinya_name")
+        target_name = rule.get("targetName") or rule.get("target_name")
+        target_id = rule.get("targetId") or rule.get("target_id")
+        source_alias = rule.get("sourceAlias") or rule.get("source_alias") or ""
+        target_alias = rule.get("targetAlias") or rule.get("target_alias") or ""
+        source = sinya_by_name.get(sinya_name)
+        if not source and source_alias:
+            source_candidates = [
+                product for product in sinya_products
+                if _extract_rule_alias(product.get("name", "")) == source_alias.upper()
+            ]
+            if len(source_candidates) == 1:
+                source = source_candidates[0]
+                sinya_name = source["name"]
+        target = _find_rule_product(products_by_platform[platform], target_name, target_id, target_alias, platform)
+        if not source or not target:
+            skipped += 1
+            continue
+
+        match = matched_by_sinya.get(sinya_name)
+        if platform == "coolpc":
+            if not match:
+                match = {
+                    "name": source["name"],
+                    "sinya_name": source["name"],
+                    "coolpc_name": target["name"],
+                    "sinya_price": source.get("price", 0),
+                    "coolpc_price": target.get("price", 0),
+                    "price_diff": source.get("price", 0) - target.get("price", 0),
+                    "sinya_url": source.get("url", ""),
+                    "coolpc_url": target.get("url", ""),
+                    "sinya_image": source.get("image", ""),
+                    "coolpc_image": target.get("image", ""),
+                    "category": source.get("category") or target.get("category", ""),
+                    "score": 1.0,
+                    "is_bare_match": False,
+                    "spec_diff": compute_spec_diff(source["name"], target["name"]),
+                }
+                matched.append(match)
+                matched_by_sinya[sinya_name] = match
+            else:
+                match.update({
+                    "coolpc_name": target["name"],
+                    "coolpc_price": target.get("price", 0),
+                    "coolpc_url": target.get("url", ""),
+                    "coolpc_image": target.get("image", ""),
+                    "price_diff": source.get("price", 0) - target.get("price", 0),
+                    "score": 1.0,
+                    "spec_diff": compute_spec_diff(source["name"], target["name"]),
+                })
+        elif not match:
+            # The current table is anchored on a Sinya/CoolPC row. Retain the rule for a later run
+            # rather than fabricating a missing CoolPC price column.
+            skipped += 1
+            continue
+        else:
+            match[f"{platform}_name"] = target["name"]
+            match[f"{platform}_price"] = target.get("price", 0)
+            match[f"{platform}_url"] = target.get("url", "")
+            match[f"{platform}_image"] = target.get("image", "")
+            match[f"{platform}_score"] = 1.0
+
+        match["manual_rule"] = True
+        _recalculate_cheaper(match)
+        applied += 1
+
+    return applied, skipped
+
+
 def match_all_platforms(sinya_products, coolpc_products, pchome_products, momo_products,
-                        category_compat=None):
+                        category_compat=None, confirmed_rules=None):
     """
     四平台配對主函數。
     1. 先執行欣亞 vs 原價屋配對（使用現有引擎）
@@ -109,6 +248,11 @@ def match_all_platforms(sinya_products, coolpc_products, pchome_products, momo_p
     # Step 1: 欣亞 vs 原價屋配對
     matched, rejected, review, price_review = match_products_v2(
         sinya_products, coolpc_products, category_compat=category_compat
+    )
+
+    coolpc_rules_applied, coolpc_rules_skipped = apply_confirmed_rules(
+        matched, sinya_products, coolpc_products, pchome_products, momo_products,
+        confirmed_rules or [], {"coolpc"}
     )
 
     print(f"\n=== 多平台擴展配對開始 ===")
@@ -173,27 +317,16 @@ def match_all_platforms(sinya_products, coolpc_products, pchome_products, momo_p
             m["momo_image"] = ""
             m["momo_score"] = 0
 
-        # 重新計算最便宜的平台
-        prices = {
-            "sinya": m["sinya_price"],
-            "coolpc": m["coolpc_price"],
-        }
-        if m["pchome_price"] > 0:
-            prices["pchome"] = m["pchome_price"]
-        if m["momo_price"] > 0:
-            prices["momo"] = m["momo_price"]
+        _recalculate_cheaper(m)
 
-        min_price = min(prices.values())
-        min_platforms = [p for p, v in prices.items() if v == min_price]
-        if len(min_platforms) == len(prices):
-            m["cheaper"] = "tie"
-        elif min_price == m["sinya_price"] and min_price == m["coolpc_price"]:
-            m["cheaper"] = "tie"
-        else:
-            m["cheaper"] = min_platforms[0] if len(min_platforms) == 1 else min_platforms[0]
+    extra_rules_applied, extra_rules_skipped = apply_confirmed_rules(
+        matched, sinya_products, coolpc_products, pchome_products, momo_products,
+        confirmed_rules or [], {"pchome", "momo"}
+    )
 
     print(f"  PCHOME 配對成功: {pchome_matched_count} / {len(matched)} 組")
     print(f"  momo 配對成功: {momo_matched_count} / {len(matched)} 組")
+    print(f"  人工確認規則套用: {coolpc_rules_applied + extra_rules_applied} 組（等待商品資料: {coolpc_rules_skipped + extra_rules_skipped} 組）")
     print(f"=== 多平台配對完成 ===\n")
 
     return matched, rejected, review, price_review

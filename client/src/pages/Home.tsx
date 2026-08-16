@@ -62,6 +62,7 @@ import { useOverrides } from "@/hooks/useOverrides";
 import { toast } from "sonner";
 import { ManualMatchDialog } from "@/components/ManualMatchDialog";
 import { PriceHistoryDialog } from "@/components/PriceHistoryDialog";
+import { trpc } from "@/lib/trpc";
 
 interface MatchedProduct {
   name: string;
@@ -207,6 +208,16 @@ export default function Home() {
 
   // Manual matching
   const overrides = useOverrides();
+  const confirmedRuleMutation = trpc.matchRules.confirm.useMutation({
+    onSuccess: (result) => {
+      const aliases = result.sourceAlias && result.targetAlias
+        ? `（型號別名：${result.sourceAlias} ↔ ${result.targetAlias}）`
+        : "";
+      toast.success(`已同步人工確認規則，下一次爬蟲將優先套用${aliases}`);
+    },
+    onError: () => toast.warning("本次配對已儲存於此裝置；請以管理員身分登入後同步至自動配對引擎"),
+  });
+  const matchingRulesQuery = trpc.matchRules.listForCrawler.useQuery(undefined, { enabled: false });
   const [manualMatchOpen, setManualMatchOpen] = useState(false);
   const [showPriceHistory, setShowPriceHistory] = useState(false);
   const [activeSinyaProduct, setActiveSinyaProduct] = useState<{
@@ -581,6 +592,21 @@ export default function Home() {
     return ids;
   }, [activeSinyaProduct, overrides.overrides]);
 
+  const exportMatchingRules = async () => {
+    const result = await matchingRulesQuery.refetch();
+    const rules = result.data || [];
+    const blob = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), rules }, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "matching-rules.json";
+    link.click();
+    URL.revokeObjectURL(url);
+    toast.success(`已匯出 ${rules.length} 組自動配對規則`);
+  };
+
   return (
     <div className="min-h-screen bg-background">
       {/* ── Header ── */}
@@ -627,6 +653,20 @@ export default function Home() {
                 </Button>
               </TooltipTrigger>
               <TooltipContent>匯出人工配對表</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="text-primary hover:text-primary"
+                  onClick={exportMatchingRules}
+                  disabled={matchingRulesQuery.isFetching}
+                >
+                  <Download className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>匯出已同步的自動配對規則</TooltipContent>
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -1453,7 +1493,14 @@ export default function Home() {
         onConfirm={(their_id, their_name, platform) => {
           if (activeSinyaProduct) {
             const sId = sinyaId(activeSinyaProduct.name);
-            overrides.confirmMatch(sId, activeSinyaProduct.name, their_id, their_name, platform || "coolpc");
+            const targetPlatform = platform || "coolpc";
+            overrides.confirmMatch(sId, activeSinyaProduct.name, their_id, their_name, targetPlatform);
+            confirmedRuleMutation.mutate({
+              sinyaName: activeSinyaProduct.name,
+              targetName: their_name,
+              targetId: their_id,
+              platform: targetPlatform,
+            });
           }
         }}
         onReject={(their_id, their_name) => {

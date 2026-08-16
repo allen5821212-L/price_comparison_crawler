@@ -5,6 +5,7 @@
 """
 
 import json
+import os
 import re
 import time
 import urllib.request
@@ -20,6 +21,12 @@ USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/120.0.0.0 Safari/537.36"
+)
+
+# The endpoint returns active rules only; database credentials are never exposed to the crawler.
+MATCHING_RULES_URL = os.environ.get(
+    "MATCHING_RULES_URL",
+    "https://pricecomp-cr-mlsxyggu.manus.space/api/matching-rules",
 )
 
 # ──────────────────────────────────────────────
@@ -55,6 +62,20 @@ def fetch_url(url, method="GET", data=None, encoding="utf-8", retries=3):
                 print(f"  [ERROR] fetch_url failed after {retries} retries: {url} → {e}")
                 return ""
     return ""
+
+
+def fetch_confirmed_matching_rules():
+    """Load administrator-confirmed product mappings without blocking a normal crawl on failure."""
+    try:
+        raw = fetch_url(MATCHING_RULES_URL, retries=1)
+        payload = json.loads(raw) if raw else {}
+        rules = payload.get("rules", [])
+        if isinstance(rules, list):
+            print(f"  已載入人工確認規則: {len(rules)} 組")
+            return rules
+    except (json.JSONDecodeError, TypeError, ValueError) as error:
+        print(f"  [WARN] 無法解析人工確認規則: {error}")
+    return []
 
 
 # ──────────────────────────────────────────────
@@ -944,9 +965,11 @@ def main(max_cats=None):
     for a, b in CATEGORY_COMPAT:
         compat_set.add((a, b))
         compat_set.add((b, a))
+    confirmed_rules = fetch_confirmed_matching_rules()
     matched, rejected, review, price_review = match_all_platforms(
         sinya_products, coolpc_products, pchome_products, momo_products,
-        category_compat=compat_set
+        category_compat=compat_set,
+        confirmed_rules=confirmed_rules,
     )
     # Store audit data
     audit_data = {
