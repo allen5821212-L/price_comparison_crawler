@@ -8,6 +8,7 @@ import type { TrpcContext } from "../server/_core/context";
 const stamp = `__E2E_${Date.now()}__`;
 const sinyaName = `${stamp} ASUS B850-G`;
 const targetName = `${stamp} ROG B850-G`;
+const rulesEndpoint = process.env.MATCHING_RULES_ENDPOINT || "http://127.0.0.1:3000/api/matching-rules";
 
 function createAdminContext(): TrpcContext {
   const now = new Date();
@@ -45,7 +46,7 @@ try {
     throw new Error(`Unexpected generated aliases: ${JSON.stringify(confirmation)}`);
   }
 
-  const response = await fetch("http://127.0.0.1:3000/api/matching-rules");
+  const response = await fetch(rulesEndpoint);
   const payload = await response.json() as { rules?: Array<{ sinyaName: string }> };
   if (!response.ok || !payload.rules?.some(rule => rule.sinyaName === sinyaName)) {
     throw new Error("Saved rule did not appear in the crawler export endpoint");
@@ -53,7 +54,7 @@ try {
 
   execFileSync("python3", ["crawler/test_rules_e2e.py", sinyaName, targetName], {
     cwd: new URL("..", import.meta.url).pathname,
-    env: { ...process.env, MATCHING_RULES_URL: "http://127.0.0.1:3000/api/matching-rules" },
+    env: { ...process.env, MATCHING_RULES_URL: rulesEndpoint },
     stdio: "inherit",
   });
 
