@@ -56,6 +56,7 @@ import {
   AlertTriangle,
   CheckCheck,
   Trash2,
+  SlidersHorizontal,
 } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useOverrides } from "@/hooks/useOverrides";
@@ -640,6 +641,14 @@ export default function Home() {
                 </TooltipContent>
               </Tooltip>
             )}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" asChild>
+                  <a href="/rules" aria-label="管理已同步規則"><SlidersHorizontal className="size-4" /></a>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>管理已同步規則</TooltipContent>
+            </Tooltip>
             {/* Export/Import */}
             <Tooltip>
               <TooltipTrigger asChild>

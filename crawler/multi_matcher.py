@@ -171,6 +171,7 @@ def apply_confirmed_rules(matched, sinya_products, coolpc_products, pchome_produ
         target_id = rule.get("targetId") or rule.get("target_id")
         source_alias = rule.get("sourceAlias") or rule.get("source_alias") or ""
         target_alias = rule.get("targetAlias") or rule.get("target_alias") or ""
+        rule_id = rule.get("id")
         source = sinya_by_name.get(sinya_name)
         if not source and source_alias:
             source_candidates = [
@@ -229,6 +230,8 @@ def apply_confirmed_rules(matched, sinya_products, coolpc_products, pchome_produ
             match[f"{platform}_score"] = 1.0
 
         match["manual_rule"] = True
+        if isinstance(rule_id, int):
+            match.setdefault("_applied_rule_ids", []).append(rule_id)
         _recalculate_cheaper(match)
         applied += 1
 

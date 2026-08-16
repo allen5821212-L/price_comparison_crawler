@@ -41,6 +41,8 @@ export const matchingFeedback = mysqlTable(
     platform: mysqlEnum("platform", ["coolpc", "pchome", "momo"]).notNull(),
     createdByOpenId: varchar("created_by_open_id", { length: 64 }).notNull(),
     active: boolean("active").default(true).notNull(),
+    hitCount: int("hit_count").default(0).notNull(),
+    lastHitAt: timestamp("last_hit_at"),
     note: text("note"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),

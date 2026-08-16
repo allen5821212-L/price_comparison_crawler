@@ -15,6 +15,13 @@
       "when": 1786891681900,
       "tag": "0001_lush_magus",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1786892848108,
+      "tag": "0002_misty_rhodey",
+      "breakpoints": true
     }
   ]
 }

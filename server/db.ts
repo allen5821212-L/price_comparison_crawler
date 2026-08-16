@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { desc, eq, inArray, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { InsertUser, matchingFeedback, users } from "../drizzle/schema";
 import { ENV } from './_core/env';
@@ -136,6 +136,7 @@ export async function listActiveMatchingFeedback() {
   if (!db) return [];
 
   return db.select({
+    id: matchingFeedback.id,
     sinyaName: matchingFeedback.sinyaName,
     targetName: matchingFeedback.targetName,
     targetId: matchingFeedback.targetId,
@@ -144,4 +145,46 @@ export async function listActiveMatchingFeedback() {
     platform: matchingFeedback.platform,
     updatedAt: matchingFeedback.updatedAt,
   }).from(matchingFeedback).where(eq(matchingFeedback.active, true));
+}
+
+/** Administrator view of all synchronized rules, including inactive rows and usage metrics. */
+export async function listMatchingFeedbackForAdmin() {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+
+  return db.select({
+    id: matchingFeedback.id,
+    sinyaName: matchingFeedback.sinyaName,
+    targetName: matchingFeedback.targetName,
+    targetId: matchingFeedback.targetId,
+    sourceAlias: matchingFeedback.sourceAlias,
+    targetAlias: matchingFeedback.targetAlias,
+    platform: matchingFeedback.platform,
+    active: matchingFeedback.active,
+    hitCount: matchingFeedback.hitCount,
+    lastHitAt: matchingFeedback.lastHitAt,
+    createdAt: matchingFeedback.createdAt,
+    updatedAt: matchingFeedback.updatedAt,
+  }).from(matchingFeedback).orderBy(desc(matchingFeedback.updatedAt));
+}
+
+export async function setMatchingFeedbackActive(id: number, active: boolean) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+
+  await db.update(matchingFeedback).set({ active }).where(eq(matchingFeedback.id, id));
+}
+
+/** Increment usage counts for rules that were actually applied during one crawler run. */
+export async function recordMatchingFeedbackUsage(ids: number[]) {
+  const uniqueIds = Array.from(new Set(ids)).filter(id => Number.isInteger(id) && id > 0);
+  if (uniqueIds.length === 0) return;
+
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+
+  await db.update(matchingFeedback).set({
+    hitCount: sql`${matchingFeedback.hitCount} + 1`,
+    lastHitAt: new Date(),
+  }).where(inArray(matchingFeedback.id, uniqueIds));
 }

@@ -3,6 +3,8 @@ import type { TrpcContext } from "./_core/context";
 
 const dbMocks = vi.hoisted(() => ({
   listActiveMatchingFeedback: vi.fn(),
+  listMatchingFeedbackForAdmin: vi.fn(),
+  setMatchingFeedbackActive: vi.fn(),
   upsertMatchingFeedback: vi.fn(),
 }));
 
@@ -65,5 +67,21 @@ describe("matchRules router", () => {
       targetAlias: "B850-G",
       createdByOpenId: "owner-open-id",
     });
+  });
+
+  it("returns active and inactive rules with management usage fields for administrators", async () => {
+    const rules = [{ id: 7, sinyaName: "ASUS B850-G", targetName: "ROG B850-G", platform: "coolpc", active: false, hitCount: 3, lastHitAt: null }];
+    dbMocks.listMatchingFeedbackForAdmin.mockResolvedValue(rules);
+    const caller = appRouter.createCaller(createAdminContext());
+
+    await expect(caller.matchRules.listForAdmin()).resolves.toEqual(rules);
+  });
+
+  it("updates a rule activation state through the administrator procedure", async () => {
+    dbMocks.setMatchingFeedbackActive.mockResolvedValue(undefined);
+    const caller = appRouter.createCaller(createAdminContext());
+
+    await expect(caller.matchRules.setActive({ id: 7, active: false })).resolves.toEqual({ success: true });
+    expect(dbMocks.setMatchingFeedbackActive).toHaveBeenCalledWith(7, false);
   });
 });

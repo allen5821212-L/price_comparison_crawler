@@ -6,7 +6,7 @@ import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
 import { registerStorageProxy } from "./storageProxy";
 import { appRouter } from "../routers";
-import { listActiveMatchingFeedback } from "../db";
+import { listActiveMatchingFeedback, recordMatchingFeedbackUsage } from "../db";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 
@@ -44,6 +44,20 @@ async function startServer() {
     } catch (error) {
       console.error("[Matching rules] export failed", error);
       res.status(500).json({ rules: [], error: "matching rules unavailable" });
+    }
+  });
+  app.post("/api/matching-rules/usage", async (req, res) => {
+    const remoteAddress = req.socket.remoteAddress || "";
+    const isLoopback = remoteAddress === "127.0.0.1" || remoteAddress === "::1" || remoteAddress.endsWith("127.0.0.1");
+    if (!isLoopback) return res.status(403).json({ error: "crawler endpoint is loopback-only" });
+
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.filter((id: unknown) => Number.isInteger(id)) : [];
+    try {
+      await recordMatchingFeedbackUsage(ids);
+      res.json({ success: true, updated: ids.length });
+    } catch (error) {
+      console.error("[Matching rules] usage update failed", error);
+      res.status(500).json({ success: false, error: "usage update unavailable" });
     }
   });
   // tRPC API

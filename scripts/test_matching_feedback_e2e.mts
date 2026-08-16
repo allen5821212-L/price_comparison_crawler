@@ -47,8 +47,9 @@ try {
   }
 
   const response = await fetch(rulesEndpoint);
-  const payload = await response.json() as { rules?: Array<{ sinyaName: string }> };
-  if (!response.ok || !payload.rules?.some(rule => rule.sinyaName === sinyaName)) {
+  const payload = await response.json() as { rules?: Array<{ id: number; sinyaName: string }> };
+  const exportedRule = payload.rules?.find(rule => rule.sinyaName === sinyaName);
+  if (!response.ok || !exportedRule) {
     throw new Error("Saved rule did not appear in the crawler export endpoint");
   }
 
@@ -58,7 +59,21 @@ try {
     stdio: "inherit",
   });
 
-  console.log("PASS: tRPC confirmation → database → HTTP export → crawler rule application");
+  execFileSync("python3", ["crawler/test_rule_usage_e2e.py", String(exportedRule.id)], {
+    cwd: new URL("..", import.meta.url).pathname,
+    env: { ...process.env, MATCHING_RULE_USAGE_URL: "http://127.0.0.1:3000/api/matching-rules/usage" },
+    stdio: "inherit",
+  });
+
+  const stored = await db.select({ hitCount: matchingFeedback.hitCount, lastHitAt: matchingFeedback.lastHitAt })
+    .from(matchingFeedback)
+    .where(eq(matchingFeedback.id, exportedRule.id))
+    .limit(1);
+  if (stored[0]?.hitCount !== 1 || !stored[0]?.lastHitAt) {
+    throw new Error(`Crawler usage metrics were not persisted: ${JSON.stringify(stored[0])}`);
+  }
+
+  console.log("PASS: tRPC confirmation → database → HTTP export → crawler application → usage metrics");
 } catch (error) {
   exitCode = 1;
   console.error(error);

@@ -28,6 +28,10 @@ MATCHING_RULES_URL = os.environ.get(
     "MATCHING_RULES_URL",
     "https://pricecomp-cr-mlsxyggu.manus.space/api/matching-rules",
 )
+MATCHING_RULE_USAGE_URL = os.environ.get(
+    "MATCHING_RULE_USAGE_URL",
+    "http://127.0.0.1:3000/api/matching-rules/usage",
+)
 
 # ──────────────────────────────────────────────
 #  HTTP utility
@@ -76,6 +80,25 @@ def fetch_confirmed_matching_rules():
     except (json.JSONDecodeError, TypeError, ValueError) as error:
         print(f"  [WARN] 無法解析人工確認規則: {error}")
     return []
+
+
+def report_matching_rule_usage(rule_ids):
+    """Report applied rule IDs to the sandbox-local API. Failure never blocks a crawler run."""
+    if not rule_ids:
+        return
+    try:
+        payload = json.dumps({"ids": rule_ids}).encode("utf-8")
+        req = urllib.request.Request(
+            MATCHING_RULE_USAGE_URL,
+            data=payload,
+            headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as response:
+            result = json.loads(response.read().decode("utf-8", errors="replace"))
+        print(f"  已更新人工規則使用統計: {result.get('updated', 0)} 組")
+    except Exception as error:
+        print(f"  [WARN] 無法更新人工規則使用統計: {error}")
 
 
 # ──────────────────────────────────────────────
@@ -971,6 +994,13 @@ def main(max_cats=None):
         category_compat=compat_set,
         confirmed_rules=confirmed_rules,
     )
+    applied_rule_ids = sorted({
+        rule_id
+        for match in matched
+        for rule_id in match.pop("_applied_rule_ids", [])
+        if isinstance(rule_id, int) and rule_id > 0
+    })
+    report_matching_rule_usage(applied_rule_ids)
     # Store audit data
     audit_data = {
         "rejected": rejected[:500],

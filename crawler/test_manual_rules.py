@@ -17,7 +17,7 @@ def test_pchome_rule_overrides_auto_target():
 
     applied, skipped = apply_confirmed_rules(
         matched, [sinya], [coolpc], [pchome], [],
-        [{"sinyaName": sinya["name"], "targetName": pchome["name"], "targetId": "pchome_p1", "platform": "pchome"}],
+        [{"id": 31, "sinyaName": sinya["name"], "targetName": pchome["name"], "targetId": "pchome_p1", "platform": "pchome"}],
         {"pchome"},
     )
 
@@ -26,6 +26,7 @@ def test_pchome_rule_overrides_auto_target():
     assert matched[0]["pchome_price"] == 6790
     assert matched[0]["cheaper"] == "pchome"
     assert matched[0]["manual_rule"] is True
+    assert matched[0]["_applied_rule_ids"] == [31]
 
 
 def test_coolpc_rule_adds_unmatched_source_row():

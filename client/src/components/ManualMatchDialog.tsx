@@ -99,6 +99,10 @@ function findMatches(text: string, pattern: RegExp): string[] {
   return Array.from(text.matchAll(pattern), (match) => match[0]);
 }
 
+function findCaptured(text: string, pattern: RegExp, format: (value: string) => string): string[] {
+  return Array.from(text.matchAll(pattern), (match) => match[1] ? format(match[1]) : "");
+}
+
 /**
  * 從各平台常見的品名與副標題中萃取可識別的型號及硬體規格。
  * 規則故意採保守方式：無法可靠判讀時顯示「未偵測到」，不將其誤判為差異。
@@ -167,6 +171,22 @@ function extractSpecRows(oursName: string, theirsName: string, theirsSubtitle = 
     ...findMatches(text, /\bLGA\s?1[7-9]\d{2}\b/g),
   ]);
 
+  const cpuCores = (text: string) => unique([
+    ...findCaptured(text, /\b(\d{1,2})\s*(?:CORE|CORES|核)\b/g, value => `${value} 核`),
+  ]);
+
+  const gpuVram = (text: string) => unique([
+    ...findCaptured(
+      text,
+      /\b(?:RTX\s?\d{4}[A-Z]*|RX\s?\d{4}[A-Z]*|ARC\s?[A-Z]\d{3,4})[^/，,]{0,45}?\b(\d{1,2})\s?(?:GB|G)\b/g,
+      value => `${value}GB`,
+    ),
+  ]);
+
+  const memorySlots = (text: string) => unique([
+    ...findCaptured(text, /\b(\d)\s*(?:X|×)?\s*DIMM\b/g, value => `${value} DIMM`),
+  ]);
+
   const compare = (label: string, ours: string[], theirs: string[]): SpecRow => {
     if (ours.length === 0 || theirs.length === 0) return { label, ours, theirs, status: "missing" };
     const oursKey = [...ours].sort().join("|");
@@ -177,9 +197,12 @@ function extractSpecRows(oursName: string, theirsName: string, theirsSubtitle = 
   return [
     compare("型號 / 系列", modelCodes(oursText), modelCodes(theirsText)),
     compare("CPU", cpu(oursText), cpu(theirsText)),
+    compare("CPU 核心數", cpuCores(oursText), cpuCores(theirsText)),
     compare("GPU", gpu(oursText), gpu(theirsText)),
+    compare("GPU VRAM", gpuVram(oursText), gpuVram(theirsText)),
     compare("主機板晶片組", chipset(oursText), chipset(theirsText)),
     compare("CPU 插槽", socket(oursText), socket(theirsText)),
+    compare("記憶體插槽", memorySlots(oursText), memorySlots(theirsText)),
     compare("容量 / 記憶體", capacity(oursText), capacity(theirsText)),
     compare("尺寸", size(oursText), size(theirsText)),
     compare("頻率", frequency(oursText), frequency(theirsText)),

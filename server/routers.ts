@@ -3,7 +3,12 @@ import { z } from "zod";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { adminProcedure, publicProcedure, router } from "./_core/trpc";
-import { listActiveMatchingFeedback, upsertMatchingFeedback } from "./db";
+import {
+  listActiveMatchingFeedback,
+  listMatchingFeedbackForAdmin,
+  setMatchingFeedbackActive,
+  upsertMatchingFeedback,
+} from "./db";
 
 function deriveModelAlias(name: string): string | null {
   const normalized = name
@@ -34,6 +39,15 @@ export const appRouter = router({
   matchRules: router({
     /** The scheduled crawler reads only active mappings through this endpoint. */
     listForCrawler: publicProcedure.query(async () => listActiveMatchingFeedback()),
+    /** Administrator management view includes disabled rules and crawler usage information. */
+    listForAdmin: adminProcedure.query(async () => listMatchingFeedbackForAdmin()),
+    setActive: adminProcedure.input(z.object({
+      id: z.number().int().positive(),
+      active: z.boolean(),
+    })).mutation(async ({ input }) => {
+      await setMatchingFeedbackActive(input.id, input.active);
+      return { success: true } as const;
+    }),
     /** Only the project administrator can feed an authoritative match into future crawls. */
     confirm: adminProcedure.input(z.object({
       sinyaName: z.string().min(1).max(512),
