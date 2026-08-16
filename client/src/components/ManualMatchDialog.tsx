@@ -82,6 +82,86 @@ function similarity(a: string, b: string): number {
   return tokensA.size > 0 ? common / Math.max(tokensA.size, tokensB.size) : 0;
 }
 
+type SpecStatus = "match" | "diff" | "missing";
+
+interface SpecRow {
+  label: string;
+  ours: string[];
+  theirs: string[];
+  status: SpecStatus;
+}
+
+function unique(values: string[]): string[] {
+  return Array.from(new Set(values.map((value) => value.trim().toUpperCase()).filter(Boolean)));
+}
+
+function findMatches(text: string, pattern: RegExp): string[] {
+  return Array.from(text.matchAll(pattern), (match) => match[0]);
+}
+
+/**
+ * 從各平台常見的品名與副標題中萃取可識別的型號及硬體規格。
+ * 規則故意採保守方式：無法可靠判讀時顯示「未偵測到」，不將其誤判為差異。
+ */
+function extractSpecRows(oursName: string, theirsName: string, theirsSubtitle = ""): SpecRow[] {
+  const oursText = oursName.toUpperCase();
+  const theirsText = `${theirsName} ${theirsSubtitle}`.toUpperCase();
+
+  const modelCodes = (text: string) => unique([
+    ...findMatches(text, /\b(?=[A-Z0-9-]{4,}\b)(?=[A-Z0-9-]*[A-Z])(?=[A-Z0-9-]*\d)[A-Z0-9]+(?:-[A-Z0-9]+)*\b/g),
+    ...findMatches(text, /\b(?:ROG|TUF|STRIX|ISKUR|KATANA|THINKPAD|ELITEBOOK|IDEAPAD|NITRO|PREDATOR|PRIME|MORTAR|GAMING)\s+[A-Z0-9-]+(?:\s+[A-Z0-9-]+)?\b/g),
+  ]);
+
+  const capacity = (text: string) => unique(
+    findMatches(text, /\b\d+(?:\.\d+)?\s?(?:TB|GB|G)\b/g)
+  );
+
+  const size = (text: string) => unique(
+    [
+      ...findMatches(text, /\b\d+(?:\.\d+)?\s?(?:INCH|MM|CM)\b/g),
+      ...findMatches(text, /\d+(?:\.\d+)?\s?吋/g),
+    ]
+  );
+
+  const frequency = (text: string) => unique(
+    findMatches(text, /\b\d+(?:\.\d+)?\s?(?:HZ|MHZ|GHZ)\b/g)
+  );
+
+  const power = (text: string) => unique(
+    findMatches(text, /\b\d+\s?W\b/g)
+  );
+
+  const standards = (text: string) => unique(
+    [
+      ...findMatches(text, /\bDDR[345]\b/g),
+      ...findMatches(text, /\bPCIE?\s?[3456](?:\.0)?\b/g),
+      ...findMatches(text, /\bWI-?FI\s?[5-7](?:E)?\b/g),
+      ...findMatches(text, /\bUSB\s?(?:3\.2|4|C)\b/g),
+      ...findMatches(text, /\b(?:MINI-ITX|M-ATX|ATX)\b/g),
+      ...findMatches(text, /\bRTX\s?\d{4}[A-Z]*\b/g),
+      ...findMatches(text, /\bRX\s?\d{4}[A-Z]*\b/g),
+      ...findMatches(text, /\bRYZEN\s?[3579]\s?\d{4}[A-Z]*\b/g),
+      ...findMatches(text, /\bI[3579]-?\d{4,5}[A-Z]*\b/g),
+    ]
+  );
+
+  const compare = (label: string, ours: string[], theirs: string[]): SpecRow => {
+    if (ours.length === 0 || theirs.length === 0) return { label, ours, theirs, status: "missing" };
+    const oursKey = [...ours].sort().join("|");
+    const theirsKey = [...theirs].sort().join("|");
+    return { label, ours, theirs, status: oursKey === theirsKey ? "match" : "diff" };
+  };
+
+  return [
+    compare("型號 / 系列", modelCodes(oursText), modelCodes(theirsText)),
+    compare("容量 / 記憶體", capacity(oursText), capacity(theirsText)),
+    compare("尺寸", size(oursText), size(theirsText)),
+    compare("頻率", frequency(oursText), frequency(theirsText)),
+    compare("功率", power(oursText), power(theirsText)),
+    compare("版本 / 介面", standards(oursText), standards(theirsText)),
+  ];
+}
+
 const PLATFORM_LABELS: Record<Platform, string> = {
   coolpc: "原價屋",
   pchome: "PCHOME",
@@ -286,6 +366,11 @@ export function ManualMatchDialog({
                 const isRejected = rejectedIds.has(id);
                 const isSelected = idx === selectedIndex;
                 const isExpanded = expandedId === id;
+                const specRows = isExpanded
+                  ? extractSpecRows(sinyaProduct.name, p.name, p.subtitle)
+                  : [];
+                const detectedSpecRows = specRows.filter((row) => row.ours.length > 0 || row.theirs.length > 0);
+                const diffCount = detectedSpecRows.filter((row) => row.status === "diff").length;
                 return (
                   <div key={id}>
                     <div
@@ -402,6 +487,46 @@ export function ManualMatchDialog({
                             {sinyaProduct.price < p.price ? "（欣亞較便宜）" : sinyaProduct.price > p.price ? `（${PLATFORM_LABELS[activePlatform]}較便宜）` : "（價格相同）"}
                           </p>
                           {p.subtitle && <p className="text-muted-foreground mt-1">規格：{p.subtitle}</p>}
+                        </div>
+                        <div className="border-t border-border pt-3">
+                          <div className="mb-2 flex items-center justify-between gap-2">
+                            <p className="font-semibold text-foreground">自動萃取型號與規格</p>
+                            {detectedSpecRows.length === 0 ? (
+                              <Badge variant="outline" className="text-xs text-muted-foreground">未偵測到可比較規格</Badge>
+                            ) : diffCount > 0 ? (
+                              <Badge className="text-xs bg-amber-500/15 text-amber-700 hover:bg-amber-500/20 dark:text-amber-400">
+                                偵測到 {diffCount} 項差異
+                              </Badge>
+                            ) : (
+                              <Badge className="text-xs bg-green-500/15 text-green-700 hover:bg-green-500/20 dark:text-green-400">
+                                已萃取規格相同
+                              </Badge>
+                            )}
+                          </div>
+                          {detectedSpecRows.length > 0 && (
+                            <div className="overflow-hidden rounded-md border border-border">
+                              <div className="grid grid-cols-[96px_minmax(0,1fr)_minmax(0,1fr)] bg-muted/40 text-[11px] font-semibold text-muted-foreground">
+                                <div className="px-2 py-1.5">欄位</div>
+                                <div className="border-l border-border px-2 py-1.5">欣亞</div>
+                                <div className="border-l border-border px-2 py-1.5">{PLATFORM_LABELS[activePlatform]}</div>
+                              </div>
+                              {detectedSpecRows.map((row) => (
+                                <div key={row.label} className="grid grid-cols-[96px_minmax(0,1fr)_minmax(0,1fr)] border-t border-border text-[11px]">
+                                  <div className="flex items-center gap-1 px-2 py-1.5 font-medium text-muted-foreground">
+                                    <span className={`size-1.5 shrink-0 rounded-full ${row.status === "match" ? "bg-green-500" : row.status === "diff" ? "bg-amber-500" : "bg-muted-foreground/40"}`} />
+                                    {row.label}
+                                  </div>
+                                  <div className={`border-l border-border px-2 py-1.5 break-words ${row.status === "diff" ? "bg-amber-500/5 text-amber-800 dark:text-amber-300" : ""}`}>
+                                    {row.ours.length > 0 ? row.ours.join("、") : "未偵測到"}
+                                  </div>
+                                  <div className={`border-l border-border px-2 py-1.5 break-words ${row.status === "diff" ? "bg-amber-500/5 text-amber-800 dark:text-amber-300" : ""}`}>
+                                    {row.theirs.length > 0 ? row.theirs.join("、") : "未偵測到"}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          <p className="mt-2 text-[11px] text-muted-foreground">綠點為相同，黃點為偵測到的規格差異；未偵測到不代表規格相同。</p>
                         </div>
                       </div>
                     )}
