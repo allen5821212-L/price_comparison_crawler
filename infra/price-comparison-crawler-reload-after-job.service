@@ -1,0 +1,7 @@
+[Unit]
+Description=Reload price comparison worker after the active crawl finishes
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/ubuntu/price_comparison_crawler/crawler/reload_worker_after_job.sh

@@ -29,9 +29,12 @@ export default function CrawlerMonitor() {
   const { user } = useAuth();
   const utils = trpc.useUtils();
   const [category, setCategory] = useState("full");
-  const jobsQuery = trpc.crawler.jobs.useQuery(undefined, { enabled: user?.role === "admin", refetchInterval: 15_000 });
-  const eventsQuery = trpc.crawler.events.useQuery(undefined, { enabled: user?.role === "admin", refetchInterval: 15_000 });
-  const categoriesQuery = trpc.comparison.latest.useQuery({ page: 1, pageSize: 10 }, { enabled: user?.role === "admin" });
+  // DashboardLayout renders this page only after authentication resolves. Leaving
+  // these queries enabled avoids a client-side role hydration race that can keep the
+  // monitor in a permanent loading state; adminProcedure still enforces permissions.
+  const jobsQuery = trpc.crawler.jobs.useQuery(undefined, { refetchInterval: 15_000 });
+  const eventsQuery = trpc.crawler.events.useQuery(undefined, { refetchInterval: 15_000 });
+  const categoriesQuery = trpc.comparison.latest.useQuery({ page: 1, pageSize: 10 });
   const enqueue = trpc.crawler.enqueue.useMutation({
     onSuccess: (result) => {
       toast.success(`爬蟲工作 #${result.id} 已排入持續執行器`);
