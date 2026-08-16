@@ -1030,6 +1030,26 @@ def main(max_cats=None):
         "avg_price_diff": sum(abs(m["price_diff"]) for m in matched) / max(len(matched), 1),
     }
 
+    # Persist dynamic data before writing the temporary compatibility files. The public API
+    # always exposes the latest completed run, so a failed write cannot replace a good result.
+    try:
+        from dynamic_store import persist_crawl_result
+
+        dynamic_run_id = persist_crawl_result(
+            stats=stats,
+            categories=categories,
+            sinya_products=sinya_products,
+            coolpc_products=coolpc_products,
+            pchome_products=pchome_products,
+            momo_products=momo_products,
+            matches=matched,
+        )
+        print(f"動態比價資料已寫入資料庫（執行批次 {dynamic_run_id}）")
+    except Exception as error:
+        # Static files remain as a recovery artifact while the dynamic migration is rolling out.
+        # A crawler run is still reported as failed in the database when a run record was created.
+        print(f"[WARN] 動態資料庫寫入失敗，保留既有靜態備援：{error}")
+
     # Save all data — include the official Sinya DIY category list (in order)
     sinya_categories = [c["name"] for c in categories] if categories else []
 

@@ -1,11 +1,11 @@
 /**
  * PriceHistoryDialog — 價格歷史趨勢圖
  *
- * 載入 price_history.json，以 SVG 繪製折線圖展示商品價格變化趨勢。
+ * 從動態資料庫 API 載入價格歷史，以 SVG 繪製折線圖展示商品價格變化趨勢。
  * 支援搜尋商品名稱，顯示欣亞與原價屋兩條價格線。
  */
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useMemo } from "react";
 import {
   Dialog,
   DialogContent,
@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Search } from "lucide-react";
+import { trpc } from "@/lib/trpc";
 
 interface PriceSnapshot {
   sinya_name: string;
@@ -34,20 +35,10 @@ interface PriceHistoryDialogProps {
 }
 
 export function PriceHistoryDialog({ open, onOpenChange }: PriceHistoryDialogProps) {
-  const [history, setHistory] = useState<HistoryDay[]>([]);
+  const historyQuery = trpc.comparison.history.useQuery(undefined, { enabled: open });
+  const history = (historyQuery.data ?? []) as HistoryDay[];
   const [search, setSearch] = useState("");
   const [selectedProduct, setSelectedProduct] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    fetch("/data/price_history.json")
-      .then((r) => {
-        if (!r.ok) throw new Error("無法載入價格歷史");
-        return r.json();
-      })
-      .then((data: HistoryDay[]) => setHistory(data))
-      .catch(() => setHistory([]));
-  }, [open]);
 
   // Build product list from latest snapshot
   const productList = useMemo(() => {

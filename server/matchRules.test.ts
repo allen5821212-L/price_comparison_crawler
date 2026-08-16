@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TrpcContext } from "./_core/context";
 
 const dbMocks = vi.hoisted(() => ({
+  getDynamicPriceHistory: vi.fn(),
+  getLatestCrawlerStatus: vi.fn(),
+  getLatestDynamicComparison: vi.fn(),
   listActiveMatchingFeedback: vi.fn(),
   listMatchingFeedbackForAdmin: vi.fn(),
   setMatchingFeedbackActive: vi.fn(),
@@ -83,5 +86,28 @@ describe("matchRules router", () => {
 
     await expect(caller.matchRules.setActive({ id: 7, active: false })).resolves.toEqual({ success: true });
     expect(dbMocks.setMatchingFeedbackActive).toHaveBeenCalledWith(7, false);
+  });
+
+  it("returns the latest dynamic comparison payload for public storefront queries", async () => {
+    const comparison = {
+      stats: { matched_total: 1 },
+      matched: [{ sinya_name: "Samsung 870 EVO 4TB", coolpc_name: "Samsung 870 EVO 4TB" }],
+      sinya_products: [], coolpc_products: [], pchome_products: [], momo_products: [], sinya_categories: [],
+    };
+    dbMocks.getLatestDynamicComparison.mockResolvedValue(comparison);
+    const caller = appRouter.createCaller(createAdminContext());
+
+    await expect(caller.comparison.latest()).resolves.toEqual(comparison);
+  });
+
+  it("serves database-backed price history and crawler status through public queries", async () => {
+    const history = [{ date: "2026-08-16", matched: [] }];
+    const status = { id: 4, status: "completed", matchedTotal: 2008 };
+    dbMocks.getDynamicPriceHistory.mockResolvedValue(history);
+    dbMocks.getLatestCrawlerStatus.mockResolvedValue(status);
+    const caller = appRouter.createCaller(createAdminContext());
+
+    await expect(caller.comparison.history()).resolves.toEqual(history);
+    await expect(caller.comparison.status()).resolves.toEqual(status);
   });
 });

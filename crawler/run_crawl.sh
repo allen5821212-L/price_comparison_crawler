@@ -4,6 +4,15 @@
 # 0 */6 * * * /home/ubuntu/price_comparison_crawler/crawler/run_crawl.sh >> /home/ubuntu/price_comparison_crawler/crawler/crawl.log 2>&1
 
 cd /home/ubuntu/price_comparison_crawler
+
+# A complete four-platform crawl can run longer than the trigger interval.
+# Keep one writer at a time so no run can replace a newer completed database batch.
+exec 9>/tmp/price_comparison_crawler.lock
+if ! flock -n 9; then
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] 略過重疊爬蟲：既有執行仍在進行中" >> crawler/crawl.log
+  exit 0
+fi
+
 python3 crawler/crawl.py >> crawler/crawl.log 2>&1
 
 # 如果 WebDev 專案正在運行，重新啟動以載入新資料

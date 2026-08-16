@@ -129,6 +129,12 @@ interface ComparisonData {
   pchome_products?: CoolpcProduct[];
   momo_products?: CoolpcProduct[];
   sinya_categories: string[];
+  pagination?: {
+    page: number;
+    pageSize: number;
+    total: number;
+    totalPages: number;
+  };
 }
 
 type SortField = "price_diff" | "sinya_price" | "coolpc_price" | "pchome_price" | "momo_price" | "name" | "score" | "price_diff_abs" | "best_price";
@@ -191,10 +197,6 @@ function getCheapestPlatform(sinyaPrice: number, coolpcPrice: number, pchomePric
 
 export default function Home() {
   const { theme, toggleTheme } = useTheme();
-  const [data, setData] = useState<ComparisonData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [coolpcCategoryFilter, setCoolpcCategoryFilter] = useState("all");
@@ -206,6 +208,24 @@ export default function Home() {
   const [sortOrder, setSortOrder] = useState<SortOrder>("asc");
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 25;
+  const comparisonQuery = trpc.comparison.latest.useQuery({
+    page: currentPage,
+    pageSize: itemsPerPage,
+    search: searchQuery.trim() || undefined,
+    category: categoryFilter === "all" ? undefined : categoryFilter,
+    cheaper: cheaperFilter === "all" ? undefined : cheaperFilter,
+    score: scoreFilter === "all" ? undefined : scoreFilter,
+    hasSpecDiff: specDiffFilter || undefined,
+    sort: sortField,
+    order: sortOrder,
+  }, {
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
+  });
+  const data = (comparisonQuery.data ?? null) as ComparisonData | null;
+  const loading = comparisonQuery.isLoading;
+  const error = comparisonQuery.error?.message ?? null;
+  const fetchData = () => comparisonQuery.refetch();
 
   // Manual matching
   const overrides = useOverrides();
@@ -228,25 +248,6 @@ export default function Home() {
     image: string;
   } | null>(null);
   const importFileRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  const fetchData = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const resp = await fetch("/data/comparison.json");
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const json = (await resp.json()) as ComparisonData;
-      setData(json);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "載入資料失敗");
-    } finally {
-      setLoading(false);
-    }
-  };
 
   // Use the official Sinya DIY category list (in order) from the crawler.
   // Fallback: derive from matched products if the list is missing.
@@ -417,43 +418,14 @@ export default function Home() {
   const filteredAndSorted = useMemo(() => {
     let result = [...processedMatches];
 
-    // Search filter
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      result = result.filter(
-        (m) =>
-          m.name.toLowerCase().includes(q) ||
-          m.sinya_name.toLowerCase().includes(q) ||
-          m.coolpc_name.toLowerCase().includes(q)
-      );
-    }
-
-    // Sinya category filter
-    if (categoryFilter !== "all") {
-      result = result.filter((m) => m.category === categoryFilter);
-    }
-
-    // CoolPC category filter
+    // The dynamic API already applies search, Sinya category, cheaper platform,
+    // score, specification-difference filtering, sorting, and pagination.
+    // CoolPC category and local override state remain browser-side because they
+    // depend on the locally stored manual review queue.
     if (coolpcCategoryFilter !== "all") {
       result = result.filter((m) => {
         const cpCat = coolpcProductMap.get(m.coolpc_name)?.category;
         return cpCat === coolpcCategoryFilter;
-      });
-    }
-
-    // Cheaper filter
-    if (cheaperFilter !== "all") {
-      result = result.filter((m) => m.cheaper === cheaperFilter);
-    }
-
-    // Score filter
-    if (scoreFilter !== "all") {
-      result = result.filter((m) => {
-        const s = m.score ?? 0;
-        if (scoreFilter === "high") return s >= 0.85;
-        if (scoreFilter === "medium") return s >= 0.70 && s < 0.85;
-        if (scoreFilter === "low") return s < 0.70;
-        return true;
       });
     }
 
@@ -478,60 +450,12 @@ export default function Home() {
       });
     }
 
-    // Spec diff filter
-    if (specDiffFilter) {
-      result = result.filter((m) => m.spec_diff && m.spec_diff.length > 0);
-    }
-
-    // Sort
-    result.sort((a, b) => {
-      let cmp = 0;
-      switch (sortField) {
-        case "price_diff":
-          cmp = a.price_diff - b.price_diff;
-          break;
-        case "price_diff_abs":
-          cmp = Math.abs(a.price_diff) - Math.abs(b.price_diff);
-          break;
-        case "sinya_price":
-          cmp = a.sinya_price - b.sinya_price;
-          break;
-        case "coolpc_price":
-          cmp = a.coolpc_price - b.coolpc_price;
-          break;
-        case "pchome_price":
-          cmp = (a.pchome_price ?? 0) - (b.pchome_price ?? 0);
-          break;
-        case "momo_price":
-          cmp = (a.momo_price ?? 0) - (b.momo_price ?? 0);
-          break;
-        case "name":
-          cmp = a.name.localeCompare(b.name, "zh-TW");
-          break;
-        case "score":
-          cmp = (a.score ?? 0) - (b.score ?? 0);
-          break;
-        case "best_price": {
-          // 最低價格 = 四平台中可用的最低價
-          const aPrices = [a.sinya_price, a.coolpc_price, a.pchome_price || Infinity, a.momo_price || Infinity].filter(p => p > 0);
-          const bPrices = [b.sinya_price, b.coolpc_price, b.pchome_price || Infinity, b.momo_price || Infinity].filter(p => p > 0);
-          const aMin = aPrices.length ? Math.min(...aPrices) : Infinity;
-          const bMin = bPrices.length ? Math.min(...bPrices) : Infinity;
-          cmp = aMin - bMin;
-          break;
-        }
-      }
-      return sortOrder === "asc" ? cmp : -cmp;
-    });
-
     return result;
-  }, [processedMatches, searchQuery, categoryFilter, coolpcCategoryFilter, cheaperFilter, scoreFilter, overrideFilter, specDiffFilter, sortField, sortOrder, coolpcProductMap, overrides]);
+  }, [processedMatches, coolpcCategoryFilter, overrideFilter, coolpcProductMap, overrides]);
 
-  const totalPages = Math.ceil(filteredAndSorted.length / itemsPerPage);
-  const paginatedItems = filteredAndSorted.slice(
-    (currentPage - 1) * itemsPerPage,
-    currentPage * itemsPerPage
-  );
+  const totalPages = data?.pagination?.totalPages ?? 1;
+  const totalResults = data?.pagination?.total ?? filteredAndSorted.length;
+  const paginatedItems = filteredAndSorted;
 
   // Reset to page 1 when filters change
   useEffect(() => {
@@ -1123,7 +1047,7 @@ export default function Home() {
           <>
             <div className="mb-3 flex items-center justify-between text-sm text-muted-foreground">
               <span>
-                共 {filteredAndSorted.length} 筆結果，第 {currentPage}/
+                共 {totalResults} 筆結果，第 {currentPage}/
                 {totalPages || 1} 頁
               </span>
             </div>

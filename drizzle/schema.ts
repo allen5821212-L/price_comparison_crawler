@@ -1,4 +1,4 @@
-import { boolean, int, mysqlEnum, mysqlTable, text, timestamp, uniqueIndex, varchar } from "drizzle-orm/mysql-core";
+import { boolean, date, decimal, index, int, mysqlEnum, mysqlTable, text, timestamp, uniqueIndex, varchar } from "drizzle-orm/mysql-core";
 
 /**
  * Core user table backing auth flow.
@@ -57,3 +57,119 @@ export const matchingFeedback = mysqlTable(
 
 export type MatchingFeedback = typeof matchingFeedback.$inferSelect;
 export type InsertMatchingFeedback = typeof matchingFeedback.$inferInsert;
+
+/**
+ * 每次四平台爬蟲的執行生命週期與彙總數據。
+ * 只有 completed 的最新一筆會提供給公開比價 API，避免失敗中的爬蟲覆蓋使用者目前看到的資料。
+ */
+export const comparisonRuns = mysqlTable(
+  "comparison_runs",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    status: mysqlEnum("status", ["running", "completed", "failed"]).default("running").notNull(),
+    sinyaTotal: int("sinya_total").default(0).notNull(),
+    coolpcTotal: int("coolpc_total").default(0).notNull(),
+    pchomeTotal: int("pchome_total").default(0).notNull(),
+    momoTotal: int("momo_total").default(0).notNull(),
+    matchedTotal: int("matched_total").default(0).notNull(),
+    sinyaCheaper: int("sinya_cheaper").default(0).notNull(),
+    coolpcCheaper: int("coolpc_cheaper").default(0).notNull(),
+    pchomeCheaper: int("pchome_cheaper").default(0).notNull(),
+    momoCheaper: int("momo_cheaper").default(0).notNull(),
+    samePrice: int("same_price").default(0).notNull(),
+    avgPriceDiff: decimal("avg_price_diff", { precision: 12, scale: 2 }).default("0").notNull(),
+    sinyaCategories: text("sinya_categories"),
+    errorMessage: text("error_message"),
+    startedAt: timestamp("started_at").defaultNow().notNull(),
+    finishedAt: timestamp("finished_at"),
+  },
+  table => ({
+    statusFinishedIdx: index("comparison_runs_status_finished_idx").on(table.status, table.finishedAt),
+  }),
+);
+
+/** Current catalog records observed by the latest successful crawl. */
+export const comparisonProducts = mysqlTable(
+  "comparison_products",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    platform: mysqlEnum("platform", ["sinya", "coolpc", "pchome", "momo"]).notNull(),
+    externalId: varchar("external_id", { length: 255 }).notNull(),
+    name: varchar("name", { length: 1024 }).notNull(),
+    subtitle: text("subtitle"),
+    price: int("price").notNull(),
+    originalPrice: int("original_price"),
+    url: text("url"),
+    image: text("image"),
+    category: varchar("category", { length: 512 }),
+    lastSeenRunId: int("last_seen_run_id").notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    uniquePlatformExternal: uniqueIndex("comparison_products_platform_external_unique").on(table.platform, table.externalId),
+    currentCatalogIdx: index("comparison_products_current_catalog_idx").on(table.lastSeenRunId, table.platform, table.category),
+  }),
+);
+
+/**
+ * 已完成爬蟲的目前配對結果。payload 保留原始四平台欄位，讓前端可無損延續既有顯示契約；
+ * 重要篩選欄位另行正規化，方便後續改成伺服器端篩選與分頁。
+ */
+export const comparisonMatches = mysqlTable(
+  "comparison_matches",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    runId: int("run_id").notNull(),
+    sourceKey: varchar("source_key", { length: 128 }).notNull(),
+    sinyaName: varchar("sinya_name", { length: 1024 }).notNull(),
+    coolpcName: varchar("coolpc_name", { length: 1024 }),
+    pchomeName: varchar("pchome_name", { length: 1024 }),
+    momoName: varchar("momo_name", { length: 1024 }),
+    category: varchar("category", { length: 512 }),
+    sinyaPrice: int("sinya_price").notNull(),
+    coolpcPrice: int("coolpc_price").notNull(),
+    pchomePrice: int("pchome_price"),
+    momoPrice: int("momo_price"),
+    priceDiff: int("price_diff").notNull(),
+    cheaper: mysqlEnum("cheaper", ["sinya", "coolpc", "pchome", "momo", "tie"]).notNull(),
+    score: decimal("score", { precision: 7, scale: 4 }).notNull(),
+    hasSpecDiff: boolean("has_spec_diff").default(false).notNull(),
+    payload: text("payload").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  table => ({
+    uniqueRunSource: uniqueIndex("comparison_matches_run_source_unique").on(table.runId, table.sourceKey),
+    currentMatchIdx: index("comparison_matches_current_match_idx").on(table.runId, table.category, table.cheaper),
+    scoreIdx: index("comparison_matches_score_idx").on(table.runId, table.score),
+  }),
+);
+
+/** One snapshot per product and date; every same-day crawl refreshes that day's values. */
+export const comparisonPriceHistory = mysqlTable(
+  "comparison_price_history",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    snapshotDate: date("snapshot_date").notNull(),
+    sourceKey: varchar("source_key", { length: 128 }).notNull(),
+    sinyaName: varchar("sinya_name", { length: 1024 }).notNull(),
+    coolpcName: varchar("coolpc_name", { length: 1024 }),
+    pchomeName: varchar("pchome_name", { length: 1024 }),
+    momoName: varchar("momo_name", { length: 1024 }),
+    sinyaPrice: int("sinya_price").notNull(),
+    coolpcPrice: int("coolpc_price").notNull(),
+    pchomePrice: int("pchome_price"),
+    momoPrice: int("momo_price"),
+    priceDiff: int("price_diff").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    uniqueDailySnapshot: uniqueIndex("comparison_history_daily_source_unique").on(table.snapshotDate, table.sourceKey),
+    productHistoryIdx: index("comparison_history_product_idx").on(table.sourceKey, table.snapshotDate),
+  }),
+);
+
+export type ComparisonRun = typeof comparisonRuns.$inferSelect;
+export type ComparisonProduct = typeof comparisonProducts.$inferSelect;
+export type ComparisonMatch = typeof comparisonMatches.$inferSelect;
+export type ComparisonPriceHistory = typeof comparisonPriceHistory.$inferSelect;

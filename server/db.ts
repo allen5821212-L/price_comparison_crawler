@@ -1,6 +1,14 @@
-import { desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, like, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, matchingFeedback, users } from "../drizzle/schema";
+import {
+  comparisonMatches,
+  comparisonPriceHistory,
+  comparisonProducts,
+  comparisonRuns,
+  InsertUser,
+  matchingFeedback,
+  users,
+} from "../drizzle/schema";
 import { ENV } from './_core/env';
 
 export type FeedbackPlatform = "coolpc" | "pchome" | "momo";
@@ -187,4 +195,227 @@ export async function recordMatchingFeedbackUsage(ids: number[]) {
     hitCount: sql`${matchingFeedback.hitCount} + 1`,
     lastHitAt: new Date(),
   }).where(inArray(matchingFeedback.id, uniqueIds));
+}
+
+type DynamicProduct = {
+  source: string;
+  id: string;
+  name: string;
+  subtitle: string;
+  price: number;
+  original_price: number | null;
+  url: string;
+  image: string;
+  category: string;
+};
+
+function mapDynamicProduct(row: {
+  platform: string;
+  externalId: string;
+  name: string;
+  subtitle: string | null;
+  price: number;
+  originalPrice: number | null;
+  url: string | null;
+  image: string | null;
+  category: string | null;
+}): DynamicProduct {
+  return {
+    source: row.platform,
+    id: row.externalId,
+    name: row.name,
+    subtitle: row.subtitle ?? "",
+    price: row.price,
+    original_price: row.originalPrice,
+    url: row.url ?? "",
+    image: row.image ?? "",
+    category: row.category ?? "",
+  };
+}
+
+export interface DynamicComparisonQuery {
+  page: number;
+  pageSize: number;
+  search?: string;
+  category?: string;
+  cheaper?: "sinya" | "coolpc" | "pchome" | "momo" | "tie";
+  score?: "high" | "medium" | "low";
+  hasSpecDiff?: boolean;
+  sort?: "price_diff" | "price_diff_abs" | "sinya_price" | "coolpc_price" | "pchome_price" | "momo_price" | "name" | "score" | "best_price";
+  order?: "asc" | "desc";
+}
+
+/** Latest completed run is the single source of truth for the public comparison page. */
+export async function getLatestDynamicComparison(query: DynamicComparisonQuery = { page: 1, pageSize: 25 }) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+
+  const [run] = await db.select().from(comparisonRuns)
+    .where(eq(comparisonRuns.status, "completed"))
+    .orderBy(desc(comparisonRuns.finishedAt), desc(comparisonRuns.id))
+    .limit(1);
+  if (!run) return null;
+
+  const page = Math.max(1, query.page);
+  const pageSize = Math.min(100, Math.max(10, query.pageSize));
+  const conditions = [eq(comparisonMatches.runId, run.id)];
+  const search = query.search?.trim();
+  if (search) {
+    const pattern = `%${search}%`;
+    conditions.push(or(
+      like(comparisonMatches.sinyaName, pattern),
+      like(comparisonMatches.coolpcName, pattern),
+      like(comparisonMatches.pchomeName, pattern),
+      like(comparisonMatches.momoName, pattern),
+    )!);
+  }
+  if (query.category) conditions.push(eq(comparisonMatches.category, query.category));
+  if (query.cheaper) conditions.push(eq(comparisonMatches.cheaper, query.cheaper));
+  if (query.score === "high") conditions.push(sql`${comparisonMatches.score} >= 0.85`);
+  if (query.score === "medium") conditions.push(sql`${comparisonMatches.score} >= 0.70 AND ${comparisonMatches.score} < 0.85`);
+  if (query.score === "low") conditions.push(sql`${comparisonMatches.score} < 0.70`);
+  if (query.hasSpecDiff) conditions.push(eq(comparisonMatches.hasSpecDiff, true));
+  const whereClause = and(...conditions);
+
+  const sortExpression = {
+    price_diff: comparisonMatches.priceDiff,
+    price_diff_abs: sql`ABS(${comparisonMatches.priceDiff})`,
+    sinya_price: comparisonMatches.sinyaPrice,
+    coolpc_price: comparisonMatches.coolpcPrice,
+    pchome_price: sql`COALESCE(${comparisonMatches.pchomePrice}, 2147483647)`,
+    momo_price: sql`COALESCE(${comparisonMatches.momoPrice}, 2147483647)`,
+    name: comparisonMatches.sinyaName,
+    score: comparisonMatches.score,
+    best_price: sql`LEAST(${comparisonMatches.sinyaPrice}, ${comparisonMatches.coolpcPrice}, COALESCE(${comparisonMatches.pchomePrice}, 2147483647), COALESCE(${comparisonMatches.momoPrice}, 2147483647))`,
+  }[query.sort ?? "price_diff"];
+  const orderBy = query.order === "desc" ? desc(sortExpression) : asc(sortExpression);
+
+  const [matchRows, productRows, countRows] = await Promise.all([
+    db.select({ payload: comparisonMatches.payload }).from(comparisonMatches)
+      .where(whereClause)
+      .orderBy(orderBy)
+      .limit(pageSize)
+      .offset((page - 1) * pageSize),
+    db.select({
+      platform: comparisonProducts.platform,
+      externalId: comparisonProducts.externalId,
+      name: comparisonProducts.name,
+      subtitle: comparisonProducts.subtitle,
+      price: comparisonProducts.price,
+      originalPrice: comparisonProducts.originalPrice,
+      url: comparisonProducts.url,
+      image: comparisonProducts.image,
+      category: comparisonProducts.category,
+    }).from(comparisonProducts).where(eq(comparisonProducts.lastSeenRunId, run.id)),
+    db.select({ total: sql<number>`count(*)` }).from(comparisonMatches).where(whereClause),
+  ]);
+
+  const productsByPlatform: Record<string, DynamicProduct[]> = {
+    sinya: [], coolpc: [], pchome: [], momo: [],
+  };
+  productRows.forEach(row => {
+    productsByPlatform[row.platform]?.push(mapDynamicProduct(row));
+  });
+
+  const matched = matchRows.flatMap(row => {
+    try {
+      return [JSON.parse(row.payload)];
+    } catch {
+      return [];
+    }
+  });
+
+  let sinyaCategories: string[] = [];
+  try {
+    sinyaCategories = run.sinyaCategories ? JSON.parse(run.sinyaCategories) : [];
+  } catch {
+    sinyaCategories = [];
+  }
+
+  return {
+    stats: {
+      update_time: (run.finishedAt ?? run.startedAt).toLocaleString("sv-SE", { hour12: false }),
+      sinya_total: run.sinyaTotal,
+      coolpc_total: run.coolpcTotal,
+      pchome_total: run.pchomeTotal,
+      momo_total: run.momoTotal,
+      matched_total: run.matchedTotal,
+      sinya_cheaper: run.sinyaCheaper,
+      coolpc_cheaper: run.coolpcCheaper,
+      pchome_cheaper: run.pchomeCheaper,
+      momo_cheaper: run.momoCheaper,
+      same_price: run.samePrice,
+      avg_price_diff: Number(run.avgPriceDiff),
+    },
+    matched,
+    sinya_products: productsByPlatform.sinya,
+    coolpc_products: productsByPlatform.coolpc,
+    pchome_products: productsByPlatform.pchome,
+    momo_products: productsByPlatform.momo,
+    sinya_categories: sinyaCategories,
+    pagination: {
+      page,
+      pageSize,
+      total: Number(countRows[0]?.total ?? 0),
+      totalPages: Math.max(1, Math.ceil(Number(countRows[0]?.total ?? 0) / pageSize)),
+    },
+    run: {
+      id: run.id,
+      startedAt: run.startedAt,
+      finishedAt: run.finishedAt,
+      status: run.status,
+    },
+  };
+}
+
+/** Dynamic four-platform history grouped into the current dialog's day-based response shape. */
+export async function getDynamicPriceHistory() {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+
+  const rows = await db.select({
+    snapshotDate: comparisonPriceHistory.snapshotDate,
+    sourceKey: comparisonPriceHistory.sourceKey,
+    sinyaName: comparisonPriceHistory.sinyaName,
+    coolpcName: comparisonPriceHistory.coolpcName,
+    pchomeName: comparisonPriceHistory.pchomeName,
+    momoName: comparisonPriceHistory.momoName,
+    sinyaPrice: comparisonPriceHistory.sinyaPrice,
+    coolpcPrice: comparisonPriceHistory.coolpcPrice,
+    pchomePrice: comparisonPriceHistory.pchomePrice,
+    momoPrice: comparisonPriceHistory.momoPrice,
+    priceDiff: comparisonPriceHistory.priceDiff,
+  }).from(comparisonPriceHistory)
+    .orderBy(comparisonPriceHistory.snapshotDate, comparisonPriceHistory.sourceKey);
+
+  const days = new Map<string, { date: string; matched: unknown[] }>();
+  rows.forEach(row => {
+    const date = row.snapshotDate instanceof Date
+      ? row.snapshotDate.toISOString().slice(0, 10)
+      : String(row.snapshotDate).slice(0, 10);
+    const day = days.get(date) ?? { date, matched: [] };
+    day.matched.push({
+      source_key: row.sourceKey,
+      sinya_name: row.sinyaName,
+      coolpc_name: row.coolpcName,
+      pchome_name: row.pchomeName,
+      momo_name: row.momoName,
+      sinya_price: row.sinyaPrice,
+      coolpc_price: row.coolpcPrice,
+      pchome_price: row.pchomePrice,
+      momo_price: row.momoPrice,
+      price_diff: row.priceDiff,
+    });
+    days.set(date, day);
+  });
+  return Array.from(days.values());
+}
+
+/** Status is deliberately small so the UI can refresh it without loading the catalog. */
+export async function getLatestCrawlerStatus() {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const [run] = await db.select().from(comparisonRuns)
+    .orderBy(desc(comparisonRuns.id)).limit(1);
+  return run ?? null;
 }

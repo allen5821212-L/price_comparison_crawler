@@ -4,6 +4,9 @@ import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { adminProcedure, publicProcedure, router } from "./_core/trpc";
 import {
+  getDynamicPriceHistory,
+  getLatestCrawlerStatus,
+  getLatestDynamicComparison,
   listActiveMatchingFeedback,
   listMatchingFeedbackForAdmin,
   setMatchingFeedbackActive,
@@ -65,6 +68,24 @@ export const appRouter = router({
       });
       return { success: true, sourceAlias, targetAlias } as const;
     }),
+  }),
+  comparison: router({
+    /** Public dynamic payload with server-side filtering, sorting, and page boundaries. */
+    latest: publicProcedure.input(z.object({
+      page: z.number().int().positive().default(1),
+      pageSize: z.number().int().min(10).max(100).default(25),
+      search: z.string().max(200).optional(),
+      category: z.string().max(512).optional(),
+      cheaper: z.enum(["sinya", "coolpc", "pchome", "momo", "tie"]).optional(),
+      score: z.enum(["high", "medium", "low"]).optional(),
+      hasSpecDiff: z.boolean().optional(),
+      sort: z.enum(["price_diff", "price_diff_abs", "sinya_price", "coolpc_price", "pchome_price", "momo_price", "name", "score", "best_price"]).default("price_diff"),
+      order: z.enum(["asc", "desc"]).default("asc"),
+    }).optional()).query(async ({ input }) => getLatestDynamicComparison(input ?? { page: 1, pageSize: 25 })),
+    /** Database-backed history replaces price_history.json. */
+    history: publicProcedure.query(async () => getDynamicPriceHistory()),
+    /** Lightweight polling endpoint for crawler status and recent completion time. */
+    status: publicProcedure.query(async () => getLatestCrawlerStatus()),
   }),
 });
 
