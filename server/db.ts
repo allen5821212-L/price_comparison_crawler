@@ -5,8 +5,12 @@ import {
   comparisonPriceHistory,
   comparisonProducts,
   comparisonRuns,
+  crawlerEvents,
+  crawlerJobs,
   InsertUser,
   matchingFeedback,
+  priceNotifications,
+  productFavorites,
   users,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
@@ -22,6 +26,20 @@ export interface MatchingFeedbackInput {
   platform: FeedbackPlatform;
   createdByOpenId: string;
   note?: string | null;
+}
+
+export interface CrawlerJobInput {
+  scope: "full" | "category";
+  trigger: "scheduled" | "manual";
+  requestedByOpenId?: string | null;
+  categoryId?: string | null;
+  categoryName?: string | null;
+}
+
+export interface FavoriteInput {
+  sourceKey: string;
+  sinyaName: string;
+  targetPrice?: number | null;
 }
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -459,4 +477,127 @@ export async function getLatestCrawlerStatus() {
   const [run] = await db.select().from(comparisonRuns)
     .orderBy(desc(comparisonRuns.id)).limit(1);
   return run ?? null;
+}
+
+/** Queue a crawler task for the persistent cloud worker. */
+export async function enqueueCrawlerJob(input: CrawlerJobInput) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const result = await db.insert(crawlerJobs).values({
+    scope: input.scope,
+    trigger: input.trigger,
+    status: "queued",
+    categoryId: input.categoryId ?? null,
+    categoryName: input.categoryName ?? null,
+    requestedByOpenId: input.requestedByOpenId ?? null,
+  });
+  return Number(result[0]?.insertId ?? 0);
+}
+
+/** Recent crawler work is intentionally limited to keep the monitor page fast. */
+export async function listCrawlerJobs(limit = 50) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  return db.select().from(crawlerJobs)
+    .orderBy(desc(crawlerJobs.requestedAt), desc(crawlerJobs.id))
+    .limit(Math.min(100, Math.max(1, limit)));
+}
+
+/** Monitoring events include normal completions plus warning and error alerts. */
+export async function listCrawlerEvents(limit = 100) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  return db.select().from(crawlerEvents)
+    .orderBy(desc(crawlerEvents.createdAt), desc(crawlerEvents.id))
+    .limit(Math.min(200, Math.max(1, limit)));
+}
+
+export async function markCrawlerEventsRead(ids: number[]) {
+  const eligible = Array.from(new Set(ids)).filter(id => Number.isInteger(id) && id > 0);
+  if (!eligible.length) return;
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  await db.update(crawlerEvents).set({ readAt: new Date() }).where(inArray(crawlerEvents.id, eligible));
+}
+
+export async function getFavoriteForUser(userId: number, sourceKey: string) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const [favorite] = await db.select().from(productFavorites)
+    .where(and(eq(productFavorites.userId, userId), eq(productFavorites.sourceKey, sourceKey)))
+    .limit(1);
+  return favorite ?? null;
+}
+
+export async function upsertFavoriteForUser(userId: number, input: FavoriteInput) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  await db.insert(productFavorites).values({
+    userId,
+    sourceKey: input.sourceKey,
+    sinyaName: input.sinyaName,
+    targetPrice: input.targetPrice ?? null,
+    active: true,
+  }).onDuplicateKeyUpdate({
+    set: {
+      sinyaName: input.sinyaName,
+      targetPrice: input.targetPrice ?? null,
+      active: true,
+    },
+  });
+  return getFavoriteForUser(userId, input.sourceKey);
+}
+
+export async function listFavoritesForUser(userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  return db.select().from(productFavorites)
+    .where(eq(productFavorites.userId, userId))
+    .orderBy(desc(productFavorites.updatedAt), desc(productFavorites.id));
+}
+
+export async function setFavoriteActiveForUser(userId: number, id: number, active: boolean) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  await db.update(productFavorites).set({ active }).where(and(
+    eq(productFavorites.id, id),
+    eq(productFavorites.userId, userId),
+  ));
+}
+
+export async function listPriceNotificationsForUser(userId: number, limit = 100) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  return db.select({
+    id: priceNotifications.id,
+    favoriteId: priceNotifications.favoriteId,
+    comparisonRunId: priceNotifications.comparisonRunId,
+    type: priceNotifications.type,
+    previousPrice: priceNotifications.previousPrice,
+    currentPrice: priceNotifications.currentPrice,
+    title: priceNotifications.title,
+    message: priceNotifications.message,
+    readAt: priceNotifications.readAt,
+    createdAt: priceNotifications.createdAt,
+    sinyaName: productFavorites.sinyaName,
+    sourceKey: productFavorites.sourceKey,
+  }).from(priceNotifications)
+    .innerJoin(productFavorites, eq(priceNotifications.favoriteId, productFavorites.id))
+    .where(eq(productFavorites.userId, userId))
+    .orderBy(desc(priceNotifications.createdAt), desc(priceNotifications.id))
+    .limit(Math.min(200, Math.max(1, limit)));
+}
+
+export async function markPriceNotificationsReadForUser(userId: number, ids: number[]) {
+  const eligible = Array.from(new Set(ids)).filter(id => Number.isInteger(id) && id > 0);
+  if (!eligible.length) return;
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  await db.update(priceNotifications).set({ readAt: new Date() }).where(sql`
+    ${priceNotifications.id} IN ${eligible} AND EXISTS (
+      SELECT 1 FROM ${productFavorites}
+      WHERE ${productFavorites.id} = ${priceNotifications.favoriteId}
+        AND ${productFavorites.userId} = ${userId}
+    )
+  `);
 }

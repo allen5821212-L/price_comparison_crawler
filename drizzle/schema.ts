@@ -169,7 +169,97 @@ export const comparisonPriceHistory = mysqlTable(
   }),
 );
 
+/** 可由定期排程或管理員建立的完整／單一分類爬蟲工作。 */
+export const crawlerJobs = mysqlTable(
+  "crawler_jobs",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    scope: mysqlEnum("scope", ["full", "category"]).notNull(),
+    trigger: mysqlEnum("trigger", ["scheduled", "manual"]).notNull(),
+    status: mysqlEnum("status", ["queued", "running", "completed", "failed", "cancelled"]).default("queued").notNull(),
+    categoryId: varchar("category_id", { length: 64 }),
+    categoryName: varchar("category_name", { length: 512 }),
+    requestedByOpenId: varchar("requested_by_open_id", { length: 64 }),
+    executor: varchar("executor", { length: 128 }),
+    comparisonRunId: int("comparison_run_id"),
+    summary: text("summary"),
+    errorMessage: text("error_message"),
+    requestedAt: timestamp("requested_at").defaultNow().notNull(),
+    startedAt: timestamp("started_at"),
+    finishedAt: timestamp("finished_at"),
+  },
+  table => ({
+    queueIdx: index("crawler_jobs_queue_idx").on(table.status, table.requestedAt),
+    requesterIdx: index("crawler_jobs_requester_idx").on(table.requestedByOpenId, table.requestedAt),
+  }),
+);
+
+/** 供管理員檢視的工作生命週期、失敗與告警事件。 */
+export const crawlerEvents = mysqlTable(
+  "crawler_events",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    jobId: int("job_id"),
+    comparisonRunId: int("comparison_run_id"),
+    level: mysqlEnum("level", ["info", "success", "warning", "error"]).notNull(),
+    eventType: varchar("event_type", { length: 64 }).notNull(),
+    title: varchar("title", { length: 512 }).notNull(),
+    message: text("message"),
+    payload: text("payload"),
+    readAt: timestamp("read_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  table => ({
+    createdIdx: index("crawler_events_created_idx").on(table.createdAt),
+    jobIdx: index("crawler_events_job_idx").on(table.jobId, table.createdAt),
+  }),
+);
+
+/** 使用者收藏的欣亞來源商品，可選擇指定可接受價格。 */
+export const productFavorites = mysqlTable(
+  "product_favorites",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    userId: int("user_id").notNull(),
+    sourceKey: varchar("source_key", { length: 128 }).notNull(),
+    sinyaName: varchar("sinya_name", { length: 1024 }).notNull(),
+    targetPrice: int("target_price"),
+    lastKnownPrice: int("last_known_price"),
+    active: boolean("active").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    uniqueUserSource: uniqueIndex("product_favorites_user_source_unique").on(table.userId, table.sourceKey),
+    userActiveIdx: index("product_favorites_user_active_idx").on(table.userId, table.active),
+  }),
+);
+
+/** 每次收藏商品價格下降或達標時建立的站內通知。 */
+export const priceNotifications = mysqlTable(
+  "price_notifications",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    favoriteId: int("favorite_id").notNull(),
+    comparisonRunId: int("comparison_run_id"),
+    type: mysqlEnum("type", ["price_drop", "target_reached"]).notNull(),
+    previousPrice: int("previous_price"),
+    currentPrice: int("current_price").notNull(),
+    title: varchar("title", { length: 512 }).notNull(),
+    message: text("message"),
+    readAt: timestamp("read_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  table => ({
+    favoriteCreatedIdx: index("price_notifications_favorite_created_idx").on(table.favoriteId, table.createdAt),
+  }),
+);
+
 export type ComparisonRun = typeof comparisonRuns.$inferSelect;
 export type ComparisonProduct = typeof comparisonProducts.$inferSelect;
 export type ComparisonMatch = typeof comparisonMatches.$inferSelect;
 export type ComparisonPriceHistory = typeof comparisonPriceHistory.$inferSelect;
+export type CrawlerJob = typeof crawlerJobs.$inferSelect;
+export type CrawlerEvent = typeof crawlerEvents.$inferSelect;
+export type ProductFavorite = typeof productFavorites.$inferSelect;
+export type PriceNotification = typeof priceNotifications.$inferSelect;

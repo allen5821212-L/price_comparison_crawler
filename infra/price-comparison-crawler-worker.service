@@ -1,0 +1,16 @@
+[Unit]
+Description=Price comparison persistent crawler worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/price_comparison_crawler
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/bin/bash -lc 'source /home/ubuntu/.user_env; source /opt/.manus/webdev.sh.env; exec /usr/bin/python3 /home/ubuntu/price_comparison_crawler/crawler/crawler_worker.py'
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

@@ -3,12 +3,22 @@ import type { TrpcContext } from "./_core/context";
 
 const dbMocks = vi.hoisted(() => ({
   getDynamicPriceHistory: vi.fn(),
+  getFavoriteForUser: vi.fn(),
   getLatestCrawlerStatus: vi.fn(),
   getLatestDynamicComparison: vi.fn(),
+  enqueueCrawlerJob: vi.fn(),
   listActiveMatchingFeedback: vi.fn(),
+  listCrawlerEvents: vi.fn(),
+  listCrawlerJobs: vi.fn(),
+  listFavoritesForUser: vi.fn(),
   listMatchingFeedbackForAdmin: vi.fn(),
+  listPriceNotificationsForUser: vi.fn(),
+  markCrawlerEventsRead: vi.fn(),
+  markPriceNotificationsReadForUser: vi.fn(),
   setMatchingFeedbackActive: vi.fn(),
+  setFavoriteActiveForUser: vi.fn(),
   upsertMatchingFeedback: vi.fn(),
+  upsertFavoriteForUser: vi.fn(),
 }));
 
 vi.mock("./db", () => dbMocks);
@@ -109,5 +119,33 @@ describe("matchRules router", () => {
 
     await expect(caller.comparison.history()).resolves.toEqual(history);
     await expect(caller.comparison.status()).resolves.toEqual(status);
+  });
+
+  it("lists monitoring data and queues a requested category for the persistent worker", async () => {
+    dbMocks.listCrawlerJobs.mockResolvedValue([{ id: 21, status: "queued", scope: "category" }]);
+    dbMocks.listCrawlerEvents.mockResolvedValue([{ id: 9, level: "error", title: "來源逾時" }]);
+    dbMocks.enqueueCrawlerJob.mockResolvedValue(22);
+    const caller = appRouter.createCaller(createAdminContext());
+
+    await expect(caller.crawler.jobs()).resolves.toEqual([{ id: 21, status: "queued", scope: "category" }]);
+    await expect(caller.crawler.events()).resolves.toEqual([{ id: 9, level: "error", title: "來源逾時" }]);
+    await expect(caller.crawler.enqueue({ scope: "category", categoryName: "CPU 中央處理器" })).resolves.toEqual({ id: 22 });
+    expect(dbMocks.enqueueCrawlerJob).toHaveBeenCalledWith({
+      scope: "category", trigger: "manual", categoryId: undefined, categoryName: "CPU 中央處理器", requestedByOpenId: "owner-open-id",
+    });
+  });
+
+  it("stores user favorites and returns their database-backed price notifications", async () => {
+    const favorite = { id: 4, sourceKey: "sinya_870-evo", sinyaName: "Samsung 870 EVO 4TB", active: true };
+    const notifications = [{ id: 8, favoriteId: 4, title: "收藏商品降價", currentPrice: 8990 }];
+    dbMocks.upsertFavoriteForUser.mockResolvedValue(favorite);
+    dbMocks.listFavoritesForUser.mockResolvedValue([favorite]);
+    dbMocks.listPriceNotificationsForUser.mockResolvedValue(notifications);
+    const caller = appRouter.createCaller(createAdminContext());
+
+    await expect(caller.favorites.save({ sourceKey: "sinya_870-evo", sinyaName: "Samsung 870 EVO 4TB" })).resolves.toEqual(favorite);
+    await expect(caller.favorites.list()).resolves.toEqual([favorite]);
+    await expect(caller.favorites.notifications()).resolves.toEqual(notifications);
+    expect(dbMocks.upsertFavoriteForUser).toHaveBeenCalledWith(1, { sourceKey: "sinya_870-evo", sinyaName: "Samsung 870 EVO 4TB" });
   });
 });

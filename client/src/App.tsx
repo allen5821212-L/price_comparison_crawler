@@ -3,9 +3,12 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/NotFound";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
+import { PriceAlertListener } from "./components/PriceAlertListener";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
 import RulesManagement from "./pages/RulesManagement";
+import CrawlerMonitor from "./pages/CrawlerMonitor";
+import FavoritesPage from "./pages/FavoritesPage";
 
 function Router() {
   // make sure to consider if you need authentication for certain routes
@@ -13,6 +16,8 @@ function Router() {
     <Switch>
       <Route path={"/"} component={Home} />
       <Route path={"/rules"} component={RulesManagement} />
+      <Route path={"/crawler"} component={CrawlerMonitor} />
+      <Route path={"/favorites"} component={FavoritesPage} />
       <Route path={"/404"} component={NotFound} />
       {/* Final fallback route */}
       <Route component={NotFound} />
@@ -34,6 +39,7 @@ function App() {
       >
         <TooltipProvider>
           <Toaster />
+          <PriceAlertListener />
           <Router />
         </TooltipProvider>
       </ThemeProvider>

@@ -29,6 +29,13 @@
       "when": 1786897217839,
       "tag": "0003_happy_snowbird",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1786907487780,
+      "tag": "0004_petite_amphibian",
+      "breakpoints": true
     }
   ]
 }

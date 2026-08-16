@@ -2,16 +2,26 @@ import { COOKIE_NAME } from "@shared/const";
 import { z } from "zod";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
-import { adminProcedure, publicProcedure, router } from "./_core/trpc";
+import { adminProcedure, protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import {
+  enqueueCrawlerJob,
   getDynamicPriceHistory,
+  getFavoriteForUser,
   getLatestCrawlerStatus,
   getLatestDynamicComparison,
+  listCrawlerEvents,
+  listCrawlerJobs,
+  listFavoritesForUser,
+  listPriceNotificationsForUser,
   searchDynamicProducts,
   listActiveMatchingFeedback,
   listMatchingFeedbackForAdmin,
+  markCrawlerEventsRead,
+  markPriceNotificationsReadForUser,
   setMatchingFeedbackActive,
+  setFavoriteActiveForUser,
   upsertMatchingFeedback,
+  upsertFavoriteForUser,
 } from "./db";
 
 function deriveModelAlias(name: string): string | null {
@@ -94,6 +104,59 @@ export const appRouter = router({
     history: publicProcedure.query(async () => getDynamicPriceHistory()),
     /** Lightweight polling endpoint for crawler status and recent completion time. */
     status: publicProcedure.query(async () => getLatestCrawlerStatus()),
+  }),
+  crawler: router({
+    /** Recent worker jobs and monitoring events are restricted to administrators. */
+    jobs: adminProcedure.input(z.object({ limit: z.number().int().min(1).max(100).default(50) }).optional())
+      .query(async ({ input }) => listCrawlerJobs(input?.limit ?? 50)),
+    events: adminProcedure.input(z.object({ limit: z.number().int().min(1).max(200).default(100) }).optional())
+      .query(async ({ input }) => listCrawlerEvents(input?.limit ?? 100)),
+    markEventsRead: adminProcedure.input(z.object({ ids: z.array(z.number().int().positive()).max(200) }))
+      .mutation(async ({ input }) => {
+        await markCrawlerEventsRead(input.ids);
+        return { success: true } as const;
+      }),
+    /** A cloud worker claims queued work; the web process never runs the Python crawler inline. */
+    enqueue: adminProcedure.input(z.object({
+      scope: z.enum(["full", "category"]),
+      categoryId: z.string().max(64).optional(),
+      categoryName: z.string().min(1).max(512).optional(),
+    }).superRefine((value, ctx) => {
+      if (value.scope === "category" && !value.categoryName) {
+        ctx.addIssue({ code: "custom", message: "指定分類重跑需要分類名稱", path: ["categoryName"] });
+      }
+    })).mutation(async ({ ctx, input }) => {
+      const id = await enqueueCrawlerJob({
+        scope: input.scope,
+        trigger: "manual",
+        categoryId: input.categoryId,
+        categoryName: input.categoryName,
+        requestedByOpenId: ctx.user.openId,
+      });
+      return { id } as const;
+    }),
+  }),
+  favorites: router({
+    list: protectedProcedure.query(async ({ ctx }) => listFavoritesForUser(ctx.user.id)),
+    save: protectedProcedure.input(z.object({
+      sourceKey: z.string().min(1).max(128),
+      sinyaName: z.string().min(1).max(1024),
+      targetPrice: z.number().int().positive().nullable().optional(),
+    })).mutation(async ({ ctx, input }) => upsertFavoriteForUser(ctx.user.id, input)),
+    get: protectedProcedure.input(z.object({ sourceKey: z.string().min(1).max(128) }))
+      .query(async ({ ctx, input }) => getFavoriteForUser(ctx.user.id, input.sourceKey)),
+    setActive: protectedProcedure.input(z.object({ id: z.number().int().positive(), active: z.boolean() }))
+      .mutation(async ({ ctx, input }) => {
+        await setFavoriteActiveForUser(ctx.user.id, input.id, input.active);
+        return { success: true } as const;
+      }),
+    notifications: protectedProcedure.input(z.object({ limit: z.number().int().min(1).max(200).default(100) }).optional())
+      .query(async ({ ctx, input }) => listPriceNotificationsForUser(ctx.user.id, input?.limit ?? 100)),
+    markNotificationsRead: protectedProcedure.input(z.object({ ids: z.array(z.number().int().positive()).max(200) }))
+      .mutation(async ({ ctx, input }) => {
+        await markPriceNotificationsReadForUser(ctx.user.id, input.ids);
+        return { success: true } as const;
+      }),
   }),
 });
 

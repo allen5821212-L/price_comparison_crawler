@@ -55,6 +55,8 @@ import {
   UserCheck,
   AlertTriangle,
   CheckCheck,
+  Bell,
+  Heart,
   Trash2,
   SlidersHorizontal,
 } from "lucide-react";
@@ -64,9 +66,11 @@ import { toast } from "sonner";
 import { ManualMatchDialog } from "@/components/ManualMatchDialog";
 import { PriceHistoryDialog } from "@/components/PriceHistoryDialog";
 import { trpc } from "@/lib/trpc";
+import { useAuth } from "@/_core/hooks/useAuth";
 
 interface MatchedProduct {
   name: string;
+  source_key?: string;
   sinya_name: string;
   coolpc_name: string;
   sinya_price: number;
@@ -198,6 +202,7 @@ function getCheapestPlatform(sinyaPrice: number, coolpcPrice: number, pchomePric
 
 export default function Home() {
   const { theme, toggleTheme } = useTheme();
+  const { user } = useAuth();
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [coolpcCategoryFilter, setCoolpcCategoryFilter] = useState("all");
@@ -250,6 +255,15 @@ export default function Home() {
       toast.success(`已同步人工確認規則，下一次爬蟲將優先套用${aliases}`);
     },
     onError: () => toast.warning("本次配對已儲存於此裝置；請以管理員身分登入後同步至自動配對引擎"),
+  });
+  const favoritesQuery = trpc.favorites.list.useQuery(undefined, { enabled: Boolean(user) });
+  const favoriteKeys = useMemo(() => new Set((favoritesQuery.data ?? []).filter(item => item.active).map(item => item.sourceKey)), [favoritesQuery.data]);
+  const saveFavorite = trpc.favorites.save.useMutation({
+    onSuccess: () => {
+      toast.success("已加入收藏，後續降價會顯示在通知頁面");
+      void favoritesQuery.refetch();
+    },
+    onError: error => toast.error(error.message || "無法加入收藏"),
   });
   const matchingRulesQuery = trpc.matchRules.listForCrawler.useQuery(undefined, { enabled: false });
   const [manualMatchOpen, setManualMatchOpen] = useState(false);
@@ -594,6 +608,22 @@ export default function Home() {
                 </Button>
               </TooltipTrigger>
               <TooltipContent>管理已同步規則</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" asChild>
+                  <a href="/crawler" aria-label="爬蟲監控"><Activity className="size-4" /></a>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>爬蟲監控</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" asChild>
+                  <a href="/favorites" aria-label="收藏與通知"><Bell className="size-4" /></a>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>收藏與降價通知</TooltipContent>
             </Tooltip>
             {/* Export/Import */}
             <Tooltip>
@@ -1342,6 +1372,31 @@ export default function Home() {
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center justify-center gap-1">
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  className={favoriteKeys.has(item.source_key ?? sinyaId(item.sinya_name)) ? "size-7 text-rose-500 hover:bg-rose-500/10" : "size-7 text-muted-foreground hover:bg-rose-500/10 hover:text-rose-500"}
+                                  onClick={() => {
+                                    if (!user) {
+                                      toast.info("登入後即可收藏商品並接收降價通知");
+                                      return;
+                                    }
+                                    const sourceKey = item.source_key ?? sinyaId(item.sinya_name);
+                                    if (favoriteKeys.has(sourceKey)) {
+                                      toast.info("此商品已在收藏清單中");
+                                      return;
+                                    }
+                                    saveFavorite.mutate({ sourceKey, sinyaName: item.sinya_name });
+                                  }}
+                                  title="收藏商品"
+                                >
+                                  <Heart className="size-3.5" fill={favoriteKeys.has(item.source_key ?? sinyaId(item.sinya_name)) ? "currentColor" : "none"} />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>{favoriteKeys.has(item.source_key ?? sinyaId(item.sinya_name)) ? "已收藏" : "收藏並追蹤降價"}</TooltipContent>
+                            </Tooltip>
                             {/* Confirm (✓) */}
                             <Tooltip>
                               <TooltipTrigger asChild>

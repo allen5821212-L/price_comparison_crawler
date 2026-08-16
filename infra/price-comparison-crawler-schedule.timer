@@ -1,0 +1,10 @@
+[Unit]
+Description=Queue a four-platform price comparison crawl every six hours
+
+[Timer]
+OnCalendar=*-*-* 00,06,12,18:00:00
+Persistent=true
+Unit=price-comparison-crawler-schedule.service
+
+[Install]
+WantedBy=timers.target

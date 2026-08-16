@@ -133,6 +133,54 @@ def _history_rows(matches: Iterable[dict[str, Any]], snapshot_date: date):
         )
 
 
+def _record_price_notifications(cursor: Any, matches: Iterable[dict[str, Any]], run_id: int) -> None:
+    """Update favorite baselines and create one notification when a tracked lowest price improves."""
+    latest_prices: dict[str, int] = {}
+    for match in matches:
+        prices = [int(match.get(key) or 0) for key in ("sinya_price", "coolpc_price", "pchome_price", "momo_price")]
+        available = [price for price in prices if price > 0]
+        if available:
+            latest_prices[_source_key(match)] = min(available)
+    if not latest_prices:
+        return
+
+    placeholders = ",".join(["%s"] * len(latest_prices))
+    cursor.execute(
+        f"""SELECT id, source_key, sinya_name, target_price, last_known_price
+            FROM product_favorites
+            WHERE active=1 AND source_key IN ({placeholders})""",
+        tuple(latest_prices.keys()),
+    )
+    for favorite_id, source_key, sinya_name, target_price, previous_price in cursor.fetchall():
+        current_price = latest_prices.get(source_key)
+        if not current_price:
+            continue
+        prior = int(previous_price) if previous_price is not None else None
+        target = int(target_price) if target_price is not None else None
+        notification_type = None
+        title = ""
+        message = ""
+        if target is not None and current_price <= target and (prior is None or prior > target):
+            notification_type = "target_reached"
+            title = "收藏商品已達目標價"
+            message = f"{sinya_name} 的最低價目前為 NT${current_price:,}，已達您設定的 NT${target:,}。"
+        elif prior is not None and current_price < prior:
+            notification_type = "price_drop"
+            title = "收藏商品降價"
+            message = f"{sinya_name} 的最低價由 NT${prior:,} 降至 NT${current_price:,}。"
+        if notification_type:
+            cursor.execute(
+                """INSERT INTO price_notifications
+                   (favorite_id, comparison_run_id, type, previous_price, current_price, title, message)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                (favorite_id, run_id, notification_type, prior, current_price, title, message),
+            )
+        cursor.execute(
+            "UPDATE product_favorites SET last_known_price=%s WHERE id=%s",
+            (current_price, favorite_id),
+        )
+
+
 def persist_crawl_result(
     *,
     stats: dict[str, Any],
@@ -197,6 +245,7 @@ def persist_crawl_result(
                     """,
                     history_rows,
                 )
+            _record_price_notifications(cursor, matches, run_id)
             cursor.execute(
                 "DELETE FROM comparison_price_history WHERE snapshot_date < %s",
                 (snapshot_date - timedelta(days=90),),

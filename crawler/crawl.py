@@ -920,11 +920,19 @@ def match_products(sinya_products, coolpc_products):
 #  Main
 # ──────────────────────────────────────────────
 
-def main(max_cats=None):
+def main(max_cats=None, priority_category=None):
     print(f"爬蟲啟動 — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
 
     # Step 1: 取得欣亞官方分類清單
     categories = fetch_sinya_categories()
+    if priority_category:
+        requested = [category for category in categories if category.get("name") == priority_category]
+        remaining = [category for category in categories if category.get("name") != priority_category]
+        if requested:
+            categories = requested + remaining
+            print(f"=== 指定分類優先更新：{priority_category} ===\n")
+        else:
+            print(f"[WARN] 找不到指定分類：{priority_category}，將依預設順序完整更新")
 
     # Step 2: 以欣亞分類為基準爬取商品
     sinya_products = crawl_sinya_by_category(categories=categories, max_cats=max_cats)
@@ -1129,5 +1137,6 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="欣亞 vs 原價屋 價格比對爬蟲")
     parser.add_argument("--max-cats", type=int, default=None, help="Max categories (for testing)")
+    parser.add_argument("--priority-category", type=str, default=None, help="Fetch this Sinya category first while retaining a complete rebuilt catalog")
     args = parser.parse_args()
-    main(max_cats=args.max_cats)
+    main(max_cats=args.max_cats, priority_category=args.priority_category)
