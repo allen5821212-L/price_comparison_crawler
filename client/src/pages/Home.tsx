@@ -573,6 +573,12 @@ export default function Home() {
     const sId = sinyaId(sinyaName);
     const cId = coolpcId(coolpcName);
     overrides.confirmMatch(sId, sinyaName, cId, coolpcName);
+    confirmedRuleMutation.mutate({
+      sinyaName,
+      targetName: coolpcName,
+      targetId: cId,
+      platform: "coolpc",
+    });
   };
 
   const handleOpenManualMatch = (sinyaName: string, sinyaPrice: number, sinyaUrl: string, sinyaImage: string) => {
