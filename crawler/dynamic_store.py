@@ -53,15 +53,23 @@ def _text(value: Any, limit: int | None = None) -> str | None:
 
 
 def _source_key(match: dict[str, Any]) -> str:
-    # The product URL distinguishes separately listed products with identical titles.
-    # Legacy history has no URL, so it falls back to the title and paired CoolPC name.
-    source = str(match.get("sinya_url") or "")
-    if not source:
-        source = "|".join([
-            str(match.get("sinya_name", "")),
-            str(match.get("coolpc_name", "")),
-        ])
-    return hashlib.sha256(source.encode("utf-8")).hexdigest()[:64]
+    """Return the same stable Sinya key used by the React comparison page.
+
+    The page falls back to ``sinyaId(sinya_name)`` when a payload does not
+    contain ``source_key``.  Favorites must use that exact key so the crawler
+    can find them again when it records a new lowest price.  JavaScript hashes
+    UTF-16 code units with signed 32-bit arithmetic, so reproduce that behavior
+    instead of using a URL hash that the page cannot derive.
+    """
+    name = str(match.get("sinya_name") or "")
+    hash_value = 0
+    utf16 = name.encode("utf-16-le", "surrogatepass")
+    for offset in range(0, len(utf16), 2):
+        code_unit = int.from_bytes(utf16[offset:offset + 2], "little")
+        hash_value = ((hash_value << 5) - hash_value + code_unit) & 0xFFFFFFFF
+        if hash_value >= 0x80000000:
+            hash_value -= 0x100000000
+    return f"sinya_{abs(hash_value)}"
 
 
 def _product_rows(products: Iterable[dict[str, Any]], platform: str, run_id: int):
