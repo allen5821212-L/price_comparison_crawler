@@ -36,6 +36,12 @@ export interface CrawlerJobInput {
   categoryName?: string | null;
 }
 
+export interface EnqueueCrawlerJobResult {
+  id: number;
+  created: boolean;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+}
+
 export interface FavoriteInput {
   sourceKey: string;
   sinyaName: string;
@@ -479,10 +485,29 @@ export async function getLatestCrawlerStatus() {
   return run ?? null;
 }
 
-/** Queue a crawler task for the persistent cloud worker. */
-export async function enqueueCrawlerJob(input: CrawlerJobInput) {
+/** Queue a crawler task for the persistent cloud worker without stacking full refreshes. */
+export async function enqueueCrawlerJob(input: CrawlerJobInput): Promise<EnqueueCrawlerJobResult> {
   const db = await getDb();
   if (!db) throw new Error("資料庫目前無法使用");
+
+  // A full four-platform job is costly and can take a while to complete. The
+  // homepage update control may be clicked repeatedly, so reuse an in-flight
+  // full refresh instead of accumulating identical work in the worker queue.
+  if (input.scope === "full") {
+    const [activeJob] = await db.select({ id: crawlerJobs.id, status: crawlerJobs.status })
+      .from(crawlerJobs)
+      .where(and(
+        eq(crawlerJobs.scope, "full"),
+        inArray(crawlerJobs.status, ["queued", "running"]),
+      ))
+      .orderBy(desc(crawlerJobs.requestedAt), desc(crawlerJobs.id))
+      .limit(1);
+
+    if (activeJob) {
+      return { id: activeJob.id, created: false, status: activeJob.status };
+    }
+  }
+
   const result = await db.insert(crawlerJobs).values({
     scope: input.scope,
     trigger: input.trigger,
@@ -491,7 +516,7 @@ export async function enqueueCrawlerJob(input: CrawlerJobInput) {
     categoryName: input.categoryName ?? null,
     requestedByOpenId: input.requestedByOpenId ?? null,
   });
-  return Number(result[0]?.insertId ?? 0);
+  return { id: Number(result[0]?.insertId ?? 0), created: true, status: "queued" };
 }
 
 /** Recent crawler work is intentionally limited to keep the monitor page fast. */

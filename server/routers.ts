@@ -126,14 +126,13 @@ export const appRouter = router({
         ctx.addIssue({ code: "custom", message: "指定分類重跑需要分類名稱", path: ["categoryName"] });
       }
     })).mutation(async ({ ctx, input }) => {
-      const id = await enqueueCrawlerJob({
+      return enqueueCrawlerJob({
         scope: input.scope,
         trigger: "manual",
         categoryId: input.categoryId,
         categoryName: input.categoryName,
         requestedByOpenId: ctx.user.openId,
       });
-      return { id } as const;
     }),
   }),
   favorites: router({

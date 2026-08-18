@@ -124,12 +124,12 @@ describe("matchRules router", () => {
   it("lists monitoring data and queues a requested category for the persistent worker", async () => {
     dbMocks.listCrawlerJobs.mockResolvedValue([{ id: 21, status: "queued", scope: "category" }]);
     dbMocks.listCrawlerEvents.mockResolvedValue([{ id: 9, level: "error", title: "來源逾時" }]);
-    dbMocks.enqueueCrawlerJob.mockResolvedValue(22);
+    dbMocks.enqueueCrawlerJob.mockResolvedValue({ id: 22, created: true, status: "queued" });
     const caller = appRouter.createCaller(createAdminContext());
 
     await expect(caller.crawler.jobs()).resolves.toEqual([{ id: 21, status: "queued", scope: "category" }]);
     await expect(caller.crawler.events()).resolves.toEqual([{ id: 9, level: "error", title: "來源逾時" }]);
-    await expect(caller.crawler.enqueue({ scope: "category", categoryName: "CPU 中央處理器" })).resolves.toEqual({ id: 22 });
+    await expect(caller.crawler.enqueue({ scope: "category", categoryName: "CPU 中央處理器" })).resolves.toEqual({ id: 22, created: true, status: "queued" });
     expect(dbMocks.enqueueCrawlerJob).toHaveBeenCalledWith({
       scope: "category", trigger: "manual", categoryId: undefined, categoryName: "CPU 中央處理器", requestedByOpenId: "owner-open-id",
     });

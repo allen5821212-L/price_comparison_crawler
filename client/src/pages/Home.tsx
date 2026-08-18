@@ -44,6 +44,7 @@ import {
   Sun,
   Moon,
   Activity,
+  RadioTower,
   ShoppingCart,
   BarChart3,
   Package,
@@ -244,6 +245,41 @@ export default function Home() {
   const loading = comparisonQuery.isLoading;
   const error = comparisonQuery.error?.message ?? null;
   const fetchData = () => comparisonQuery.refetch();
+  const utils = trpc.useUtils();
+  const [requestedRefreshJobId, setRequestedRefreshJobId] = useState<number | null>(null);
+  const jobsQuery = trpc.crawler.jobs.useQuery(undefined, {
+    enabled: user?.role === "admin",
+    refetchInterval: 15_000,
+  });
+  const enqueueRefresh = trpc.crawler.enqueue.useMutation({
+    onSuccess: (result) => {
+      setRequestedRefreshJobId(result.id);
+      void utils.crawler.jobs.invalidate();
+      toast.success(result.created
+        ? `即時更新工作 #${result.id} 已排入佇列`
+        : `更新工作 #${result.id} 已在${result.status === "running" ? "執行" : "佇列"}中`);
+    },
+    onError: requestError => toast.error(requestError.message || "無法排入價格更新工作"),
+  });
+  const activeRefreshJob = useMemo(() => {
+    const jobs = jobsQuery.data ?? [];
+    const requested = requestedRefreshJobId === null ? undefined : jobs.find(job => job.id === requestedRefreshJobId);
+    return requested ?? jobs.find(job => job.scope === "full" && (job.status === "queued" || job.status === "running"));
+  }, [jobsQuery.data, requestedRefreshJobId]);
+  const isPriceRefreshing = activeRefreshJob?.status === "queued" || activeRefreshJob?.status === "running";
+
+  useEffect(() => {
+    if (!requestedRefreshJobId || !activeRefreshJob || activeRefreshJob.id !== requestedRefreshJobId) return;
+    if (activeRefreshJob.status === "completed") {
+      void comparisonQuery.refetch();
+      toast.success("價格更新完成，已重新載入最新比價資料");
+      setRequestedRefreshJobId(null);
+    }
+    if (activeRefreshJob.status === "failed" || activeRefreshJob.status === "cancelled") {
+      toast.error(activeRefreshJob.status === "failed" ? "價格更新失敗，請查看爬蟲監控" : "價格更新已取消");
+      setRequestedRefreshJobId(null);
+    }
+  }, [activeRefreshJob, comparisonQuery, requestedRefreshJobId]);
 
   // Manual matching
   const overrides = useOverrides();
@@ -603,6 +639,23 @@ export default function Home() {
             )}
             <Tooltip>
               <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="hidden gap-2 border-primary/30 text-primary hover:bg-primary/10 sm:inline-flex"
+                  disabled={user?.role !== "admin" || enqueueRefresh.isPending || Boolean(isPriceRefreshing)}
+                  onClick={() => enqueueRefresh.mutate({ scope: "full" })}
+                >
+                  {enqueueRefresh.isPending || activeRefreshJob?.status === "running"
+                    ? <RefreshCw className="size-3.5 animate-spin" />
+                    : <RadioTower className="size-3.5" />}
+                  {activeRefreshJob?.status === "queued" ? "更新排隊中" : activeRefreshJob?.status === "running" ? "更新中" : "即時更新價格"}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{user?.role === "admin" ? "排入完整四平台爬蟲；完成後會自動重載資料" : "僅管理員可排入完整價格更新"}</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
                 <Button variant="ghost" size="icon" asChild>
                   <a href="/rules" aria-label="管理已同步規則"><SlidersHorizontal className="size-4" /></a>
                 </Button>
@@ -798,12 +851,12 @@ export default function Home() {
               即時比對同一型號的四平台價格差異，幫你在買電腦零件時省下最多錢。
             </p>
             {data && (
-              <p className="mt-3 text-sm text-muted-foreground">
-                最後更新：
-                <span className="font-mono font-medium text-foreground">
-                  {data.stats.update_time}
-                </span>
-              </p>
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                <p>最後更新：<span className="font-mono font-medium text-foreground">{data.stats.update_time}</span></p>
+                {activeRefreshJob ? <Badge variant="outline" className={activeRefreshJob.status === "running" ? "border-blue-400/30 bg-blue-500/10 text-blue-500" : "border-amber-400/30 bg-amber-500/10 text-amber-500"}>
+                  {activeRefreshJob.status === "running" ? "價格更新中" : "價格更新排隊中"}
+                </Badge> : null}
+              </div>
             )}
           </div>
         </div>

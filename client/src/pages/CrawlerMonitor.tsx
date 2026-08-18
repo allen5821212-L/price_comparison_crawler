@@ -37,7 +37,7 @@ export default function CrawlerMonitor() {
   const categoriesQuery = trpc.comparison.latest.useQuery({ page: 1, pageSize: 10 });
   const enqueue = trpc.crawler.enqueue.useMutation({
     onSuccess: (result) => {
-      toast.success(`爬蟲工作 #${result.id} 已排入持續執行器`);
+      toast.success(result.created ? `爬蟲工作 #${result.id} 已排入持續執行器` : `爬蟲工作 #${result.id} 已在${result.status === "running" ? "執行" : "佇列"}中`);
       void utils.crawler.jobs.invalidate();
       void utils.crawler.events.invalidate();
     },
