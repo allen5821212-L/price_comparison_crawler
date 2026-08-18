@@ -5,6 +5,7 @@ import { systemRouter } from "./_core/systemRouter";
 import { adminProcedure, protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import {
   enqueueCrawlerJob,
+  getCrawlerRefreshEstimates,
   getDynamicPriceHistory,
   getFavoriteForUser,
   getLatestCrawlerStatus,
@@ -104,6 +105,8 @@ export const appRouter = router({
     history: publicProcedure.query(async () => getDynamicPriceHistory()),
     /** Lightweight polling endpoint for crawler status and recent completion time. */
     status: publicProcedure.query(async () => getLatestCrawlerStatus()),
+    /** Historical successful-job timing keeps refresh ETAs grounded in actual worker runs. */
+    refreshEstimates: publicProcedure.query(async () => getCrawlerRefreshEstimates()),
   }),
   crawler: router({
     /** Recent worker jobs and monitoring events are restricted to administrators. */

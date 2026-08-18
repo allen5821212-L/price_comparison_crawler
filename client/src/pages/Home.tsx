@@ -60,6 +60,8 @@ import {
   Heart,
   Trash2,
   SlidersHorizontal,
+  ChevronDown,
+  Clock3,
 } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useOverrides } from "@/hooks/useOverrides";
@@ -128,6 +130,12 @@ interface CoolpcProduct {
 
 interface ComparisonData {
   stats: Stats;
+  run?: {
+    id: number;
+    status: string;
+    startedAt?: Date | string | null;
+    finishedAt?: Date | string | null;
+  };
   matched: MatchedProduct[];
   sinya_products: Array<Record<string, unknown>>;
   coolpc_products: CoolpcProduct[];
@@ -148,6 +156,32 @@ type SortOrder = "asc" | "desc";
 type CheaperFilter = "all" | "sinya" | "coolpc" | "pchome" | "momo" | "tie";
 type ScoreFilter = "all" | "high" | "medium" | "low";
 type OverrideFilter = "all" | "confirmed" | "rejected" | "no_match" | "none";
+
+function formatRelativeTime(value: Date | string | null | undefined, now: number): string {
+  if (!value) return "尚無成功更新紀錄";
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return "時間資料暫缺";
+  const elapsedSeconds = Math.max(0, Math.floor((now - timestamp) / 1_000));
+  if (elapsedSeconds < 60) return "剛剛";
+  const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+  if (elapsedMinutes < 60) return `${elapsedMinutes} 分鐘前`;
+  const elapsedHours = Math.floor(elapsedMinutes / 60);
+  if (elapsedHours < 24) return `${elapsedHours} 小時前`;
+  const elapsedDays = Math.floor(elapsedHours / 24);
+  return `${elapsedDays} 天前`;
+}
+
+function formatDuration(milliseconds: number): string {
+  const totalMinutes = Math.max(0, Math.ceil(milliseconds / 60_000));
+  if (totalMinutes < 1) return "少於 1 分鐘";
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return hours > 0 ? `${hours} 小時${minutes ? ` ${minutes} 分鐘` : ""}` : `${minutes} 分鐘`;
+}
+
+function formatEstimate(milliseconds: number | null | undefined): string {
+  return milliseconds ? `約 ${formatDuration(milliseconds)}` : "等待歷史資料";
+}
 
 function formatPrice(price: number): string {
   return `NT$${price.toLocaleString()}`;
@@ -247,26 +281,53 @@ export default function Home() {
   const fetchData = () => comparisonQuery.refetch();
   const utils = trpc.useUtils();
   const [requestedRefreshJobId, setRequestedRefreshJobId] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
   const jobsQuery = trpc.crawler.jobs.useQuery(undefined, {
     enabled: user?.role === "admin",
     refetchInterval: 15_000,
   });
+  const refreshEstimatesQuery = trpc.comparison.refreshEstimates.useQuery(undefined, { refetchInterval: 300_000 });
   const enqueueRefresh = trpc.crawler.enqueue.useMutation({
-    onSuccess: (result) => {
+    onSuccess: (result, variables) => {
       setRequestedRefreshJobId(result.id);
       void utils.crawler.jobs.invalidate();
+      const scopeLabel = variables.scope === "full" ? "完整價格更新" : `${variables.categoryName} 分類更新`;
       toast.success(result.created
-        ? `即時更新工作 #${result.id} 已排入佇列`
-        : `更新工作 #${result.id} 已在${result.status === "running" ? "執行" : "佇列"}中`);
+        ? `${scopeLabel}工作 #${result.id} 已排入佇列`
+        : `${scopeLabel}工作 #${result.id} 已在${result.status === "running" ? "執行" : "佇列"}中`);
     },
     onError: requestError => toast.error(requestError.message || "無法排入價格更新工作"),
   });
-  const activeRefreshJob = useMemo(() => {
+  const currentCategoryName = categoryFilter === "all" ? null : categoryFilter;
+  const { requestedRefreshJob, activeFullRefreshJob, activeCategoryRefreshJob } = useMemo(() => {
     const jobs = jobsQuery.data ?? [];
-    const requested = requestedRefreshJobId === null ? undefined : jobs.find(job => job.id === requestedRefreshJobId);
-    return requested ?? jobs.find(job => job.scope === "full" && (job.status === "queued" || job.status === "running"));
-  }, [jobsQuery.data, requestedRefreshJobId]);
-  const isPriceRefreshing = activeRefreshJob?.status === "queued" || activeRefreshJob?.status === "running";
+    const active = (status: string) => status === "queued" || status === "running";
+    return {
+      requestedRefreshJob: requestedRefreshJobId === null ? undefined : jobs.find(job => job.id === requestedRefreshJobId),
+      activeFullRefreshJob: jobs.find(job => job.scope === "full" && active(job.status)),
+      activeCategoryRefreshJob: currentCategoryName
+        ? jobs.find(job => job.scope === "category" && job.categoryName === currentCategoryName && active(job.status))
+        : undefined,
+    };
+  }, [currentCategoryName, jobsQuery.data, requestedRefreshJobId]);
+  const activeRefreshJob = requestedRefreshJob ?? activeFullRefreshJob ?? activeCategoryRefreshJob;
+  const isFullRefreshActive = Boolean(activeFullRefreshJob);
+  const isCurrentCategoryRefreshing = Boolean(activeCategoryRefreshJob);
+  const refreshEstimate = activeRefreshJob ? refreshEstimatesQuery.data?.[activeRefreshJob.scope] : undefined;
+  const refreshEstimateMs = refreshEstimate?.estimateMs ?? null;
+  const refreshStartedAt = activeRefreshJob?.startedAt ? new Date(activeRefreshJob.startedAt).getTime() : null;
+  const refreshElapsedMs = activeRefreshJob?.status === "running" && refreshStartedAt
+    ? Math.max(0, now - refreshStartedAt)
+    : 0;
+  const refreshProgress = activeRefreshJob?.status === "running" && refreshEstimateMs
+    ? Math.min(95, Math.max(5, Math.round((refreshElapsedMs / refreshEstimateMs) * 100)))
+    : 0;
+  const refreshRemainingMs = refreshEstimateMs === null ? null : Math.max(0, refreshEstimateMs - refreshElapsedMs);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (!requestedRefreshJobId || !activeRefreshJob || activeRefreshJob.id !== requestedRefreshJobId) return;
@@ -643,17 +704,51 @@ export default function Home() {
                   variant="outline"
                   size="sm"
                   className="hidden gap-2 border-primary/30 text-primary hover:bg-primary/10 sm:inline-flex"
-                  disabled={user?.role !== "admin" || enqueueRefresh.isPending || Boolean(isPriceRefreshing)}
+                  disabled={user?.role !== "admin" || enqueueRefresh.isPending || isFullRefreshActive}
                   onClick={() => enqueueRefresh.mutate({ scope: "full" })}
                 >
-                  {enqueueRefresh.isPending || activeRefreshJob?.status === "running"
+                  {enqueueRefresh.isPending || activeFullRefreshJob?.status === "running"
                     ? <RefreshCw className="size-3.5 animate-spin" />
                     : <RadioTower className="size-3.5" />}
-                  {activeRefreshJob?.status === "queued" ? "更新排隊中" : activeRefreshJob?.status === "running" ? "更新中" : "即時更新價格"}
+                  {activeFullRefreshJob?.status === "queued" ? "完整更新排隊中" : activeFullRefreshJob?.status === "running" ? "完整更新中" : "即時更新價格"}
                 </Button>
               </TooltipTrigger>
               <TooltipContent>{user?.role === "admin" ? "排入完整四平台爬蟲；完成後會自動重載資料" : "僅管理員可排入完整價格更新"}</TooltipContent>
             </Tooltip>
+            <DropdownMenu>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="icon" className="-ml-2 hidden border-primary/30 text-primary hover:bg-primary/10 sm:inline-flex" aria-label="選擇價格更新範圍">
+                      <ChevronDown className="size-3.5" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                </TooltipTrigger>
+                <TooltipContent>選擇價格更新範圍</TooltipContent>
+              </Tooltip>
+              <DropdownMenuContent align="end" className="w-72">
+                <DropdownMenuLabel>價格更新範圍</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  disabled={user?.role !== "admin" || enqueueRefresh.isPending || isFullRefreshActive}
+                  onClick={() => enqueueRefresh.mutate({ scope: "full" })}
+                >
+                  <RadioTower className="mr-2 size-4 text-primary" />
+                  <span className="flex-1">完整四平台更新</span>
+                  <span className="text-xs text-muted-foreground">{formatEstimate(refreshEstimatesQuery.data?.full.estimateMs)}</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  disabled={user?.role !== "admin" || !currentCategoryName || enqueueRefresh.isPending || isFullRefreshActive || isCurrentCategoryRefreshing}
+                  onClick={() => currentCategoryName && enqueueRefresh.mutate({ scope: "category", categoryName: currentCategoryName })}
+                >
+                  <Activity className="mr-2 size-4 text-primary" />
+                  <span className="min-w-0 flex-1 truncate">更新目前分類{currentCategoryName ? `：${currentCategoryName}` : ""}</span>
+                  {currentCategoryName ? <span className="text-xs text-muted-foreground">{formatEstimate(refreshEstimatesQuery.data?.category.estimateMs)}</span> : null}
+                </DropdownMenuItem>
+                {!currentCategoryName ? <p className="px-2 py-1.5 text-xs text-muted-foreground">請先從篩選器選擇一個欣亞分類。</p> : null}
+                {isFullRefreshActive ? <p className="px-2 py-1.5 text-xs text-muted-foreground">完整更新進行中；完成後即可更新單一分類。</p> : null}
+              </DropdownMenuContent>
+            </DropdownMenu>
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button variant="ghost" size="icon" asChild>
@@ -851,11 +946,36 @@ export default function Home() {
               即時比對同一型號的四平台價格差異，幫你在買電腦零件時省下最多錢。
             </p>
             {data && (
-              <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                <p>最後更新：<span className="font-mono font-medium text-foreground">{data.stats.update_time}</span></p>
-                {activeRefreshJob ? <Badge variant="outline" className={activeRefreshJob.status === "running" ? "border-blue-400/30 bg-blue-500/10 text-blue-500" : "border-amber-400/30 bg-amber-500/10 text-amber-500"}>
-                  {activeRefreshJob.status === "running" ? "價格更新中" : "價格更新排隊中"}
-                </Badge> : null}
+              <div className="mt-3 space-y-2 text-sm text-muted-foreground">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p>最近成功更新：<span className="font-medium text-foreground">{formatRelativeTime(data.run?.finishedAt ?? data.run?.startedAt, now)}</span></p>
+                  <span className="text-xs">（{data.stats.update_time}）</span>
+                </div>
+                {activeRefreshJob ? <div className="max-w-xl rounded-lg border border-primary/20 bg-primary/5 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <span className="flex items-center gap-1.5 font-medium text-foreground"><Clock3 className="size-3.5 text-primary" />{activeRefreshJob.scope === "full" ? "完整四平台更新" : `${activeRefreshJob.categoryName ?? "目前分類"} 更新`}</span>
+                    <Badge variant="outline" className={activeRefreshJob.status === "running" ? "border-blue-400/30 bg-blue-500/10 text-blue-500" : "border-amber-400/30 bg-amber-500/10 text-amber-500"}>
+                      {activeRefreshJob.status === "running" ? refreshEstimateMs ? `估算進度 ${refreshProgress}%` : "正在建立估算" : "等待執行器"}
+                    </Badge>
+                  </div>
+                  <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
+                    <div className="h-full rounded-full bg-primary transition-[width] duration-300" style={{ width: `${refreshProgress}%` }} />
+                  </div>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    {activeRefreshJob.status === "running" && refreshEstimateMs && refreshRemainingMs !== null
+                      ? `已執行約 ${formatDuration(refreshElapsedMs)}；預估尚餘約 ${formatDuration(refreshRemainingMs)}。`
+                      : activeRefreshJob.status === "running"
+                        ? "正在累積成功工作耗時，完成後將自動提供更準確的預估。"
+                        : `將由雲端執行器依序處理；預估 ${formatEstimate(refreshEstimateMs)}。`}
+                  </p>
+                  {refreshEstimate ? <p className="mt-1 text-[11px] text-muted-foreground/80">
+                    {refreshEstimate.source === "scope_history"
+                      ? `依 ${refreshEstimate.sampleSize} 次同範圍成功更新的平均耗時估算。`
+                      : refreshEstimate.source === "full_history_ratio"
+                        ? `尚無分類成功紀錄，暫依 ${refreshEstimate.sampleSize} 次完整更新的平均耗時比例估算。`
+                        : "目前尚無足夠的成功工作資料。"}
+                  </p> : null}
+                </div> : null}
               </div>
             )}
           </div>

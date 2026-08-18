@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, like, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, like, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   comparisonMatches,
@@ -40,6 +40,12 @@ export interface EnqueueCrawlerJobResult {
   id: number;
   created: boolean;
   status: "queued" | "running" | "completed" | "failed" | "cancelled";
+}
+
+export interface CrawlerRefreshEstimate {
+  estimateMs: number | null;
+  sampleSize: number;
+  source: "scope_history" | "full_history_ratio" | "unavailable";
 }
 
 export interface FavoriteInput {
@@ -483,6 +489,61 @@ export async function getLatestCrawlerStatus() {
   const [run] = await db.select().from(comparisonRuns)
     .orderBy(desc(comparisonRuns.id)).limit(1);
   return run ?? null;
+}
+
+/**
+ * Estimate a job duration from actual successful worker history. Categories
+ * fall back to a quarter of the measured full-refresh average only until the
+ * system has completed category-specific jobs to learn from.
+ */
+export async function getCrawlerRefreshEstimates(): Promise<Record<"full" | "category", CrawlerRefreshEstimate>> {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+
+  const rows = await db.select({
+    scope: crawlerJobs.scope,
+    startedAt: crawlerJobs.startedAt,
+    finishedAt: crawlerJobs.finishedAt,
+  }).from(crawlerJobs)
+    .where(and(
+      eq(crawlerJobs.status, "completed"),
+      isNotNull(crawlerJobs.startedAt),
+      isNotNull(crawlerJobs.finishedAt),
+    ))
+    .orderBy(desc(crawlerJobs.finishedAt), desc(crawlerJobs.id))
+    .limit(40);
+
+  const durations = { full: [] as number[], category: [] as number[] };
+  rows.forEach(row => {
+    if (!row.startedAt || !row.finishedAt) return;
+    const startedAt = new Date(row.startedAt).getTime();
+    const finishedAt = new Date(row.finishedAt).getTime();
+    const durationMs = finishedAt - startedAt;
+    // Ignore clock-skew and clearly abnormal jobs so one bad record cannot
+    // make the user-facing estimate misleading.
+    if (durationMs >= 60_000 && durationMs <= 12 * 60 * 60_000) {
+      durations[row.scope].push(durationMs);
+    }
+  });
+
+  const average = (values: number[]) => values.length
+    ? Math.round(values.reduce((total, value) => total + value, 0) / values.length)
+    : null;
+  const fullEstimateMs = average(durations.full);
+  const categoryEstimateMs = average(durations.category);
+
+  return {
+    full: {
+      estimateMs: fullEstimateMs,
+      sampleSize: durations.full.length,
+      source: fullEstimateMs ? "scope_history" : "unavailable",
+    },
+    category: categoryEstimateMs
+      ? { estimateMs: categoryEstimateMs, sampleSize: durations.category.length, source: "scope_history" }
+      : fullEstimateMs
+        ? { estimateMs: Math.round(fullEstimateMs / 4), sampleSize: durations.full.length, source: "full_history_ratio" }
+        : { estimateMs: null, sampleSize: 0, source: "unavailable" },
+  };
 }
 
 /** Queue a crawler task for the persistent cloud worker without stacking full refreshes. */
