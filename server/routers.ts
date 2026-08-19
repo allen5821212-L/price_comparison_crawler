@@ -11,6 +11,7 @@ import {
   getLatestCrawlerStatus,
   getLatestDynamicComparison,
   getCoolpcCoverageSummary,
+  getCrawlerIssueContext,
   listCoolpcUnlistedSinyaProducts,
   listCrawlerEvents,
   listCrawlerJobs,
@@ -20,6 +21,7 @@ import {
   listActiveMatchingFeedback,
   listMatchingFeedbackForAdmin,
   markCrawlerEventsRead,
+  upsertCrawlerIssueReport,
   markPriceNotificationsReadForUser,
   setMatchingFeedbackActive,
   setFavoriteActiveForUser,
@@ -123,6 +125,20 @@ export const appRouter = router({
       .query(async ({ input }) => listCrawlerJobs(input?.limit ?? 50)),
     events: adminProcedure.input(z.object({ limit: z.number().int().min(1).max(200).default(100) }).optional())
       .query(async ({ input }) => listCrawlerEvents(input?.limit ?? 100)),
+    issueContext: adminProcedure.input(z.object({ jobId: z.number().int().positive() }))
+      .query(async ({ input }) => getCrawlerIssueContext(input.jobId)),
+    recordIssueDraft: adminProcedure.input(z.object({
+      jobId: z.number().int().positive(),
+      severity: z.enum(["low", "medium", "high", "critical"]),
+      issueLabel: z.enum(["crawler", "data", "source"]),
+      issueDraftUrl: z.string().url().max(8_000).refine(url => url.startsWith("https://github.com/allen5821212-L/price-comparison-crawler-issues/issues/new?"), "Issue 草稿網址不正確"),
+      errorSummary: z.string().max(8_000).optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const context = await getCrawlerIssueContext(input.jobId);
+      if (!context) throw new Error("找不到爬蟲工作");
+      if (context.job.status !== "failed") throw new Error("僅能回報失敗的爬蟲工作");
+      return upsertCrawlerIssueReport({ ...input, createdByOpenId: ctx.user.openId });
+    }),
     markEventsRead: adminProcedure.input(z.object({ ids: z.array(z.number().int().positive()).max(200) }))
       .mutation(async ({ input }) => {
         await markCrawlerEventsRead(input.ids);

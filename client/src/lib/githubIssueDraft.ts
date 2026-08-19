@@ -4,6 +4,9 @@ export type FailureIssueDraftInput = {
   categoryName?: string | null;
   origin: string;
   reportedAt: Date;
+  severity?: "low" | "medium" | "high" | "critical";
+  issueLabel?: "crawler" | "data" | "source";
+  errorSummary?: Array<{ title: string; message?: string | null; createdAt?: Date | string | null }>;
 };
 
 export const GITHUB_ISSUES_NEW_URL = "https://github.com/allen5821212-L/price-comparison-crawler-issues/issues/new";
@@ -14,9 +17,27 @@ function scopeLabel(input: FailureIssueDraftInput): string {
     : `分類更新：${input.categoryName ?? "未記錄分類"}`;
 }
 
+const severityLabels = {
+  low: "低",
+  medium: "中",
+  high: "高",
+  critical: "緊急",
+} as const;
+
+const issueLabelNames = {
+  crawler: "爬蟲執行器",
+  data: "資料／比對結果",
+  source: "來源網站",
+} as const;
+
 export function buildFailureDiagnosticsMarkdown(input: FailureIssueDraftInput): string {
   const updateScope = scopeLabel(input);
   const monitorUrl = `${input.origin}/crawler?job=${input.jobId}`;
+  const severity = input.severity ?? "medium";
+  const issueLabel = input.issueLabel ?? "crawler";
+  const eventLines = input.errorSummary?.length
+    ? input.errorSummary.map(event => `- **${event.title}**${event.message ? `：${event.message}` : ""}${event.createdAt ? `（${new Date(event.createdAt).toLocaleString("zh-TW")}）` : ""}`)
+    : ["- 尚未取得額外錯誤事件；請開啟監控日誌查看工作詳細紀錄。"];
   return [
     "## 價格比對器｜更新失敗診斷資訊",
     "",
@@ -24,7 +45,12 @@ export function buildFailureDiagnosticsMarkdown(input: FailureIssueDraftInput): 
     `- **工作編號**：\`#${input.jobId}\``,
     `- **更新範圍**：${updateScope}`,
     "- **工作狀態**：`failed`",
+    `- **嚴重程度**：${severityLabels[severity]}（\`severity:${severity}\`）`,
+    `- **回報分類**：${issueLabelNames[issueLabel]}（\`${issueLabel}\`）`,
     `- **回報時間**：${input.reportedAt.toLocaleString("zh-TW")}`,
+    "",
+    "### 最新錯誤摘要",
+    ...eventLines,
     "",
     "### 監控日誌",
     `- [開啟工作 #${input.jobId} 的爬蟲監控日誌](${monitorUrl})`,
@@ -41,6 +67,7 @@ export function buildGitHubIssueDraftUrl(input: FailureIssueDraftInput): string 
   const params = new URLSearchParams({
     title,
     body: buildFailureDiagnosticsMarkdown(input),
+    labels: ["bug", input.issueLabel ?? "crawler", `severity:${input.severity ?? "medium"}`].join(","),
   });
   return `${GITHUB_ISSUES_NEW_URL}?${params.toString()}`;
 }

@@ -11,6 +11,9 @@ const input = {
   categoryName: "CPU 中央處理器",
   origin: "https://pricecomp-cr-mlsxyggu.manus.space",
   reportedAt: new Date("2026-08-19T00:00:00.000Z"),
+  severity: "high" as const,
+  issueLabel: "source" as const,
+  errorSummary: [{ title: "來源網站回應失敗", message: "HTTP 503", createdAt: "2026-08-19T00:01:00.000Z" }],
 };
 
 describe("GitHub Issue draft diagnostics", () => {
@@ -20,6 +23,8 @@ describe("GitHub Issue draft diagnostics", () => {
     expect(markdown).toContain("## 價格比對器｜更新失敗診斷資訊");
     expect(markdown).toContain("- **工作編號**：`#42`");
     expect(markdown).toContain("- **更新範圍**：分類更新：CPU 中央處理器");
+    expect(markdown).toContain("嚴重程度**：高（`severity:high`）");
+    expect(markdown).toContain("來源網站回應失敗**：HTTP 503");
     expect(markdown).toContain("[開啟工作 #42 的爬蟲監控日誌](https://pricecomp-cr-mlsxyggu.manus.space/crawler?job=42)");
   });
 
@@ -31,6 +36,7 @@ describe("GitHub Issue draft diagnostics", () => {
     expect(draft.origin + draft.pathname).toBe("https://github.com/allen5821212-L/price-comparison-crawler-issues/issues/new");
     expect(draft.searchParams.get("title")).toBe("[價格比對器] 更新失敗：分類更新：CPU 中央處理器（工作 #42）");
     expect(draft.searchParams.get("body")).toContain("### 監控日誌");
+    expect(draft.searchParams.get("labels")).toBe("bug,source,severity:high");
     expect(login.origin + login.pathname).toBe("https://github.com/login");
     expect(login.searchParams.get("return_to")).toBe(draftUrl);
   });

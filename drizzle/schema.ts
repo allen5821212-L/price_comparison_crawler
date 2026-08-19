@@ -215,6 +215,26 @@ export const crawlerEvents = mysqlTable(
   }),
 );
 
+/** 管理員從失敗工作開啟的 GitHub Issue 草稿，供監控頁追蹤回報脈絡。 */
+export const crawlerIssueReports = mysqlTable(
+  "crawler_issue_reports",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    jobId: int("job_id").notNull(),
+    severity: mysqlEnum("severity", ["low", "medium", "high", "critical"]).default("medium").notNull(),
+    issueLabel: mysqlEnum("issue_label", ["crawler", "data", "source"]).default("crawler").notNull(),
+    issueDraftUrl: text("issue_draft_url").notNull(),
+    errorSummary: text("error_summary"),
+    createdByOpenId: varchar("created_by_open_id", { length: 64 }).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    uniqueJobReport: uniqueIndex("crawler_issue_reports_job_unique").on(table.jobId),
+    createdIdx: index("crawler_issue_reports_created_idx").on(table.createdAt),
+  }),
+);
+
 /** 使用者收藏的欣亞來源商品，可選擇指定可接受價格。 */
 export const productFavorites = mysqlTable(
   "product_favorites",
@@ -261,5 +281,6 @@ export type ComparisonMatch = typeof comparisonMatches.$inferSelect;
 export type ComparisonPriceHistory = typeof comparisonPriceHistory.$inferSelect;
 export type CrawlerJob = typeof crawlerJobs.$inferSelect;
 export type CrawlerEvent = typeof crawlerEvents.$inferSelect;
+export type CrawlerIssueReport = typeof crawlerIssueReports.$inferSelect;
 export type ProductFavorite = typeof productFavorites.$inferSelect;
 export type PriceNotification = typeof priceNotifications.$inferSelect;

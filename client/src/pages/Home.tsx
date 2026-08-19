@@ -74,6 +74,7 @@ import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import {
   buildFailureDiagnosticsMarkdown,
+  buildGitHubIssueDraftUrl,
   buildGitHubIssueLoginUrl,
 } from "@/lib/githubIssueDraft";
 
@@ -300,6 +301,8 @@ export default function Home() {
     categoryName?: string | null;
   } | null>(null);
   const [diagnosticsCopied, setDiagnosticsCopied] = useState(false);
+  const [issueSeverity, setIssueSeverity] = useState<"low" | "medium" | "high" | "critical">("medium");
+  const [issueLabel, setIssueLabel] = useState<"crawler" | "data" | "source">("crawler");
   const diagnosticsCopiedTimer = useRef<number | undefined>(undefined);
   const [now, setNow] = useState(() => Date.now());
   const jobsQuery = trpc.crawler.jobs.useQuery(undefined, {
@@ -307,6 +310,13 @@ export default function Home() {
     refetchInterval: 15_000,
   });
   const refreshEstimatesQuery = trpc.comparison.refreshEstimates.useQuery(undefined, { refetchInterval: 300_000 });
+  const issueContextQuery = trpc.crawler.issueContext.useQuery({ jobId: refreshFailureToast?.jobId ?? 0 }, {
+    enabled: user?.role === "admin" && Boolean(refreshFailureToast),
+  });
+  const recordIssueDraft = trpc.crawler.recordIssueDraft.useMutation({
+    onSuccess: () => void utils.crawler.jobs.invalidate(),
+    onError: issueError => toast.error(issueError.message || "無法記錄 Issue 草稿連結"),
+  });
   const enqueueRefresh = trpc.crawler.enqueue.useMutation({
     onSuccess: (result, variables) => {
       setRequestedRefreshJobId(result.id);
@@ -407,6 +417,8 @@ export default function Home() {
 
   useEffect(() => {
     setDiagnosticsCopied(false);
+    setIssueSeverity("medium");
+    setIssueLabel("crawler");
   }, [refreshFailureToast?.jobId]);
 
   useEffect(() => () => {
@@ -738,13 +750,7 @@ export default function Home() {
 
   const copyFailureDiagnostics = async () => {
     if (!refreshFailureToast) return;
-    const diagnosticText = buildFailureDiagnosticsMarkdown({
-      jobId: refreshFailureToast.jobId,
-      scope: refreshFailureToast.scope,
-      categoryName: refreshFailureToast.categoryName,
-      origin: window.location.origin,
-      reportedAt: new Date(),
-    });
+    const diagnosticText = buildFailureDiagnosticsMarkdown(buildFailureIssueDraftInput());
 
     try {
       if (navigator.clipboard?.writeText) {
@@ -771,13 +777,21 @@ export default function Home() {
 
   const getGitHubIssueDraftUrl = () => {
     if (!refreshFailureToast) return "https://github.com/allen5821212-L/price-comparison-crawler-issues/issues/new";
-    return buildGitHubIssueLoginUrl({
+    return buildGitHubIssueLoginUrl(buildFailureIssueDraftInput());
+  };
+
+  const buildFailureIssueDraftInput = () => {
+    if (!refreshFailureToast) throw new Error("沒有可回報的失敗工作");
+    return {
       jobId: refreshFailureToast.jobId,
       scope: refreshFailureToast.scope,
       categoryName: refreshFailureToast.categoryName,
       origin: window.location.origin,
       reportedAt: new Date(),
-    });
+      severity: issueSeverity,
+      issueLabel,
+      errorSummary: issueContextQuery.data?.events ?? [],
+    };
   };
 
   return (
@@ -829,6 +843,17 @@ export default function Home() {
                 ? "完整四平台更新未能完成，請稍後重新嘗試。"
                 : `${refreshFailureToast.categoryName ?? "目前分類"}更新未能完成，請稍後重新嘗試。`}
             </p>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              <Select value={issueSeverity} onValueChange={value => setIssueSeverity(value as typeof issueSeverity)}>
+                <SelectTrigger className="h-8 border-red-300/45 bg-red-950/15 text-xs text-red-50"><SelectValue placeholder="選擇嚴重程度" /></SelectTrigger>
+                <SelectContent><SelectItem value="low">嚴重程度：低</SelectItem><SelectItem value="medium">嚴重程度：中</SelectItem><SelectItem value="high">嚴重程度：高</SelectItem><SelectItem value="critical">嚴重程度：緊急</SelectItem></SelectContent>
+              </Select>
+              <Select value={issueLabel} onValueChange={value => setIssueLabel(value as typeof issueLabel)}>
+                <SelectTrigger className="h-8 border-red-300/45 bg-red-950/15 text-xs text-red-50"><SelectValue placeholder="選擇回報分類" /></SelectTrigger>
+                <SelectContent><SelectItem value="crawler">標籤：爬蟲執行器</SelectItem><SelectItem value="data">標籤：資料／比對結果</SelectItem><SelectItem value="source">標籤：來源網站</SelectItem></SelectContent>
+              </Select>
+            </div>
+            {issueContextQuery.data?.events.length ? <div className="mt-3 rounded-lg border border-red-300/25 bg-red-950/20 px-3 py-2"><p className="text-xs font-medium text-red-100">最新錯誤摘要</p><ul className="mt-1 space-y-1 text-xs text-red-100/75">{issueContextQuery.data.events.slice(0, 2).map((event, index) => <li key={`${event.title}-${index}`} className="truncate">{event.title}{event.message ? `：${event.message}` : ""}</li>)}</ul></div> : issueContextQuery.isLoading ? <p className="mt-2 text-xs text-red-100/65">正在讀取最新錯誤摘要…</p> : null}
             <div className="mt-3 flex flex-wrap gap-2">
               <Button type="button" size="sm" variant="outline" className="gap-1.5 border-red-300/50 bg-red-950/15 text-red-100 hover:bg-red-400/15 hover:text-white" asChild>
                 <a href={`/crawler?job=${refreshFailureToast.jobId}`} onClick={() => setRefreshFailureToast(null)}>
@@ -848,7 +873,16 @@ export default function Home() {
                 {diagnosticsCopied ? "已複製" : "複製 Markdown"}
               </Button>
               <Button type="button" size="sm" variant="outline" className="gap-1.5 border-red-300/50 bg-red-950/15 text-red-100 hover:bg-red-400/15 hover:text-white" asChild>
-                <a href={getGitHubIssueDraftUrl()} target="_blank" rel="noreferrer">
+                <a href={getGitHubIssueDraftUrl()} target="_blank" rel="noreferrer" onClick={() => {
+                  const input = buildFailureIssueDraftInput();
+                  recordIssueDraft.mutate({
+                    jobId: input.jobId,
+                    severity: input.severity,
+                    issueLabel: input.issueLabel,
+                    issueDraftUrl: buildGitHubIssueDraftUrl(input),
+                    errorSummary: buildFailureDiagnosticsMarkdown(input),
+                  });
+                }}>
                   <Github className="size-3.5" />
                   建立 GitHub Issue
                 </a>

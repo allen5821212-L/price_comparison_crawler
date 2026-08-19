@@ -6,6 +6,7 @@ import {
   comparisonProducts,
   comparisonRuns,
   crawlerEvents,
+  crawlerIssueReports,
   crawlerJobs,
   InsertUser,
   matchingFeedback,
@@ -60,6 +61,18 @@ export interface CoolpcCoverageCategory {
   coolpcListed: number;
   coolpcUnlisted: number;
   coverageRate: number;
+}
+
+export type CrawlerIssueSeverity = "low" | "medium" | "high" | "critical";
+export type CrawlerIssueLabel = "crawler" | "data" | "source";
+
+export interface CrawlerIssueReportInput {
+  jobId: number;
+  severity: CrawlerIssueSeverity;
+  issueLabel: CrawlerIssueLabel;
+  issueDraftUrl: string;
+  errorSummary?: string | null;
+  createdByOpenId: string;
 }
 
 type SinyaCoverageProduct = {
@@ -703,9 +716,19 @@ export async function enqueueCrawlerJob(input: CrawlerJobInput): Promise<Enqueue
 export async function listCrawlerJobs(limit = 50) {
   const db = await getDb();
   if (!db) throw new Error("資料庫目前無法使用");
-  return db.select().from(crawlerJobs)
+  const jobs = await db.select().from(crawlerJobs)
     .orderBy(desc(crawlerJobs.requestedAt), desc(crawlerJobs.id))
     .limit(Math.min(100, Math.max(1, limit)));
+  if (!jobs.length) return [];
+  const reports = await db.select({
+    jobId: crawlerIssueReports.jobId,
+    severity: crawlerIssueReports.severity,
+    issueLabel: crawlerIssueReports.issueLabel,
+    issueDraftUrl: crawlerIssueReports.issueDraftUrl,
+    updatedAt: crawlerIssueReports.updatedAt,
+  }).from(crawlerIssueReports).where(inArray(crawlerIssueReports.jobId, jobs.map(job => job.id)));
+  const reportsByJob = new Map(reports.map(report => [report.jobId, report]));
+  return jobs.map(job => ({ ...job, issueReport: reportsByJob.get(job.id) ?? null }));
 }
 
 /** Monitoring events include normal completions plus warning and error alerts. */
@@ -715,6 +738,51 @@ export async function listCrawlerEvents(limit = 100) {
   return db.select().from(crawlerEvents)
     .orderBy(desc(crawlerEvents.createdAt), desc(crawlerEvents.id))
     .limit(Math.min(200, Math.max(1, limit)));
+}
+
+/** Supplies the latest actionable worker errors for a failed-job Issue draft. */
+export async function getCrawlerIssueContext(jobId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const [job] = await db.select().from(crawlerJobs).where(eq(crawlerJobs.id, jobId)).limit(1);
+  if (!job) return null;
+  const events = await db.select({
+    title: crawlerEvents.title,
+    message: crawlerEvents.message,
+    level: crawlerEvents.level,
+    createdAt: crawlerEvents.createdAt,
+  }).from(crawlerEvents)
+    .where(and(
+      eq(crawlerEvents.jobId, jobId),
+      inArray(crawlerEvents.level, ["error", "warning"]),
+    ))
+    .orderBy(desc(crawlerEvents.createdAt), desc(crawlerEvents.id))
+    .limit(5);
+  return { job, events };
+}
+
+export async function upsertCrawlerIssueReport(input: CrawlerIssueReportInput) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  await db.insert(crawlerIssueReports).values({
+    jobId: input.jobId,
+    severity: input.severity,
+    issueLabel: input.issueLabel,
+    issueDraftUrl: input.issueDraftUrl,
+    errorSummary: input.errorSummary ?? null,
+    createdByOpenId: input.createdByOpenId,
+  }).onDuplicateKeyUpdate({
+    set: {
+      severity: input.severity,
+      issueLabel: input.issueLabel,
+      issueDraftUrl: input.issueDraftUrl,
+      errorSummary: input.errorSummary ?? null,
+      createdByOpenId: input.createdByOpenId,
+    },
+  });
+  const [report] = await db.select().from(crawlerIssueReports)
+    .where(eq(crawlerIssueReports.jobId, input.jobId)).limit(1);
+  return report ?? null;
 }
 
 export async function markCrawlerEventsRead(ids: number[]) {

@@ -6,8 +6,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
-import { Activity, AlertTriangle, CheckCircle2, Clock3, Play, RadioTower, RefreshCw, ShieldAlert } from "lucide-react";
-import { useMemo, useState } from "react";
+import { Activity, AlertTriangle, CheckCircle2, Clock3, ExternalLink, Github, Play, RadioTower, RefreshCw, ShieldAlert } from "lucide-react";
+import React, { useMemo, useState } from "react";
 import { toast } from "sonner";
 
 function formatDate(value: Date | string | null) {
@@ -24,6 +24,10 @@ const JOB_STYLES = {
 } as const;
 
 const JOB_LABELS = { queued: "排隊中", running: "執行中", completed: "已完成", failed: "失敗", cancelled: "已取消" } as const;
+
+export function CrawlerIssueReportLink({ issueReport }: { issueReport: { severity: string; issueLabel: string; issueDraftUrl: string } }) {
+  return <div className="mt-2 flex flex-wrap items-center gap-2"><Badge variant="outline" className="border-violet-400/30 bg-violet-500/10 text-violet-500">{issueReport.issueLabel} · {issueReport.severity}</Badge><a className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline" href={issueReport.issueDraftUrl} target="_blank" rel="noreferrer"><Github className="size-3.5" />已建立 Issue 草稿<ExternalLink className="size-3" /></a></div>;
+}
 
 export default function CrawlerMonitor() {
   const { user } = useAuth();
@@ -89,7 +93,7 @@ export default function CrawlerMonitor() {
 
           <Card className="overflow-hidden">
             <div className="flex items-center justify-between border-b border-border p-4"><div><h2 className="font-semibold">近期執行紀錄</h2><p className="text-xs text-muted-foreground">持續執行器會自行取得排隊中的工作，避免網站請求逾時。</p></div><Button size="sm" variant="outline" onClick={() => { void utils.crawler.jobs.invalidate(); void utils.crawler.events.invalidate(); }}><RefreshCw className="mr-2 size-3.5" />重新整理</Button></div>
-            {jobsQuery.isLoading ? <div className="space-y-3 p-4">{Array.from({ length: 4 }, (_, index) => <Skeleton key={index} className="h-14 w-full" />)}</div> : <div className="divide-y divide-border">{jobs.length === 0 ? <p className="p-10 text-center text-sm text-muted-foreground">尚無爬蟲工作。可先將完整更新或指定分類排入佇列。</p> : jobs.map(job => <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center" key={job.id}><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="font-medium">{job.scope === "full" ? "完整四平台更新" : job.categoryName}</p><Badge variant="outline" className={JOB_STYLES[job.status]}>{JOB_LABELS[job.status]}</Badge></div><p className="mt-1 text-xs text-muted-foreground">{job.trigger === "scheduled" ? "定期排程" : "管理員手動"} · 建立於 {formatDate(job.requestedAt)}{job.finishedAt ? ` · 結束於 ${formatDate(job.finishedAt)}` : ""}</p>{job.errorMessage ? <p className="mt-1 text-xs text-destructive">{job.errorMessage}</p> : null}</div><div className="text-xs text-muted-foreground sm:text-right">{job.comparisonRunId ? `比價批次 #${job.comparisonRunId}` : "等待執行器"}</div></div>)}</div>}
+            {jobsQuery.isLoading ? <div className="space-y-3 p-4">{Array.from({ length: 4 }, (_, index) => <Skeleton key={index} className="h-14 w-full" />)}</div> : <div className="divide-y divide-border">{jobs.length === 0 ? <p className="p-10 text-center text-sm text-muted-foreground">尚無爬蟲工作。可先將完整更新或指定分類排入佇列。</p> : jobs.map(job => <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center" key={job.id}><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="font-medium">{job.scope === "full" ? "完整四平台更新" : job.categoryName}</p><Badge variant="outline" className={JOB_STYLES[job.status]}>{JOB_LABELS[job.status]}</Badge></div><p className="mt-1 text-xs text-muted-foreground">{job.trigger === "scheduled" ? "定期排程" : "管理員手動"} · 建立於 {formatDate(job.requestedAt)}{job.finishedAt ? ` · 結束於 ${formatDate(job.finishedAt)}` : ""}</p>{job.errorMessage ? <p className="mt-1 text-xs text-destructive">{job.errorMessage}</p> : null}{job.issueReport ? <CrawlerIssueReportLink issueReport={job.issueReport} /> : null}</div><div className="text-xs text-muted-foreground sm:text-right">{job.comparisonRunId ? `比價批次 #${job.comparisonRunId}` : "等待執行器"}</div></div>)}</div>}
           </Card>
 
           <Card className="overflow-hidden">
