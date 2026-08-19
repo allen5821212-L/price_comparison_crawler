@@ -175,6 +175,20 @@ type CheaperFilter = "all" | "sinya" | "coolpc" | "pchome" | "momo" | "tie";
 type ScoreFilter = "all" | "high" | "medium" | "low";
 type OverrideFilter = "all" | "confirmed" | "rejected" | "no_match" | "none";
 
+type SavedFilterPreset = {
+  id: string;
+  name: string;
+  searchQuery: string;
+  categoryFilter: string;
+  coolpcCategoryFilter: string;
+  cheaperFilter: CheaperFilter;
+  scoreFilter: ScoreFilter;
+  overrideFilter: OverrideFilter;
+  specDiffFilter: boolean;
+};
+
+const SAVED_FILTER_PRESETS_KEY = "price-comparison-saved-filter-presets";
+
 function formatRelativeTime(value: Date | string | null | undefined, now: number): string {
   if (!value) return "尚無成功更新紀錄";
   const timestamp = new Date(value).getTime();
@@ -266,6 +280,15 @@ export default function Home() {
   const [sortField, setSortField] = useState<SortField>("price_diff");
   const [sortOrder, setSortOrder] = useState<SortOrder>("asc");
   const [currentPage, setCurrentPage] = useState(1);
+  const [savedFilterPresets, setSavedFilterPresets] = useState<SavedFilterPreset[]>(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      const stored = JSON.parse(window.localStorage.getItem(SAVED_FILTER_PRESETS_KEY) || "[]");
+      return Array.isArray(stored) ? stored : [];
+    } catch {
+      return [];
+    }
+  });
   const itemsPerPage = 25;
   const comparisonQuery = trpc.comparison.latest.useQuery({
     page: currentPage,
@@ -297,6 +320,40 @@ export default function Home() {
   const loading = comparisonQuery.isLoading;
   const error = comparisonQuery.error?.message ?? null;
   const fetchData = () => comparisonQuery.refetch();
+  const appliedFilterCount = [
+    Boolean(searchQuery.trim()),
+    categoryFilter !== "all",
+    coolpcCategoryFilter !== "all",
+    cheaperFilter !== "all",
+    scoreFilter !== "all",
+    overrideFilter !== "all",
+    specDiffFilter,
+  ].filter(Boolean).length;
+  const persistSavedFilterPresets = (presets: SavedFilterPreset[]) => {
+    setSavedFilterPresets(presets);
+    if (typeof window !== "undefined") window.localStorage.setItem(SAVED_FILTER_PRESETS_KEY, JSON.stringify(presets));
+  };
+  const applySavedFilterPreset = (preset: SavedFilterPreset) => {
+    setSearchQuery(preset.searchQuery);
+    setCategoryFilter(preset.categoryFilter);
+    setCoolpcCategoryFilter(preset.coolpcCategoryFilter);
+    setCheaperFilter(preset.cheaperFilter);
+    setScoreFilter(preset.scoreFilter);
+    setOverrideFilter(preset.overrideFilter);
+    setSpecDiffFilter(preset.specDiffFilter);
+    setCurrentPage(1);
+  };
+  const saveCurrentFilterPreset = () => {
+    const name = window.prompt("請輸入常用篩選名稱", `常用篩選 ${savedFilterPresets.length + 1}`)?.trim();
+    if (!name) return;
+    const preset: SavedFilterPreset = { id: `${Date.now()}`, name, searchQuery, categoryFilter, coolpcCategoryFilter, cheaperFilter, scoreFilter, overrideFilter, specDiffFilter };
+    const matchingIndex = savedFilterPresets.findIndex((item) => item.name === name);
+    const next = matchingIndex >= 0
+      ? savedFilterPresets.map((item, index) => index === matchingIndex ? { ...preset, id: item.id } : item)
+      : [...savedFilterPresets, preset].slice(-8);
+    persistSavedFilterPresets(next);
+    toast.success(`已儲存「${name}」`);
+  };
   const utils = trpc.useUtils();
   const [requestedRefreshJobId, setRequestedRefreshJobId] = useState<number | null>(null);
   const observedCrawlerJobStatuses = useRef(new Map<number, string>());
@@ -477,6 +534,13 @@ export default function Home() {
       void favoritesQuery.refetch();
     },
     onError: error => toast.error(error.message || "無法加入收藏"),
+  });
+  const setTargetFromHistory = trpc.favorites.save.useMutation({
+    onSuccess: () => {
+      void favoritesQuery.refetch();
+      toast.success("已設定目標價通知");
+    },
+    onError: targetError => toast.error(targetError.message || "無法設定目標價通知"),
   });
   const matchingRulesQuery = trpc.matchRules.listForCrawler.useQuery(undefined, { enabled: false });
   const [manualMatchOpen, setManualMatchOpen] = useState(false);
@@ -1423,7 +1487,7 @@ export default function Home() {
               <Button variant="outline" className="w-full justify-between"><span className="flex items-center gap-2"><SlidersHorizontal className="size-4" />篩選與排序</span><Badge variant="secondary">{totalResults} 筆</Badge></Button>
             </DrawerTrigger>
             <DrawerContent className="max-h-[88vh]">
-              <DrawerHeader className="border-b border-border"><DrawerTitle>篩選與排序</DrawerTitle></DrawerHeader>
+              <DrawerHeader className="flex-row items-center justify-between border-b border-border"><DrawerTitle>篩選與排序</DrawerTitle><Badge variant={appliedFilterCount ? "default" : "secondary"}>已套用 {appliedFilterCount} 項</Badge></DrawerHeader>
               <div className="space-y-3 overflow-y-auto px-4 py-4">
                 <div><p className="mb-1.5 text-xs font-medium text-muted-foreground">欣亞分類</p><SearchableSelect value={categoryFilter} onValueChange={setCategoryFilter} placeholder="欣亞分類" searchPlaceholder="搜尋分類..." options={[{ value: "all", label: `全部分類 (${filterCounts.total})` }, ...categories.map((category) => ({ value: category, label: `${category} (${categoryCounts[category] || 0})` }))]} /></div>
                 <div><p className="mb-1.5 text-xs font-medium text-muted-foreground">原價屋分類</p><SearchableSelect value={coolpcCategoryFilter} onValueChange={setCoolpcCategoryFilter} placeholder="原價屋分類" searchPlaceholder="搜尋分類..." options={[{ value: "all", label: `原價屋全部分類 (${data?.stats.coolpc_total ?? 0})` }, ...coolpcCategories.map((category) => ({ value: category.name, label: `${category.name} (${category.count})` }))]} /></div>
@@ -1434,6 +1498,7 @@ export default function Home() {
                 <div><p className="mb-1.5 text-xs font-medium text-muted-foreground">配對狀態</p><Select value={overrideFilter} onValueChange={(value) => setOverrideFilter(value as OverrideFilter)}><SelectTrigger className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">全部狀態</SelectItem><SelectItem value="confirmed">已確認配對</SelectItem><SelectItem value="rejected">已排除配對</SelectItem><SelectItem value="no_match">無符合商品</SelectItem><SelectItem value="none">未處理</SelectItem></SelectContent></Select></div>
                 <Button variant={specDiffFilter ? "default" : "outline"} className="w-full justify-start" onClick={() => setSpecDiffFilter(!specDiffFilter)}><AlertTriangle className="mr-2 size-4" />僅顯示規格差異{filterCounts.specDiff ? `（${filterCounts.specDiff}）` : ""}</Button>
                 <Button variant={sortField === "best_price" ? "default" : "outline"} className="w-full justify-start" onClick={() => { setSortField("best_price"); setSortOrder("asc"); }}><TrendingDown className="mr-2 size-4" />依四平台最低價排序</Button>
+                <div className="rounded-lg border border-border p-3"><div className="flex items-center justify-between gap-2"><p className="text-sm font-medium">常用篩選</p><Button size="sm" variant="outline" className="h-8" onClick={saveCurrentFilterPreset}>儲存目前條件</Button></div>{savedFilterPresets.length ? <div className="mt-3 space-y-2">{savedFilterPresets.map((preset) => <div key={preset.id} className="flex items-center gap-2"><Button size="sm" variant="secondary" className="min-w-0 flex-1 justify-start truncate" onClick={() => applySavedFilterPreset(preset)}>{preset.name}</Button><Button size="icon" variant="ghost" className="size-8 text-muted-foreground hover:text-destructive" onClick={() => persistSavedFilterPresets(savedFilterPresets.filter((item) => item.id !== preset.id))} aria-label={`刪除 ${preset.name}`}><Trash2 className="size-3.5" /></Button></div>)}</div> : <p className="mt-2 text-xs text-muted-foreground">可將目前條件儲存為常用篩選。</p>}</div>
               </div>
               <DrawerFooter className="border-t border-border"><Button variant="outline" onClick={() => { setSearchQuery(""); setCategoryFilter("all"); setCoolpcCategoryFilter("all"); setCheaperFilter("all"); setScoreFilter("all"); setOverrideFilter("all"); setSpecDiffFilter(false); }}>清除篩選</Button><DrawerClose asChild><Button>套用篩選</Button></DrawerClose></DrawerFooter>
             </DrawerContent>
@@ -2137,6 +2202,13 @@ export default function Home() {
         open={showPriceHistory}
         onOpenChange={setShowPriceHistory}
         initialProduct={priceHistoryProduct}
+        onSetTargetPrice={(sinyaName, targetPrice) => {
+          if (!user) {
+            toast.info("登入後即可設定目標價通知");
+            return;
+          }
+          setTargetFromHistory.mutate({ sourceKey: sinyaId(sinyaName), sinyaName, targetPrice });
+        }}
       />
 
       {/* ── Footer ── */}

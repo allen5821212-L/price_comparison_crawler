@@ -33,9 +33,10 @@ interface PriceHistoryDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   initialProduct?: string | null;
+  onSetTargetPrice?: (sinyaName: string, targetPrice: number) => void;
 }
 
-export function PriceHistoryDialog({ open, onOpenChange, initialProduct }: PriceHistoryDialogProps) {
+export function PriceHistoryDialog({ open, onOpenChange, initialProduct, onSetTargetPrice }: PriceHistoryDialogProps) {
   const historyQuery = trpc.comparison.history.useQuery(undefined, { enabled: open });
   const history = (historyQuery.data ?? []) as HistoryDay[];
   const [search, setSearch] = useState("");
@@ -265,6 +266,7 @@ export function PriceHistoryDialog({ open, onOpenChange, initialProduct }: Price
                   {trendData.length} 筆記錄 | 歷史最低: NT${historicLow?.toLocaleString() ?? "—"} | 最新價差: NT$
                   {trendData[trendData.length - 1].sinya_price - trendData[trendData.length - 1].coolpc_price}
                 </div>
+                {historicLow !== null && onSetTargetPrice ? <button type="button" className="mt-3 inline-flex w-fit items-center rounded-md border border-emerald-500/35 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-700 transition-colors hover:bg-emerald-500/20 dark:text-emerald-400" onClick={() => onSetTargetPrice(selectedProduct, historicLow)}>將 NT${historicLow.toLocaleString()} 設為目標價通知</button> : null}
               </>
             ) : (
               <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
