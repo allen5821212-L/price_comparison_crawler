@@ -75,6 +75,7 @@ import {
   Copy,
   Github,
   Menu,
+  PackageX,
 } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useOverrides } from "@/hooks/useOverrides";
@@ -1141,10 +1142,10 @@ export default function Home() {
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button variant="ghost" size="icon" asChild>
-                  <a href="/coverage" aria-label="欣亞與原價屋上架分析"><BarChart3 className="size-4" /></a>
+                  <a href="/coolpc-only" aria-label="查看原價屋有售、欣亞未上架商品"><BarChart3 className="size-4" /></a>
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>欣亞與原價屋上架分析</TooltipContent>
+              <TooltipContent>查看欣亞未上架商品</TooltipContent>
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -1319,7 +1320,7 @@ export default function Home() {
               <DropdownMenuItem disabled={user?.role !== "admin" || enqueueRefresh.isPending || isFullRefreshActive} onClick={() => enqueueRefresh.mutate({ scope: "full" })}><RadioTower className="mr-2 size-4 text-primary" />即時更新價格</DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem asChild><a href="/rules"><SlidersHorizontal className="mr-2 size-4" />同步規則管理</a></DropdownMenuItem>
-              <DropdownMenuItem asChild><a href="/coverage"><BarChart3 className="mr-2 size-4" />上架覆蓋率分析</a></DropdownMenuItem>
+              <DropdownMenuItem asChild><a href="/coolpc-only"><PackageX className="mr-2 size-4" />欣亞未上架商品</a></DropdownMenuItem>
               <DropdownMenuItem asChild><a href="/crawler"><Activity className="mr-2 size-4" />爬蟲監控</a></DropdownMenuItem>
               <DropdownMenuItem asChild><a href="/favorites"><Bell className="mr-2 size-4" />收藏與通知</a></DropdownMenuItem>
               <DropdownMenuSeparator />

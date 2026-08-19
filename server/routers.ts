@@ -11,8 +11,10 @@ import {
   getLatestCrawlerStatus,
   getLatestDynamicComparison,
   getCoolpcCoverageSummary,
+  getSinyaCoverageSummary,
   getCrawlerIssueContext,
   listCoolpcUnlistedSinyaProducts,
+  listSinyaUnlistedCoolpcProducts,
   listCrawlerEvents,
   listCrawlerJobs,
   listFavoritesForUser,
@@ -118,6 +120,13 @@ export const appRouter = router({
       page: z.number().int().positive().default(1),
       pageSize: z.number().int().min(10).max(100).default(25),
     }).optional()).query(async ({ input }) => listCoolpcUnlistedSinyaProducts(input ?? { page: 1, pageSize: 25 })),
+    /** Reverse conservative coverage: CoolPC products without an accepted Sinya match. */
+    sinyaCoverage: publicProcedure.query(async () => getSinyaCoverageSummary()),
+    sinyaUnlisted: publicProcedure.input(z.object({
+      category: z.string().min(1).max(512).optional(),
+      page: z.number().int().positive().default(1),
+      pageSize: z.number().int().min(10).max(100).default(25),
+    }).optional()).query(async ({ input }) => listSinyaUnlistedCoolpcProducts(input ?? { page: 1, pageSize: 25 })),
   }),
   crawler: router({
     /** Recent worker jobs and monitoring events are restricted to administrators. */
