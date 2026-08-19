@@ -5,6 +5,7 @@ import {
   comparisonPriceHistory,
   comparisonProducts,
   comparisonRuns,
+  coolpcCategoryRecrawlReminders,
   crawlerEvents,
   crawlerIssueReports,
   crawlerJobs,
@@ -81,6 +82,11 @@ export interface CrawlerIssueReportInput {
   issueDraftUrl: string;
   errorSummary?: string | null;
   createdByOpenId: string;
+}
+
+export interface CoolpcRecrawlReminderInput {
+  userId: number;
+  categoryName: string;
 }
 
 type PlatformCoverageProduct = {
@@ -775,6 +781,90 @@ export async function listSinyaUnlistedCoolpcProducts(input: { category?: string
       image: product.image ?? "",
     })),
   };
+}
+
+export async function exportSinyaUnlistedCoolpcProducts(category?: string) {
+  const source = await getLatestSinyaCoverageSource();
+  if (!source) return null;
+  const normalizedCategory = category?.trim();
+  return {
+    run: source.run,
+    items: source.coolpcProducts
+      .filter(product => !source.sinyaListedNames.has(product.name))
+      .filter(product => !normalizedCategory || (product.category?.trim() || "未分類") === normalizedCategory)
+      .sort((left, right) => (left.category ?? "未分類").localeCompare(right.category ?? "未分類", "zh-TW") || left.name.localeCompare(right.name, "zh-TW"))
+      .map(product => ({
+        externalId: product.externalId,
+        name: product.name,
+        category: product.category?.trim() || "未分類",
+        price: product.price,
+        url: product.url ?? "",
+      })),
+  };
+}
+
+export async function listCoolpcCategoryRecrawlReminders(userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const [reminders, summary] = await Promise.all([
+    db.select().from(coolpcCategoryRecrawlReminders).where(and(
+      eq(coolpcCategoryRecrawlReminders.userId, userId),
+      eq(coolpcCategoryRecrawlReminders.active, true),
+    )).orderBy(desc(coolpcCategoryRecrawlReminders.updatedAt)),
+    getSinyaCoverageSummary(),
+  ]);
+  const categories = new Map(summary?.categories.map(category => [category.category, category]) ?? []);
+  return reminders.map(reminder => {
+    const current = categories.get(reminder.categoryName);
+    const currentRunId = summary?.run.id ?? null;
+    const hasGap = (current?.sinyaUnlisted ?? 0) > 0;
+    return {
+      id: reminder.id,
+      categoryName: reminder.categoryName,
+      lastNotifiedRunId: reminder.lastNotifiedRunId,
+      currentRunId,
+      sinyaUnlisted: current?.sinyaUnlisted ?? 0,
+      isDue: Boolean(hasGap && currentRunId && (!reminder.lastNotifiedRunId || currentRunId > reminder.lastNotifiedRunId)),
+      updatedAt: reminder.updatedAt,
+    };
+  });
+}
+
+export async function saveCoolpcCategoryRecrawlReminder(input: CoolpcRecrawlReminderInput) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const summary = await getSinyaCoverageSummary();
+  await db.insert(coolpcCategoryRecrawlReminders).values({
+    userId: input.userId,
+    categoryName: input.categoryName,
+    active: true,
+    lastNotifiedRunId: summary?.run.id ?? null,
+  }).onDuplicateKeyUpdate({ set: {
+    active: true,
+    lastNotifiedRunId: summary?.run.id ?? null,
+  } });
+  return { success: true } as const;
+}
+
+export async function setCoolpcCategoryRecrawlReminderActive(userId: number, id: number, active: boolean) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  await db.update(coolpcCategoryRecrawlReminders).set({ active }).where(and(
+    eq(coolpcCategoryRecrawlReminders.id, id),
+    eq(coolpcCategoryRecrawlReminders.userId, userId),
+  ));
+  return { success: true } as const;
+}
+
+export async function acknowledgeCoolpcCategoryRecrawlReminder(userId: number, id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const summary = await getSinyaCoverageSummary();
+  await db.update(coolpcCategoryRecrawlReminders).set({ lastNotifiedRunId: summary?.run.id ?? null }).where(and(
+    eq(coolpcCategoryRecrawlReminders.id, id),
+    eq(coolpcCategoryRecrawlReminders.userId, userId),
+  ));
+  return { success: true } as const;
 }
 
 /** Queue a crawler task for the persistent cloud worker without stacking full refreshes. */

@@ -12,9 +12,11 @@ import {
   getLatestDynamicComparison,
   getCoolpcCoverageSummary,
   getSinyaCoverageSummary,
+  exportSinyaUnlistedCoolpcProducts,
   getCrawlerIssueContext,
   listCoolpcUnlistedSinyaProducts,
   listSinyaUnlistedCoolpcProducts,
+  listCoolpcCategoryRecrawlReminders,
   listCrawlerEvents,
   listCrawlerJobs,
   listFavoritesForUser,
@@ -29,6 +31,9 @@ import {
   setFavoriteActiveForUser,
   upsertMatchingFeedback,
   upsertFavoriteForUser,
+  saveCoolpcCategoryRecrawlReminder,
+  setCoolpcCategoryRecrawlReminderActive,
+  acknowledgeCoolpcCategoryRecrawlReminder,
 } from "./db";
 
 function deriveModelAlias(name: string): string | null {
@@ -127,6 +132,8 @@ export const appRouter = router({
       page: z.number().int().positive().default(1),
       pageSize: z.number().int().min(10).max(100).default(25),
     }).optional()).query(async ({ input }) => listSinyaUnlistedCoolpcProducts(input ?? { page: 1, pageSize: 25 })),
+    sinyaUnlistedExport: adminProcedure.input(z.object({ category: z.string().min(1).max(512).optional() }).optional())
+      .query(async ({ input }) => exportSinyaUnlistedCoolpcProducts(input?.category)),
   }),
   crawler: router({
     /** Recent worker jobs and monitoring events are restricted to administrators. */
@@ -171,6 +178,13 @@ export const appRouter = router({
         requestedByOpenId: ctx.user.openId,
       });
     }),
+    coolpcRecrawlReminders: adminProcedure.query(async ({ ctx }) => listCoolpcCategoryRecrawlReminders(ctx.user.id)),
+    saveCoolpcRecrawlReminder: adminProcedure.input(z.object({ categoryName: z.string().min(1).max(512) }))
+      .mutation(async ({ ctx, input }) => saveCoolpcCategoryRecrawlReminder({ userId: ctx.user.id, categoryName: input.categoryName })),
+    setCoolpcRecrawlReminderActive: adminProcedure.input(z.object({ id: z.number().int().positive(), active: z.boolean() }))
+      .mutation(async ({ ctx, input }) => setCoolpcCategoryRecrawlReminderActive(ctx.user.id, input.id, input.active)),
+    acknowledgeCoolpcRecrawlReminder: adminProcedure.input(z.object({ id: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => acknowledgeCoolpcCategoryRecrawlReminder(ctx.user.id, input.id)),
   }),
   favorites: router({
     list: protectedProcedure.query(async ({ ctx }) => listFavoritesForUser(ctx.user.id)),

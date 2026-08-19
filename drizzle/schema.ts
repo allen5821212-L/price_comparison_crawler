@@ -235,6 +235,24 @@ export const crawlerIssueReports = mysqlTable(
   }),
 );
 
+/** 管理員關注的原價屋分類缺口；每次既有更新完成後，前台依最新缺口提示手動補抓。 */
+export const coolpcCategoryRecrawlReminders = mysqlTable(
+  "coolpc_category_recrawl_reminders",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    userId: int("user_id").notNull(),
+    categoryName: varchar("category_name", { length: 512 }).notNull(),
+    active: boolean("active").default(true).notNull(),
+    lastNotifiedRunId: int("last_notified_run_id"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    uniqueUserCategory: uniqueIndex("coolpc_recrawl_reminders_user_category_unique").on(table.userId, table.categoryName),
+    userActiveIdx: index("coolpc_recrawl_reminders_user_active_idx").on(table.userId, table.active),
+  }),
+);
+
 /** 使用者收藏的欣亞來源商品，可選擇指定可接受價格。 */
 export const productFavorites = mysqlTable(
   "product_favorites",
