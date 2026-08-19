@@ -62,6 +62,7 @@ import {
   SlidersHorizontal,
   ChevronDown,
   Clock3,
+  Copy,
 } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useOverrides } from "@/hooks/useOverrides";
@@ -720,6 +721,42 @@ export default function Home() {
     toast.success(`已匯出 ${rules.length} 組自動配對規則`);
   };
 
+  const copyFailureDiagnostics = async () => {
+    if (!refreshFailureToast) return;
+    const scopeLabel = refreshFailureToast.scope === "full"
+      ? "完整四平台更新"
+      : `分類更新：${refreshFailureToast.categoryName ?? "未記錄分類"}`;
+    const monitorUrl = `${window.location.origin}/crawler?job=${refreshFailureToast.jobId}`;
+    const diagnosticText = [
+      "[價格比對器｜更新失敗診斷資訊]",
+      `工作編號：#${refreshFailureToast.jobId}`,
+      `更新範圍：${scopeLabel}`,
+      "工作狀態：failed",
+      `回報時間：${new Date().toLocaleString("zh-TW")}`,
+      `監控日誌：${monitorUrl}`,
+      "請附上以上資訊與爬蟲監控頁中的相關事件日誌。",
+    ].join("\n");
+
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(diagnosticText);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = diagnosticText;
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        const copied = document.execCommand("copy");
+        textarea.remove();
+        if (!copied) throw new Error("Clipboard copy was rejected");
+      }
+      toast.success("診斷資訊已複製，可直接貼上回報問題");
+    } catch {
+      toast.error("無法自動複製，請改由爬蟲監控頁查看日誌");
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background">
       {refreshCompletionToast ? <div className="fixed inset-x-0 top-20 z-[60] px-4 sm:top-24" role="status" aria-live="polite">
@@ -775,6 +812,16 @@ export default function Home() {
                   <Activity className="size-3.5" />
                   查看爬蟲監控日誌
                 </a>
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="gap-1.5 border-red-300/50 bg-red-950/15 text-red-100 hover:bg-red-400/15 hover:text-white"
+                onClick={() => void copyFailureDiagnostics()}
+              >
+                <Copy className="size-3.5" />
+                複製診斷資訊
               </Button>
               <Button
                 type="button"
