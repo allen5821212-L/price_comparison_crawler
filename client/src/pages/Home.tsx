@@ -281,6 +281,13 @@ export default function Home() {
   const fetchData = () => comparisonQuery.refetch();
   const utils = trpc.useUtils();
   const [requestedRefreshJobId, setRequestedRefreshJobId] = useState<number | null>(null);
+  const observedCrawlerJobStatuses = useRef(new Map<number, string>());
+  const hasObservedCrawlerJobs = useRef(false);
+  const [refreshCompletionToast, setRefreshCompletionToast] = useState<{
+    jobId: number;
+    scope: "full" | "category";
+    categoryName?: string | null;
+  } | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const jobsQuery = trpc.crawler.jobs.useQuery(undefined, {
     enabled: user?.role === "admin",
@@ -332,8 +339,6 @@ export default function Home() {
   useEffect(() => {
     if (!requestedRefreshJobId || !activeRefreshJob || activeRefreshJob.id !== requestedRefreshJobId) return;
     if (activeRefreshJob.status === "completed") {
-      void comparisonQuery.refetch();
-      toast.success("價格更新完成，已重新載入最新比價資料");
       setRequestedRefreshJobId(null);
     }
     if (activeRefreshJob.status === "failed" || activeRefreshJob.status === "cancelled") {
@@ -341,6 +346,36 @@ export default function Home() {
       setRequestedRefreshJobId(null);
     }
   }, [activeRefreshJob, comparisonQuery, requestedRefreshJobId]);
+
+  useEffect(() => {
+    const jobs = jobsQuery.data;
+    if (!jobs) return;
+
+    const previousStatuses = observedCrawlerJobStatuses.current;
+    if (hasObservedCrawlerJobs.current) {
+      const completedJob = jobs.find(job => job.status === "completed" && (
+        previousStatuses.get(job.id) === "queued" || previousStatuses.get(job.id) === "running"
+      ));
+      if (completedJob) {
+        void comparisonQuery.refetch();
+        void utils.comparison.refreshEstimates.invalidate();
+        setRefreshCompletionToast({
+          jobId: completedJob.id,
+          scope: completedJob.scope,
+          categoryName: completedJob.categoryName,
+        });
+      }
+    }
+
+    observedCrawlerJobStatuses.current = new Map(jobs.map(job => [job.id, job.status]));
+    hasObservedCrawlerJobs.current = true;
+  }, [comparisonQuery, jobsQuery.data, utils.comparison.refreshEstimates]);
+
+  useEffect(() => {
+    if (!refreshCompletionToast) return;
+    const timer = window.setTimeout(() => setRefreshCompletionToast(null), 12_000);
+    return () => window.clearTimeout(timer);
+  }, [refreshCompletionToast]);
 
   // Manual matching
   const overrides = useOverrides();
@@ -667,6 +702,41 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-background">
+      {refreshCompletionToast ? <div className="fixed inset-x-0 top-20 z-[60] px-4 sm:top-24" role="status" aria-live="polite">
+        <div className="mx-auto flex max-w-xl items-start gap-3 rounded-xl border border-emerald-400/35 bg-emerald-500/15 p-4 text-emerald-50 shadow-2xl shadow-emerald-950/30 backdrop-blur-xl animate-in slide-in-from-top-2 duration-300">
+          <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full bg-emerald-400/20 text-emerald-300">
+            <Check className="size-4" aria-hidden="true" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="font-semibold text-emerald-100">價格資料已成功更新</p>
+            <p className="mt-0.5 text-sm text-emerald-100/80">
+              {refreshCompletionToast.scope === "full"
+                ? "完整四平台更新已結束，最新比價資料已載入。"
+                : `${refreshCompletionToast.categoryName ?? "目前分類"}更新已結束，最新比價資料已載入。`}
+            </p>
+            <button
+              type="button"
+              className="mt-2 text-sm font-medium text-emerald-200 underline-offset-4 hover:text-white hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
+              onClick={() => {
+                void comparisonQuery.refetch();
+                window.scrollTo({ top: 0, behavior: "smooth" });
+              }}
+            >
+              檢視最新資料
+            </button>
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="-mr-1 -mt-1 size-8 text-emerald-100/80 hover:bg-emerald-400/15 hover:text-white"
+            aria-label="關閉更新完成提示"
+            onClick={() => setRefreshCompletionToast(null)}
+          >
+            <X className="size-4" />
+          </Button>
+        </div>
+      </div> : null}
       {/* ── Header ── */}
       <header className="sticky top-0 z-50 border-b border-border bg-card/80 backdrop-blur-xl">
         <div className="container flex h-16 items-center justify-between gap-4">
