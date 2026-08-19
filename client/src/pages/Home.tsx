@@ -895,15 +895,21 @@ export default function Home() {
                 {diagnosticsCopied ? "已複製" : "複製 Markdown"}
               </Button>
               <Button type="button" size="sm" variant="outline" className="gap-1.5 border-red-300/50 bg-red-950/15 text-red-100 hover:bg-red-400/15 hover:text-white" asChild>
-                <a href={getGitHubIssueDraftUrl()} target="_blank" rel="noreferrer" onClick={() => {
+                <a href={getGitHubIssueDraftUrl()} target="_blank" rel="noreferrer" onClick={async event => {
+                  event.preventDefault();
                   const input = buildFailureIssueDraftInput();
-                  recordIssueDraft.mutate({
-                    jobId: input.jobId,
-                    severity: input.severity,
-                    issueLabel: input.issueLabel,
-                    issueDraftUrl: buildGitHubIssueDraftUrl(input),
-                    errorSummary: buildFailureDiagnosticsMarkdown(input),
-                  });
+                  try {
+                    await recordIssueDraft.mutateAsync({
+                      jobId: input.jobId,
+                      severity: input.severity,
+                      issueLabel: input.issueLabel,
+                      issueDraftUrl: buildGitHubIssueDraftUrl(input),
+                      errorSummary: buildFailureDiagnosticsMarkdown(input),
+                    });
+                    window.open(getGitHubIssueDraftUrl(), "_blank", "noopener,noreferrer");
+                  } catch {
+                    // Mutation feedback is already shown by the shared error handler.
+                  }
                 }}>
                   <Github className="size-3.5" />
                   建立 GitHub Issue
