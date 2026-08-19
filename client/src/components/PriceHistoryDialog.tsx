@@ -5,7 +5,7 @@
  * 支援搜尋商品名稱，顯示欣亞與原價屋兩條價格線。
  */
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import {
   Dialog,
   DialogContent,
@@ -32,13 +32,21 @@ interface HistoryDay {
 interface PriceHistoryDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  initialProduct?: string | null;
 }
 
-export function PriceHistoryDialog({ open, onOpenChange }: PriceHistoryDialogProps) {
+export function PriceHistoryDialog({ open, onOpenChange, initialProduct }: PriceHistoryDialogProps) {
   const historyQuery = trpc.comparison.history.useQuery(undefined, { enabled: open });
   const history = (historyQuery.data ?? []) as HistoryDay[];
   const [search, setSearch] = useState("");
   const [selectedProduct, setSelectedProduct] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open && initialProduct) {
+      setSearch(initialProduct);
+      setSelectedProduct(initialProduct);
+    }
+  }, [initialProduct, open]);
 
   // Build product list from latest snapshot
   const productList = useMemo(() => {

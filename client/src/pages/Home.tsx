@@ -61,9 +61,11 @@ import {
   Trash2,
   SlidersHorizontal,
   ChevronDown,
+  ChevronUp,
   Clock3,
   Copy,
   Github,
+  Menu,
 } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useOverrides } from "@/hooks/useOverrides";
@@ -470,6 +472,8 @@ export default function Home() {
   const matchingRulesQuery = trpc.matchRules.listForCrawler.useQuery(undefined, { enabled: false });
   const [manualMatchOpen, setManualMatchOpen] = useState(false);
   const [showPriceHistory, setShowPriceHistory] = useState(false);
+  const [priceHistoryProduct, setPriceHistoryProduct] = useState<string | null>(null);
+  const [expandedMobileCard, setExpandedMobileCard] = useState<string | null>(null);
   const [activeSinyaProduct, setActiveSinyaProduct] = useState<{
     name: string;
     price: number;
@@ -954,19 +958,19 @@ export default function Home() {
       </div> : null}
       {/* ── Header ── */}
       <header className="sticky top-0 z-50 border-b border-border bg-card/80 backdrop-blur-xl">
-        <div className="container flex h-16 items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
+        <div className="container flex h-14 items-center justify-between gap-2 sm:h-16 sm:gap-4">
+          <div className="flex min-w-0 items-center gap-2 sm:gap-3">
             <img
               src="/manus-storage/logo_50c503e0.png"
               alt="Logo"
-              className="size-9 rounded-lg"
+              className="size-8 shrink-0 rounded-lg sm:size-9"
             />
-            <div>
-              <h1 className="text-lg font-bold leading-tight">價格比對器</h1>
-              <p className="text-xs text-muted-foreground">欣亞數位 vs 原價屋</p>
+            <div className="min-w-0">
+              <h1 className="truncate text-base font-bold leading-tight sm:text-lg">價格比對器</h1>
+              <p className="hidden text-xs text-muted-foreground sm:block">欣亞數位 vs 原價屋</p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="hidden items-center gap-2 md:flex">
             {/* Override stats */}
             {overrides.stats.total > 0 && (
               <Tooltip>
@@ -1210,6 +1214,27 @@ export default function Home() {
               <TooltipContent>切換主題</TooltipContent>
             </Tooltip>
           </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="icon" className="size-10 shrink-0 md:hidden" aria-label="開啟更多工具">
+                <Menu className="size-5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-64">
+              <DropdownMenuLabel>比價工具</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => setShowPriceHistory(true)}><TrendingUp className="mr-2 size-4" />價格趨勢</DropdownMenuItem>
+              <DropdownMenuItem disabled={user?.role !== "admin" || enqueueRefresh.isPending || isFullRefreshActive} onClick={() => enqueueRefresh.mutate({ scope: "full" })}><RadioTower className="mr-2 size-4 text-primary" />即時更新價格</DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem asChild><a href="/rules"><SlidersHorizontal className="mr-2 size-4" />同步規則管理</a></DropdownMenuItem>
+              <DropdownMenuItem asChild><a href="/coverage"><BarChart3 className="mr-2 size-4" />上架覆蓋率分析</a></DropdownMenuItem>
+              <DropdownMenuItem asChild><a href="/crawler"><Activity className="mr-2 size-4" />爬蟲監控</a></DropdownMenuItem>
+              <DropdownMenuItem asChild><a href="/favorites"><Bell className="mr-2 size-4" />收藏與通知</a></DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={fetchData} disabled={loading}><RefreshCw className={`mr-2 size-4 ${loading ? "animate-spin" : ""}`} />重新載入資料</DropdownMenuItem>
+              <DropdownMenuItem onClick={toggleTheme}>{theme === "dark" ? <Sun className="mr-2 size-4" /> : <Moon className="mr-2 size-4" />}切換主題</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </header>
 
@@ -1566,6 +1591,8 @@ export default function Home() {
             <div className="space-y-3 md:hidden">
               {paginatedItems.map((item, idx) => {
                 const sourceKey = item.source_key ?? sinyaId(item.sinya_name);
+                const cardKey = `${item.sinya_name}-${idx}`;
+                const expanded = expandedMobileCard === cardKey;
                 const isConfirmed = overrides.getConfirmed(sinyaId(item.sinya_name));
                 const confirmedPlatform = isConfirmed ? getOverridePlatform(isConfirmed.their_id, isConfirmed.platform) : null;
                 const priceEntries = [
@@ -1575,20 +1602,26 @@ export default function Home() {
                   { label: "momo", value: item.momo_price, accent: item.cheaper === "momo" ? "text-purple-500 font-bold" : "" },
                 ];
 
-                return <Card key={`${item.sinya_name}-${idx}`} className={isConfirmed ? "overflow-hidden border-green-500/35 bg-green-500/[0.03]" : "overflow-hidden"}>
+                return <Card key={cardKey} className={isConfirmed ? "overflow-hidden border-green-500/35 bg-green-500/[0.03]" : "overflow-hidden"}>
                   <div className="flex gap-3 p-3">
                     <div className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-muted/30">
                       {item.sinya_image ? <img src={item.sinya_image} alt="" className="size-full object-cover" loading="lazy" onError={event => { (event.target as HTMLImageElement).style.display = "none"; }} /> : <Package className="size-5 text-muted-foreground" />}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="line-clamp-2 text-sm font-semibold leading-snug">{item.name}</p>
+                      <p className={`${expanded ? "" : "line-clamp-2"} text-sm font-semibold leading-snug`}>{item.name}</p>
                       <div className="mt-1 flex flex-wrap items-center gap-1.5">
                         {item.category ? <Badge variant="outline" className="max-w-full truncate text-[10px]">{item.category}</Badge> : null}
                         {isConfirmed ? <Badge className="gap-1 bg-green-500/15 text-[10px] text-green-600 hover:bg-green-500/20"><Check className="size-2.5" />已確認{confirmedPlatform === "pchome" ? " PCHOME" : confirmedPlatform === "momo" ? " momo" : ""}</Badge> : null}
                         {item.score !== undefined ? <span className={`text-[11px] font-mono ${item.score >= 0.85 ? "text-green-600" : item.score >= 0.7 ? "text-amber-600" : "text-muted-foreground"}`}>相似 {(item.score * 100).toFixed(0)}%</span> : null}
                       </div>
-                      {item.sinya_name !== item.coolpc_name ? <p className="mt-1 line-clamp-1 text-[11px] text-muted-foreground">原價屋：{item.coolpc_name}</p> : null}
+                      {item.sinya_name !== item.coolpc_name ? <p className={`mt-1 text-[11px] text-muted-foreground ${expanded ? "" : "line-clamp-1"}`}>原價屋：{item.coolpc_name}</p> : null}
                     </div>
+                  </div>
+                  <div className="border-t border-border px-3 py-2">
+                    <Button size="sm" variant="ghost" className="h-7 w-full justify-between px-1 text-xs text-muted-foreground" onClick={() => setExpandedMobileCard(expanded ? null : cardKey)}>
+                      <span>{expanded ? "收合商品與規格資訊" : "展開完整品名與規格差異"}</span>{expanded ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
+                    </Button>
+                    {expanded ? <div className="space-y-2 pb-1 pt-2 text-xs"><div className="rounded-md bg-muted/45 p-2 text-muted-foreground"><p className="font-medium text-foreground">欣亞完整品名</p><p className="mt-1 break-words">{item.sinya_name}</p>{item.pchome_name ? <p className="mt-1 break-words">PCHOME：{item.pchome_name}</p> : null}{item.momo_name ? <p className="mt-1 break-words">momo：{item.momo_name}</p> : null}</div>{item.spec_diff?.length ? <div className="rounded-md border border-amber-500/25 bg-amber-500/5 p-2"><p className="flex items-center gap-1 font-medium text-amber-700 dark:text-amber-400"><AlertTriangle className="size-3.5" />規格差異</p><ul className="mt-1 list-disc space-y-0.5 pl-4 text-muted-foreground">{item.spec_diff.map((difference, differenceIndex) => <li key={differenceIndex}>{difference}</li>)}</ul></div> : <p className="px-1 text-muted-foreground">尚未偵測到規格差異。</p>}</div> : null}
                   </div>
                   <div className="grid grid-cols-2 gap-px border-y border-border bg-border">
                     {priceEntries.map(entry => <div key={entry.label} className="bg-card px-3 py-2"><p className="text-[10px] text-muted-foreground">{entry.label}</p><p className={`mt-0.5 font-mono text-sm ${entry.accent}`}>{entry.value ? formatPrice(entry.value) : "—"}</p></div>)}
@@ -1602,11 +1635,12 @@ export default function Home() {
                       {item.momo_url ? <Button size="icon" variant="ghost" className="size-9 text-purple-500" asChild><a href={item.momo_url} target="_blank" rel="noopener noreferrer" aria-label="開啟 momo 購買頁"><ShoppingCart className="size-3.5" /></a></Button> : null}
                     </div>
                   </div>
-                  <div className="grid grid-cols-4 border-t border-border bg-muted/25">
+                  <div className="grid grid-cols-5 border-t border-border bg-muted/25">
                     <Button size="sm" variant="ghost" className={favoriteKeys.has(sourceKey) ? "h-10 rounded-none text-rose-500" : "h-10 rounded-none text-muted-foreground"} onClick={() => { if (!user) { toast.info("登入後即可收藏商品並接收降價通知"); return; } if (favoriteKeys.has(sourceKey)) { toast.info("此商品已在收藏清單中"); return; } saveFavorite.mutate({ sourceKey, sinyaName: item.sinya_name }); }} aria-label="收藏商品"><Heart className="size-4" fill={favoriteKeys.has(sourceKey) ? "currentColor" : "none"} /></Button>
                     <Button size="sm" variant="ghost" className="h-10 rounded-none text-green-600" onClick={() => handleConfirmMatch(item.sinya_name, item.coolpc_name)} aria-label="標記配對正確"><Check className="size-4" /></Button>
                     <Button size="sm" variant="ghost" className="h-10 rounded-none text-destructive" onClick={() => handleRejectMatch(item.sinya_name, item.name, item.coolpc_name)} aria-label="標記配對錯誤"><X className="size-4" /></Button>
                     <Button size="sm" variant="ghost" className="h-10 rounded-none text-muted-foreground" onClick={() => handleOpenManualMatch(item.sinya_name, item.sinya_price, item.sinya_url, item.sinya_image)} aria-label="手動配對"><SearchIcon className="size-4" /></Button>
+                    <Button size="sm" variant="ghost" className="h-10 rounded-none text-primary" onClick={() => { setPriceHistoryProduct(item.sinya_name); setShowPriceHistory(true); }} aria-label="查看價格歷史"><Clock3 className="size-4" /></Button>
                   </div>
                 </Card>;
               })}
@@ -2048,6 +2082,7 @@ export default function Home() {
       <PriceHistoryDialog
         open={showPriceHistory}
         onOpenChange={setShowPriceHistory}
+        initialProduct={priceHistoryProduct}
       />
 
       {/* ── Footer ── */}
