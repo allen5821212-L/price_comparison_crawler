@@ -769,26 +769,34 @@ export default function Home() {
                 ? "完整四平台更新未能完成，請稍後重新嘗試。"
                 : `${refreshFailureToast.categoryName ?? "目前分類"}更新未能完成，請稍後重新嘗試。`}
             </p>
-            <Button
-              type="button"
-              size="sm"
-              className="mt-3 gap-1.5 bg-red-500 text-white hover:bg-red-400"
-              disabled={enqueueRefresh.isPending}
-              onClick={() => {
-                const retryInput = refreshFailureToast.scope === "full"
-                  ? { scope: "full" as const }
-                  : { scope: "category" as const, categoryName: refreshFailureToast.categoryName ?? currentCategoryName ?? "" };
-                if (retryInput.scope === "category" && !retryInput.categoryName) {
-                  toast.error("找不到原本的分類範圍，請先選擇分類後再更新");
-                  return;
-                }
-                setRefreshFailureToast(null);
-                enqueueRefresh.mutate(retryInput);
-              }}
-            >
-              <RefreshCw className={`size-3.5 ${enqueueRefresh.isPending ? "animate-spin" : ""}`} />
-              重新嘗試
-            </Button>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button type="button" size="sm" variant="outline" className="gap-1.5 border-red-300/50 bg-red-950/15 text-red-100 hover:bg-red-400/15 hover:text-white" asChild>
+                <a href={`/crawler?job=${refreshFailureToast.jobId}`} onClick={() => setRefreshFailureToast(null)}>
+                  <Activity className="size-3.5" />
+                  查看爬蟲監控日誌
+                </a>
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                className="gap-1.5 bg-red-500 text-white hover:bg-red-400"
+                disabled={enqueueRefresh.isPending}
+                onClick={() => {
+                  const retryInput = refreshFailureToast.scope === "full"
+                    ? { scope: "full" as const }
+                    : { scope: "category" as const, categoryName: refreshFailureToast.categoryName ?? currentCategoryName ?? "" };
+                  if (retryInput.scope === "category" && !retryInput.categoryName) {
+                    toast.error("找不到原本的分類範圍，請先選擇分類後再更新");
+                    return;
+                  }
+                  setRefreshFailureToast(null);
+                  enqueueRefresh.mutate(retryInput);
+                }}
+              >
+                <RefreshCw className={`size-3.5 ${enqueueRefresh.isPending ? "animate-spin" : ""}`} />
+                重新嘗試
+              </Button>
+            </div>
           </div>
           <Button
             type="button"
