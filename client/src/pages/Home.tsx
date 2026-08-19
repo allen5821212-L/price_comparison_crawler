@@ -63,6 +63,7 @@ import {
   ChevronDown,
   Clock3,
   Copy,
+  Github,
 } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useOverrides } from "@/hooks/useOverrides";
@@ -71,6 +72,10 @@ import { ManualMatchDialog } from "@/components/ManualMatchDialog";
 import { PriceHistoryDialog } from "@/components/PriceHistoryDialog";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
+import {
+  buildFailureDiagnosticsMarkdown,
+  buildGitHubIssueLoginUrl,
+} from "@/lib/githubIssueDraft";
 
 interface MatchedProduct {
   name: string;
@@ -733,26 +738,13 @@ export default function Home() {
 
   const copyFailureDiagnostics = async () => {
     if (!refreshFailureToast) return;
-    const scopeLabel = refreshFailureToast.scope === "full"
-      ? "完整四平台更新"
-      : `分類更新：${refreshFailureToast.categoryName ?? "未記錄分類"}`;
-    const monitorUrl = `${window.location.origin}/crawler?job=${refreshFailureToast.jobId}`;
-    const diagnosticText = [
-      "## 價格比對器｜更新失敗診斷資訊",
-      "",
-      "### 工作資訊",
-      `- **工作編號**：\`#${refreshFailureToast.jobId}\``,
-      `- **更新範圍**：${scopeLabel}`,
-      "- **工作狀態**：`failed`",
-      `- **回報時間**：${new Date().toLocaleString("zh-TW")}`,
-      "",
-      "### 監控日誌",
-      `- [開啟工作 #${refreshFailureToast.jobId} 的爬蟲監控日誌](${monitorUrl})`,
-      "",
-      "### 回報時請附上",
-      "- 上方工作資訊與相關事件日誌。",
-      "- 觸發更新前選擇的分類或操作步驟。",
-    ].join("\n");
+    const diagnosticText = buildFailureDiagnosticsMarkdown({
+      jobId: refreshFailureToast.jobId,
+      scope: refreshFailureToast.scope,
+      categoryName: refreshFailureToast.categoryName,
+      origin: window.location.origin,
+      reportedAt: new Date(),
+    });
 
     try {
       if (navigator.clipboard?.writeText) {
@@ -775,6 +767,17 @@ export default function Home() {
     } catch {
       toast.error("無法自動複製，請改由爬蟲監控頁查看日誌");
     }
+  };
+
+  const getGitHubIssueDraftUrl = () => {
+    if (!refreshFailureToast) return "https://github.com/allen5821212-L/price-comparison-crawler-issues/issues/new";
+    return buildGitHubIssueLoginUrl({
+      jobId: refreshFailureToast.jobId,
+      scope: refreshFailureToast.scope,
+      categoryName: refreshFailureToast.categoryName,
+      origin: window.location.origin,
+      reportedAt: new Date(),
+    });
   };
 
   return (
@@ -844,6 +847,12 @@ export default function Home() {
                 {diagnosticsCopied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
                 {diagnosticsCopied ? "已複製" : "複製 Markdown"}
               </Button>
+              <Button type="button" size="sm" variant="outline" className="gap-1.5 border-red-300/50 bg-red-950/15 text-red-100 hover:bg-red-400/15 hover:text-white" asChild>
+                <a href={getGitHubIssueDraftUrl()} target="_blank" rel="noreferrer">
+                  <Github className="size-3.5" />
+                  建立 GitHub Issue
+                </a>
+              </Button>
               <Button
                 type="button"
                 size="sm"
@@ -865,6 +874,9 @@ export default function Home() {
                 重新嘗試
               </Button>
             </div>
+            <p className="mt-2 text-xs leading-relaxed text-red-100/65">
+              GitHub Issue 儲存庫為私人專案，請以具備存取權限的 GitHub 帳戶登入；若無法開啟草稿，請先複製 Markdown 診斷資訊後以其他管道回報。
+            </p>
           </div>
           <Button
             type="button"
