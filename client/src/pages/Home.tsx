@@ -853,19 +853,19 @@ export default function Home() {
           </Button>
         </div>
       </div> : null}
-      {refreshFailureToast ? <div className="fixed inset-x-0 top-20 z-[60] px-4 sm:top-24" role="alert" aria-live="assertive">
-        <div className="mx-auto flex max-w-xl items-start gap-3 rounded-xl border border-red-400/45 bg-red-500/15 p-4 text-red-50 shadow-2xl shadow-red-950/30 backdrop-blur-xl animate-in slide-in-from-top-2 duration-300">
-          <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full bg-red-400/20 text-red-200">
+      {refreshFailureToast ? <div className="fixed inset-x-0 top-20 z-[60] px-3 sm:top-24 sm:px-4" role="alert" aria-live="assertive">
+        <div className="mx-auto flex max-w-xl items-start gap-2.5 rounded-xl border border-red-400/55 bg-red-950/95 p-3 text-red-50 shadow-2xl shadow-red-950/45 backdrop-blur-xl animate-in slide-in-from-top-2 duration-300 sm:gap-3 sm:bg-red-500/15 sm:p-4">
+          <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-red-400/20 text-red-100 sm:size-8 sm:text-red-200">
             <AlertTriangle className="size-4" aria-hidden="true" />
           </div>
           <div className="min-w-0 flex-1">
             <p className="font-semibold text-red-100">價格資料更新失敗</p>
-            <p className="mt-0.5 text-sm text-red-100/80">
+            <p className="mt-0.5 text-xs text-red-100/90 sm:text-sm sm:text-red-100/80">
               {refreshFailureToast.scope === "full"
                 ? "完整四平台更新未能完成，請稍後重新嘗試。"
                 : `${refreshFailureToast.categoryName ?? "目前分類"}更新未能完成，請稍後重新嘗試。`}
             </p>
-            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            <div className="mt-2 grid grid-cols-2 gap-2 sm:mt-3">
               <Select value={issueSeverity} onValueChange={value => setIssueSeverity(value as typeof issueSeverity)}>
                 <SelectTrigger className="h-8 border-red-300/45 bg-red-950/15 text-xs text-red-50"><SelectValue placeholder="選擇嚴重程度" /></SelectTrigger>
                 <SelectContent><SelectItem value="low">嚴重程度：低</SelectItem><SelectItem value="medium">嚴重程度：中</SelectItem><SelectItem value="high">嚴重程度：高</SelectItem><SelectItem value="critical">嚴重程度：緊急</SelectItem></SelectContent>
@@ -875,8 +875,8 @@ export default function Home() {
                 <SelectContent><SelectItem value="crawler">標籤：爬蟲執行器</SelectItem><SelectItem value="data">標籤：資料／比對結果</SelectItem><SelectItem value="source">標籤：來源網站</SelectItem></SelectContent>
               </Select>
             </div>
-            {issueContextQuery.data?.events.length ? <div className="mt-3 rounded-lg border border-red-300/25 bg-red-950/20 px-3 py-2"><p className="text-xs font-medium text-red-100">最新錯誤摘要</p><ul className="mt-1 space-y-1 text-xs text-red-100/75">{issueContextQuery.data.events.slice(0, 2).map((event, index) => <li key={`${event.title}-${index}`} className="truncate">{event.title}{event.message ? `：${event.message}` : ""}</li>)}</ul></div> : issueContextQuery.isLoading ? <p className="mt-2 text-xs text-red-100/65">正在讀取最新錯誤摘要…</p> : null}
-            <div className="mt-3 flex flex-wrap gap-2">
+            {issueContextQuery.data?.events.length ? <div className="mt-2 rounded-lg border border-red-300/30 bg-black/15 px-2.5 py-2 sm:mt-3 sm:border-red-300/25 sm:bg-red-950/20 sm:px-3"><p className="text-xs font-medium text-red-100">最新錯誤摘要</p><p className="mt-1 truncate text-xs text-red-100/85 sm:text-red-100/75">{issueContextQuery.data.events[0].title}{issueContextQuery.data.events[0].message ? `：${issueContextQuery.data.events[0].message}` : ""}</p><p className="mt-1 hidden text-xs text-red-100/75 sm:block">另有 {Math.max(0, issueContextQuery.data.events.length - 1)} 則相關事件可於監控頁查看。</p></div> : issueContextQuery.isLoading ? <p className="mt-2 text-xs text-red-100/75">正在讀取最新錯誤摘要…</p> : null}
+            <div className="mt-2 grid grid-cols-2 gap-2 sm:mt-3 sm:flex sm:flex-wrap">
               <Button type="button" size="sm" variant="outline" className="gap-1.5 border-red-300/50 bg-red-950/15 text-red-100 hover:bg-red-400/15 hover:text-white" asChild>
                 <a href={`/crawler?job=${refreshFailureToast.jobId}`} onClick={() => setRefreshFailureToast(null)}>
                   <Activity className="size-3.5" />
@@ -936,7 +936,7 @@ export default function Home() {
                 重新嘗試
               </Button>
             </div>
-            <p className="mt-2 text-xs leading-relaxed text-red-100/65">
+            <p className="mt-2 hidden text-xs leading-relaxed text-red-100/65 sm:block">
               GitHub Issue 儲存庫為私人專案，請以具備存取權限的 GitHub 帳戶登入；若無法開啟草稿，請先複製 Markdown 診斷資訊後以其他管道回報。
             </p>
           </div>
@@ -944,7 +944,7 @@ export default function Home() {
             type="button"
             variant="ghost"
             size="icon"
-            className="-mr-1 -mt-1 size-8 text-red-100/80 hover:bg-red-400/15 hover:text-white"
+            className="-mr-1 -mt-1 size-7 text-red-100/90 hover:bg-red-400/15 hover:text-white sm:size-8 sm:text-red-100/80"
             aria-label="關閉更新失敗提示"
             onClick={() => setRefreshFailureToast(null)}
           >
