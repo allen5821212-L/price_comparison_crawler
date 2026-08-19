@@ -738,13 +738,20 @@ export default function Home() {
       : `分類更新：${refreshFailureToast.categoryName ?? "未記錄分類"}`;
     const monitorUrl = `${window.location.origin}/crawler?job=${refreshFailureToast.jobId}`;
     const diagnosticText = [
-      "[價格比對器｜更新失敗診斷資訊]",
-      `工作編號：#${refreshFailureToast.jobId}`,
-      `更新範圍：${scopeLabel}`,
-      "工作狀態：failed",
-      `回報時間：${new Date().toLocaleString("zh-TW")}`,
-      `監控日誌：${monitorUrl}`,
-      "請附上以上資訊與爬蟲監控頁中的相關事件日誌。",
+      "## 價格比對器｜更新失敗診斷資訊",
+      "",
+      "### 工作資訊",
+      `- **工作編號**：\`#${refreshFailureToast.jobId}\``,
+      `- **更新範圍**：${scopeLabel}`,
+      "- **工作狀態**：`failed`",
+      `- **回報時間**：${new Date().toLocaleString("zh-TW")}`,
+      "",
+      "### 監控日誌",
+      `- [開啟工作 #${refreshFailureToast.jobId} 的爬蟲監控日誌](${monitorUrl})`,
+      "",
+      "### 回報時請附上",
+      "- 上方工作資訊與相關事件日誌。",
+      "- 觸發更新前選擇的分類或操作步驟。",
     ].join("\n");
 
     try {
@@ -764,7 +771,7 @@ export default function Home() {
       setDiagnosticsCopied(true);
       if (diagnosticsCopiedTimer.current) window.clearTimeout(diagnosticsCopiedTimer.current);
       diagnosticsCopiedTimer.current = window.setTimeout(() => setDiagnosticsCopied(false), 2_000);
-      toast.success("診斷資訊已複製，可直接貼上回報問題");
+      toast.success("Markdown 診斷資訊已複製，可直接貼上回報問題");
     } catch {
       toast.error("無法自動複製，請改由爬蟲監控頁查看日誌");
     }
@@ -831,11 +838,11 @@ export default function Home() {
                 size="sm"
                 variant="outline"
                 className="gap-1.5 border-red-300/50 bg-red-950/15 text-red-100 hover:bg-red-400/15 hover:text-white"
-                aria-label={diagnosticsCopied ? "診斷資訊已複製" : "複製診斷資訊"}
+                aria-label={diagnosticsCopied ? "Markdown 診斷資訊已複製" : "複製 Markdown 診斷資訊"}
                 onClick={() => void copyFailureDiagnostics()}
               >
                 {diagnosticsCopied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-                {diagnosticsCopied ? "已複製" : "複製診斷資訊"}
+                {diagnosticsCopied ? "已複製" : "複製 Markdown"}
               </Button>
               <Button
                 type="button"
