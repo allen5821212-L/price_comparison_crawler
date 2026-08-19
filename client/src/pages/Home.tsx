@@ -983,6 +983,14 @@ export default function Home() {
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button variant="ghost" size="icon" asChild>
+                  <a href="/coverage" aria-label="欣亞與原價屋上架分析"><BarChart3 className="size-4" /></a>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>欣亞與原價屋上架分析</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" asChild>
                   <a href="/crawler" aria-label="爬蟲監控"><Activity className="size-4" /></a>
                 </Button>
               </TooltipTrigger>

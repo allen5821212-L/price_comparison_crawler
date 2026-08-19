@@ -54,6 +54,23 @@ export interface FavoriteInput {
   targetPrice?: number | null;
 }
 
+export interface CoolpcCoverageCategory {
+  category: string;
+  sinyaTotal: number;
+  coolpcListed: number;
+  coolpcUnlisted: number;
+  coverageRate: number;
+}
+
+type SinyaCoverageProduct = {
+  externalId: string;
+  name: string;
+  category: string | null;
+  price: number;
+  url: string | null;
+  image: string | null;
+};
+
 let _db: ReturnType<typeof drizzle> | null = null;
 
 // Lazily create the drizzle instance so local tooling can run without a DB.
@@ -543,6 +560,108 @@ export async function getCrawlerRefreshEstimates(): Promise<Record<"full" | "cat
       : fullEstimateMs
         ? { estimateMs: Math.round(fullEstimateMs / 4), sampleSize: durations.full.length, source: "full_history_ratio" }
         : { estimateMs: null, sampleSize: 0, source: "unavailable" },
+  };
+}
+
+export function deriveCoolpcCoverage(products: SinyaCoverageProduct[], coolpcListedNames: Set<string>) {
+  const grouped = new Map<string, { sinyaTotal: number; coolpcListed: number }>();
+  for (const product of products) {
+    const category = product.category?.trim() || "未分類";
+    const current = grouped.get(category) ?? { sinyaTotal: 0, coolpcListed: 0 };
+    current.sinyaTotal += 1;
+    if (coolpcListedNames.has(product.name)) current.coolpcListed += 1;
+    grouped.set(category, current);
+  }
+
+  const categories: CoolpcCoverageCategory[] = Array.from(grouped.entries()).map(([category, totals]) => ({
+    category,
+    sinyaTotal: totals.sinyaTotal,
+    coolpcListed: totals.coolpcListed,
+    coolpcUnlisted: totals.sinyaTotal - totals.coolpcListed,
+    coverageRate: totals.sinyaTotal ? totals.coolpcListed / totals.sinyaTotal : 0,
+  })).sort((left, right) => right.sinyaTotal - left.sinyaTotal || left.category.localeCompare(right.category, "zh-TW"));
+
+  const sinyaTotal = products.length;
+  const coolpcListed = categories.reduce((sum, category) => sum + category.coolpcListed, 0);
+  return {
+    sinyaTotal,
+    coolpcListed,
+    coolpcUnlisted: sinyaTotal - coolpcListed,
+    coverageRate: sinyaTotal ? coolpcListed / sinyaTotal : 0,
+    categories,
+  };
+}
+
+async function getLatestCoolpcCoverageSource() {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const [run] = await db.select({ id: comparisonRuns.id, finishedAt: comparisonRuns.finishedAt })
+    .from(comparisonRuns)
+    .where(eq(comparisonRuns.status, "completed"))
+    .orderBy(desc(comparisonRuns.finishedAt), desc(comparisonRuns.id))
+    .limit(1);
+  if (!run) return null;
+
+  const [sinyaProducts, listedMatches] = await Promise.all([
+    db.select({
+      externalId: comparisonProducts.externalId,
+      name: comparisonProducts.name,
+      category: comparisonProducts.category,
+      price: comparisonProducts.price,
+      url: comparisonProducts.url,
+      image: comparisonProducts.image,
+    }).from(comparisonProducts).where(and(
+      eq(comparisonProducts.lastSeenRunId, run.id),
+      eq(comparisonProducts.platform, "sinya"),
+    )),
+    db.select({ sinyaName: comparisonMatches.sinyaName }).from(comparisonMatches).where(and(
+      eq(comparisonMatches.runId, run.id),
+      isNotNull(comparisonMatches.coolpcName),
+      sql`${comparisonMatches.coolpcName} <> ''`,
+    )),
+  ]);
+
+  return {
+    run,
+    sinyaProducts,
+    coolpcListedNames: new Set(listedMatches.map(match => match.sinyaName)),
+  };
+}
+
+/** Reports only names with an accepted CoolPC match, preserving the conservative no-false-positive policy. */
+export async function getCoolpcCoverageSummary() {
+  const source = await getLatestCoolpcCoverageSource();
+  if (!source) return null;
+  return {
+    run: source.run,
+    ...deriveCoolpcCoverage(source.sinyaProducts, source.coolpcListedNames),
+  };
+}
+
+export async function listCoolpcUnlistedSinyaProducts(input: { category?: string; page?: number; pageSize?: number }) {
+  const source = await getLatestCoolpcCoverageSource();
+  if (!source) return null;
+  const category = input.category?.trim();
+  const items = source.sinyaProducts
+    .filter(product => !source.coolpcListedNames.has(product.name))
+    .filter(product => !category || (product.category?.trim() || "未分類") === category)
+    .sort((left, right) => (left.category ?? "未分類").localeCompare(right.category ?? "未分類", "zh-TW") || left.name.localeCompare(right.name, "zh-TW"));
+  const page = Math.max(1, input.page ?? 1);
+  const pageSize = Math.min(100, Math.max(10, input.pageSize ?? 25));
+  return {
+    run: source.run,
+    total: items.length,
+    page,
+    pageSize,
+    totalPages: Math.max(1, Math.ceil(items.length / pageSize)),
+    items: items.slice((page - 1) * pageSize, page * pageSize).map(product => ({
+      externalId: product.externalId,
+      name: product.name,
+      category: product.category?.trim() || "未分類",
+      price: product.price,
+      url: product.url ?? "",
+      image: product.image ?? "",
+    })),
   };
 }
 

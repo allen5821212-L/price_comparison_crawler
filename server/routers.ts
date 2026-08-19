@@ -10,6 +10,8 @@ import {
   getFavoriteForUser,
   getLatestCrawlerStatus,
   getLatestDynamicComparison,
+  getCoolpcCoverageSummary,
+  listCoolpcUnlistedSinyaProducts,
   listCrawlerEvents,
   listCrawlerJobs,
   listFavoritesForUser,
@@ -107,6 +109,13 @@ export const appRouter = router({
     status: publicProcedure.query(async () => getLatestCrawlerStatus()),
     /** Historical successful-job timing keeps refresh ETAs grounded in actual worker runs. */
     refreshEstimates: publicProcedure.query(async () => getCrawlerRefreshEstimates()),
+    /** Conservative coverage: only accepted Sinya-to-CoolPC matches count as listed. */
+    coolpcCoverage: publicProcedure.query(async () => getCoolpcCoverageSummary()),
+    coolpcUnlisted: publicProcedure.input(z.object({
+      category: z.string().min(1).max(512).optional(),
+      page: z.number().int().positive().default(1),
+      pageSize: z.number().int().min(10).max(100).default(25),
+    }).optional()).query(async ({ input }) => listCoolpcUnlistedSinyaProducts(input ?? { page: 1, pageSize: 25 })),
   }),
   crawler: router({
     /** Recent worker jobs and monitoring events are restricted to administrators. */
