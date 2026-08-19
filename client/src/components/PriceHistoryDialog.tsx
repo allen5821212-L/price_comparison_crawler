@@ -123,6 +123,12 @@ export function PriceHistoryDialog({ open, onOpenChange, initialProduct }: Price
 
   const sinyaPath = buildPath(trendData.map((d) => d.sinya_price));
   const coolpcPath = buildPath(trendData.map((d) => d.coolpc_price));
+  const historicLow = trendData.length
+    ? Math.min(...trendData.flatMap((point) => [point.sinya_price, point.coolpc_price]))
+    : null;
+  const historicLowY = historicLow === null
+    ? null
+    : padding.top + plotH - (historicLow - minY) * yScale;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -183,6 +189,12 @@ export function PriceHistoryDialog({ open, onOpenChange, initialProduct }: Price
                     <span className="inline-block w-3 h-0.5 bg-orange-500" />
                     原價屋
                   </span>
+                  {historicLow !== null ? (
+                    <span className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400">
+                      <span className="inline-block w-3 border-t border-dashed border-emerald-500" />
+                      歷史最低 NT${historicLow.toLocaleString()}
+                    </span>
+                  ) : null}
                 </div>
                 <svg viewBox={`0 0 ${chartW} ${chartH}`} className="w-full h-auto">
                   {/* Grid lines */}
@@ -226,6 +238,14 @@ export function PriceHistoryDialog({ open, onOpenChange, initialProduct }: Price
                       </text>
                     );
                   })}
+                  {historicLowY !== null && historicLow !== null ? (
+                    <g>
+                      <line x1={padding.left} y1={historicLowY} x2={padding.left + plotW} y2={historicLowY} stroke="#22c55e" strokeWidth={1.5} strokeDasharray="5 4" />
+                      <text x={padding.left + plotW} y={historicLowY - 6} textAnchor="end" className="fill-emerald-500 text-[10px]">
+                        最低 NT${historicLow.toLocaleString()}
+                      </text>
+                    </g>
+                  ) : null}
                   {/* Sinya price line */}
                   <path d={sinyaPath} fill="none" stroke="#3b82f6" strokeWidth={2} />
                   {trendData.map((d, i) => {
@@ -242,7 +262,7 @@ export function PriceHistoryDialog({ open, onOpenChange, initialProduct }: Price
                   })}
                 </svg>
                 <div className="mt-2 text-xs text-muted-foreground">
-                  {trendData.length} 筆記錄 | 最新價差: NT$
+                  {trendData.length} 筆記錄 | 歷史最低: NT${historicLow?.toLocaleString() ?? "—"} | 最新價差: NT$
                   {trendData[trendData.length - 1].sinya_price - trendData[trendData.length - 1].coolpc_price}
                 </div>
               </>

@@ -34,6 +34,15 @@ import {
   DropdownMenuItem,
 } from "@/components/ui/dropdown-menu";
 import {
+  Drawer,
+  DrawerClose,
+  DrawerContent,
+  DrawerFooter,
+  DrawerHeader,
+  DrawerTitle,
+  DrawerTrigger,
+} from "@/components/ui/drawer";
+import {
   Search,
   TrendingDown,
   TrendingUp,
@@ -473,7 +482,14 @@ export default function Home() {
   const [manualMatchOpen, setManualMatchOpen] = useState(false);
   const [showPriceHistory, setShowPriceHistory] = useState(false);
   const [priceHistoryProduct, setPriceHistoryProduct] = useState<string | null>(null);
-  const [expandedMobileCard, setExpandedMobileCard] = useState<string | null>(null);
+  const [expandedMobileCards, setExpandedMobileCards] = useState<Set<string>>(() => {
+    if (typeof window === "undefined") return new Set();
+    try {
+      return new Set(JSON.parse(window.sessionStorage.getItem("price-comparison-expanded-mobile-cards") || "[]"));
+    } catch {
+      return new Set();
+    }
+  });
   const [activeSinyaProduct, setActiveSinyaProduct] = useState<{
     name: string;
     price: number;
@@ -481,6 +497,18 @@ export default function Home() {
     image: string;
   } | null>(null);
   const importFileRef = useRef<HTMLInputElement>(null);
+
+  const toggleMobileCard = (sourceKey: string) => {
+    setExpandedMobileCards((previous) => {
+      const next = new Set(previous);
+      if (next.has(sourceKey)) next.delete(sourceKey);
+      else next.add(sourceKey);
+      if (typeof window !== "undefined") {
+        window.sessionStorage.setItem("price-comparison-expanded-mobile-cards", JSON.stringify(Array.from(next)));
+      }
+      return next;
+    });
+  };
 
   // Use the official Sinya DIY category list (in order) from the crawler.
   // Fallback: derive from matched products if the list is missing.
@@ -1385,7 +1413,33 @@ export default function Home() {
 
       {/* ── Filter Bar ── */}
       <section className="container pb-4">
-        <div className="flex flex-col gap-3 md:flex-row md:items-center md:gap-4">
+        <div className="space-y-2 md:hidden">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input placeholder="搜尋商品名稱或型號..." value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} className="pl-10" />
+          </div>
+          <Drawer>
+            <DrawerTrigger asChild>
+              <Button variant="outline" className="w-full justify-between"><span className="flex items-center gap-2"><SlidersHorizontal className="size-4" />篩選與排序</span><Badge variant="secondary">{totalResults} 筆</Badge></Button>
+            </DrawerTrigger>
+            <DrawerContent className="max-h-[88vh]">
+              <DrawerHeader className="border-b border-border"><DrawerTitle>篩選與排序</DrawerTitle></DrawerHeader>
+              <div className="space-y-3 overflow-y-auto px-4 py-4">
+                <div><p className="mb-1.5 text-xs font-medium text-muted-foreground">欣亞分類</p><SearchableSelect value={categoryFilter} onValueChange={setCategoryFilter} placeholder="欣亞分類" searchPlaceholder="搜尋分類..." options={[{ value: "all", label: `全部分類 (${filterCounts.total})` }, ...categories.map((category) => ({ value: category, label: `${category} (${categoryCounts[category] || 0})` }))]} /></div>
+                <div><p className="mb-1.5 text-xs font-medium text-muted-foreground">原價屋分類</p><SearchableSelect value={coolpcCategoryFilter} onValueChange={setCoolpcCategoryFilter} placeholder="原價屋分類" searchPlaceholder="搜尋分類..." options={[{ value: "all", label: `原價屋全部分類 (${data?.stats.coolpc_total ?? 0})` }, ...coolpcCategories.map((category) => ({ value: category.name, label: `${category.name} (${category.count})` }))]} /></div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div><p className="mb-1.5 text-xs font-medium text-muted-foreground">價格比較</p><Select value={cheaperFilter} onValueChange={(value) => setCheaperFilter(value as CheaperFilter)}><SelectTrigger className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">全部價格</SelectItem><SelectItem value="sinya">欣亞較便宜</SelectItem><SelectItem value="coolpc">原價屋較便宜</SelectItem><SelectItem value="pchome">PCHOME較便宜</SelectItem><SelectItem value="momo">momo較便宜</SelectItem><SelectItem value="tie">價格相同</SelectItem></SelectContent></Select></div>
+                  <div><p className="mb-1.5 text-xs font-medium text-muted-foreground">相似度</p><Select value={scoreFilter} onValueChange={(value) => setScoreFilter(value as ScoreFilter)}><SelectTrigger className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">全部相似度</SelectItem><SelectItem value="high">高（≥0.85）</SelectItem><SelectItem value="medium">中（0.70-0.85）</SelectItem><SelectItem value="low">低（&lt;0.70）</SelectItem></SelectContent></Select></div>
+                </div>
+                <div><p className="mb-1.5 text-xs font-medium text-muted-foreground">配對狀態</p><Select value={overrideFilter} onValueChange={(value) => setOverrideFilter(value as OverrideFilter)}><SelectTrigger className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">全部狀態</SelectItem><SelectItem value="confirmed">已確認配對</SelectItem><SelectItem value="rejected">已排除配對</SelectItem><SelectItem value="no_match">無符合商品</SelectItem><SelectItem value="none">未處理</SelectItem></SelectContent></Select></div>
+                <Button variant={specDiffFilter ? "default" : "outline"} className="w-full justify-start" onClick={() => setSpecDiffFilter(!specDiffFilter)}><AlertTriangle className="mr-2 size-4" />僅顯示規格差異{filterCounts.specDiff ? `（${filterCounts.specDiff}）` : ""}</Button>
+                <Button variant={sortField === "best_price" ? "default" : "outline"} className="w-full justify-start" onClick={() => { setSortField("best_price"); setSortOrder("asc"); }}><TrendingDown className="mr-2 size-4" />依四平台最低價排序</Button>
+              </div>
+              <DrawerFooter className="border-t border-border"><Button variant="outline" onClick={() => { setSearchQuery(""); setCategoryFilter("all"); setCoolpcCategoryFilter("all"); setCheaperFilter("all"); setScoreFilter("all"); setOverrideFilter("all"); setSpecDiffFilter(false); }}>清除篩選</Button><DrawerClose asChild><Button>套用篩選</Button></DrawerClose></DrawerFooter>
+            </DrawerContent>
+          </Drawer>
+        </div>
+        <div className="hidden flex-col gap-3 md:flex md:flex-row md:items-center md:gap-4">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -1592,7 +1646,7 @@ export default function Home() {
               {paginatedItems.map((item, idx) => {
                 const sourceKey = item.source_key ?? sinyaId(item.sinya_name);
                 const cardKey = `${item.sinya_name}-${idx}`;
-                const expanded = expandedMobileCard === cardKey;
+                const expanded = expandedMobileCards.has(sourceKey);
                 const isConfirmed = overrides.getConfirmed(sinyaId(item.sinya_name));
                 const confirmedPlatform = isConfirmed ? getOverridePlatform(isConfirmed.their_id, isConfirmed.platform) : null;
                 const priceEntries = [
@@ -1618,7 +1672,7 @@ export default function Home() {
                     </div>
                   </div>
                   <div className="border-t border-border px-3 py-2">
-                    <Button size="sm" variant="ghost" className="h-7 w-full justify-between px-1 text-xs text-muted-foreground" onClick={() => setExpandedMobileCard(expanded ? null : cardKey)}>
+                    <Button size="sm" variant="ghost" className="h-7 w-full justify-between px-1 text-xs text-muted-foreground" onClick={() => toggleMobileCard(sourceKey)}>
                       <span>{expanded ? "收合商品與規格資訊" : "展開完整品名與規格差異"}</span>{expanded ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
                     </Button>
                     {expanded ? <div className="space-y-2 pb-1 pt-2 text-xs"><div className="rounded-md bg-muted/45 p-2 text-muted-foreground"><p className="font-medium text-foreground">欣亞完整品名</p><p className="mt-1 break-words">{item.sinya_name}</p>{item.pchome_name ? <p className="mt-1 break-words">PCHOME：{item.pchome_name}</p> : null}{item.momo_name ? <p className="mt-1 break-words">momo：{item.momo_name}</p> : null}</div>{item.spec_diff?.length ? <div className="rounded-md border border-amber-500/25 bg-amber-500/5 p-2"><p className="flex items-center gap-1 font-medium text-amber-700 dark:text-amber-400"><AlertTriangle className="size-3.5" />規格差異</p><ul className="mt-1 list-disc space-y-0.5 pl-4 text-muted-foreground">{item.spec_diff.map((difference, differenceIndex) => <li key={differenceIndex}>{difference}</li>)}</ul></div> : <p className="px-1 text-muted-foreground">尚未偵測到規格差異。</p>}</div> : null}
