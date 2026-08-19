@@ -12,6 +12,12 @@ function percent(value: number) {
   return `${(value * 100).toFixed(1)}%`;
 }
 
+export const LOW_COVERAGE_THRESHOLD = 0.5;
+
+export function isLowCoverage(value: number) {
+  return value < LOW_COVERAGE_THRESHOLD;
+}
+
 function formatPrice(value: number) {
   return `NT$${value.toLocaleString()}`;
 }
@@ -73,7 +79,10 @@ export default function CoolpcCoveragePage() {
 
       <Card className="overflow-hidden">
         <div className="border-b border-border p-4"><h2 className="font-semibold">各分類原價屋上架率</h2><p className="mt-1 text-xs text-muted-foreground">點選「查看未上架」會帶出該分類中欣亞有售、但目前尚未得到原價屋確認對應的產品品名。</p></div>
-        <div className="overflow-x-auto"><table className="w-full min-w-[720px] text-sm"><thead className="bg-muted/30 text-left text-xs text-muted-foreground"><tr><th className="px-4 py-3 font-medium">欣亞分類</th><th className="px-4 py-3 text-right font-medium">欣亞商品</th><th className="px-4 py-3 text-right font-medium">原價屋已上架</th><th className="px-4 py-3 min-w-56 font-medium">上架率</th><th className="px-4 py-3 text-right font-medium">未上架</th></tr></thead><tbody className="divide-y divide-border">{coverage.categories.map(item => <tr className={category === item.category ? "bg-primary/5" : ""} key={item.category}><td className="px-4 py-3 font-medium">{item.category}</td><td className="px-4 py-3 text-right tabular-nums">{item.sinyaTotal.toLocaleString()}</td><td className="px-4 py-3 text-right tabular-nums text-emerald-500">{item.coolpcListed.toLocaleString()}</td><td className="px-4 py-3"><div className="flex items-center gap-3"><div className="h-2 flex-1 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary transition-[width] duration-300" style={{ width: `${Math.max(0, Math.min(100, item.coverageRate * 100))}%` }} /></div><span className="w-12 text-right tabular-nums">{percent(item.coverageRate)}</span></div></td><td className="px-4 py-3 text-right"><Button size="sm" variant="ghost" className="h-8 text-amber-600 hover:text-amber-500" onClick={() => chooseCategory(item.category)}>{item.coolpcUnlisted.toLocaleString()} 件 <ChevronRight className="ml-1 size-3.5" /></Button></td></tr>)}</tbody></table></div>
+        <div className="overflow-x-auto"><table className="w-full min-w-[720px] text-sm"><thead className="bg-muted/30 text-left text-xs text-muted-foreground"><tr><th className="px-4 py-3 font-medium">欣亞分類</th><th className="px-4 py-3 text-right font-medium">欣亞商品</th><th className="px-4 py-3 text-right font-medium">原價屋已上架</th><th className="px-4 py-3 min-w-56 font-medium">上架率</th><th className="px-4 py-3 text-right font-medium">未上架</th></tr></thead><tbody className="divide-y divide-border">{coverage.categories.map(item => {
+          const lowCoverage = isLowCoverage(item.coverageRate);
+          return <tr className={category === item.category ? "bg-primary/5" : ""} key={item.category}><td className="px-4 py-3 font-medium">{item.category}</td><td className="px-4 py-3 text-right tabular-nums">{item.sinyaTotal.toLocaleString()}</td><td className="px-4 py-3 text-right tabular-nums text-emerald-500">{item.coolpcListed.toLocaleString()}</td><td className="px-4 py-3"><div className="flex items-center gap-3"><div className="h-2 flex-1 overflow-hidden rounded-full bg-muted"><div className={`h-full rounded-full transition-[width] duration-300 ${lowCoverage ? "bg-red-500" : "bg-primary"}`} style={{ width: `${Math.max(0, Math.min(100, item.coverageRate * 100))}%` }} /></div><span className={`w-12 text-right tabular-nums ${lowCoverage ? "font-semibold text-red-500" : ""}`}>{percent(item.coverageRate)}</span></div></td><td className="px-4 py-3 text-right"><Button size="sm" variant="ghost" className="h-8 text-amber-600 hover:text-amber-500" onClick={() => chooseCategory(item.category)}>{item.coolpcUnlisted.toLocaleString()} 件 <ChevronRight className="ml-1 size-3.5" /></Button></td></tr>;
+        })}</tbody></table></div>
       </Card>
 
       <Card id="coolpc-unlisted" className="scroll-mt-6 overflow-hidden">

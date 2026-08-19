@@ -1,7 +1,7 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { CoverageQueryErrorPanel } from "./CoolpcCoveragePage";
+import { CoverageQueryErrorPanel, isLowCoverage, LOW_COVERAGE_THRESHOLD } from "./CoolpcCoveragePage";
 
 describe("CoolpcCoveragePage query failures", () => {
   it("renders the coverage-summary error and retry action", () => {
@@ -16,5 +16,14 @@ describe("CoolpcCoveragePage query failures", () => {
     expect(html).toContain("無法載入未上架商品清單");
     expect(html).toContain("請稍後重新嘗試。");
     expect(html).toContain("重新嘗試");
+  });
+});
+
+describe("CoolPC coverage warning threshold", () => {
+  it("only flags categories below 50 percent", () => {
+    expect(LOW_COVERAGE_THRESHOLD).toBe(0.5);
+    expect(isLowCoverage(0.499)).toBe(true);
+    expect(isLowCoverage(0.5)).toBe(false);
+    expect(isLowCoverage(0.9)).toBe(false);
   });
 });
