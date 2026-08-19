@@ -294,6 +294,8 @@ export default function Home() {
     scope: "full" | "category";
     categoryName?: string | null;
   } | null>(null);
+  const [diagnosticsCopied, setDiagnosticsCopied] = useState(false);
+  const diagnosticsCopiedTimer = useRef<number | undefined>(undefined);
   const [now, setNow] = useState(() => Date.now());
   const jobsQuery = trpc.crawler.jobs.useQuery(undefined, {
     enabled: user?.role === "admin",
@@ -397,6 +399,14 @@ export default function Home() {
     const timer = window.setTimeout(() => setRefreshFailureToast(null), 16_000);
     return () => window.clearTimeout(timer);
   }, [refreshFailureToast]);
+
+  useEffect(() => {
+    setDiagnosticsCopied(false);
+  }, [refreshFailureToast?.jobId]);
+
+  useEffect(() => () => {
+    if (diagnosticsCopiedTimer.current) window.clearTimeout(diagnosticsCopiedTimer.current);
+  }, []);
 
   // Manual matching
   const overrides = useOverrides();
@@ -751,6 +761,9 @@ export default function Home() {
         textarea.remove();
         if (!copied) throw new Error("Clipboard copy was rejected");
       }
+      setDiagnosticsCopied(true);
+      if (diagnosticsCopiedTimer.current) window.clearTimeout(diagnosticsCopiedTimer.current);
+      diagnosticsCopiedTimer.current = window.setTimeout(() => setDiagnosticsCopied(false), 2_000);
       toast.success("診斷資訊已複製，可直接貼上回報問題");
     } catch {
       toast.error("無法自動複製，請改由爬蟲監控頁查看日誌");
@@ -818,10 +831,11 @@ export default function Home() {
                 size="sm"
                 variant="outline"
                 className="gap-1.5 border-red-300/50 bg-red-950/15 text-red-100 hover:bg-red-400/15 hover:text-white"
+                aria-label={diagnosticsCopied ? "診斷資訊已複製" : "複製診斷資訊"}
                 onClick={() => void copyFailureDiagnostics()}
               >
-                <Copy className="size-3.5" />
-                複製診斷資訊
+                {diagnosticsCopied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+                {diagnosticsCopied ? "已複製" : "複製診斷資訊"}
               </Button>
               <Button
                 type="button"
