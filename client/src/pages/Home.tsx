@@ -288,6 +288,11 @@ export default function Home() {
     scope: "full" | "category";
     categoryName?: string | null;
   } | null>(null);
+  const [refreshFailureToast, setRefreshFailureToast] = useState<{
+    jobId: number;
+    scope: "full" | "category";
+    categoryName?: string | null;
+  } | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const jobsQuery = trpc.crawler.jobs.useQuery(undefined, {
     enabled: user?.role === "admin",
@@ -342,7 +347,6 @@ export default function Home() {
       setRequestedRefreshJobId(null);
     }
     if (activeRefreshJob.status === "failed" || activeRefreshJob.status === "cancelled") {
-      toast.error(activeRefreshJob.status === "failed" ? "價格更新失敗，請查看爬蟲監控" : "價格更新已取消");
       setRequestedRefreshJobId(null);
     }
   }, [activeRefreshJob, comparisonQuery, requestedRefreshJobId]);
@@ -365,6 +369,16 @@ export default function Home() {
           categoryName: completedJob.categoryName,
         });
       }
+      const failedJob = jobs.find(job => job.status === "failed" && (
+        previousStatuses.get(job.id) === "queued" || previousStatuses.get(job.id) === "running"
+      ));
+      if (failedJob) {
+        setRefreshFailureToast({
+          jobId: failedJob.id,
+          scope: failedJob.scope,
+          categoryName: failedJob.categoryName,
+        });
+      }
     }
 
     observedCrawlerJobStatuses.current = new Map(jobs.map(job => [job.id, job.status]));
@@ -376,6 +390,12 @@ export default function Home() {
     const timer = window.setTimeout(() => setRefreshCompletionToast(null), 12_000);
     return () => window.clearTimeout(timer);
   }, [refreshCompletionToast]);
+
+  useEffect(() => {
+    if (!refreshFailureToast) return;
+    const timer = window.setTimeout(() => setRefreshFailureToast(null), 16_000);
+    return () => window.clearTimeout(timer);
+  }, [refreshFailureToast]);
 
   // Manual matching
   const overrides = useOverrides();
@@ -732,6 +752,51 @@ export default function Home() {
             className="-mr-1 -mt-1 size-8 text-emerald-100/80 hover:bg-emerald-400/15 hover:text-white"
             aria-label="關閉更新完成提示"
             onClick={() => setRefreshCompletionToast(null)}
+          >
+            <X className="size-4" />
+          </Button>
+        </div>
+      </div> : null}
+      {refreshFailureToast ? <div className="fixed inset-x-0 top-20 z-[60] px-4 sm:top-24" role="alert" aria-live="assertive">
+        <div className="mx-auto flex max-w-xl items-start gap-3 rounded-xl border border-red-400/45 bg-red-500/15 p-4 text-red-50 shadow-2xl shadow-red-950/30 backdrop-blur-xl animate-in slide-in-from-top-2 duration-300">
+          <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full bg-red-400/20 text-red-200">
+            <AlertTriangle className="size-4" aria-hidden="true" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="font-semibold text-red-100">價格資料更新失敗</p>
+            <p className="mt-0.5 text-sm text-red-100/80">
+              {refreshFailureToast.scope === "full"
+                ? "完整四平台更新未能完成，請稍後重新嘗試。"
+                : `${refreshFailureToast.categoryName ?? "目前分類"}更新未能完成，請稍後重新嘗試。`}
+            </p>
+            <Button
+              type="button"
+              size="sm"
+              className="mt-3 gap-1.5 bg-red-500 text-white hover:bg-red-400"
+              disabled={enqueueRefresh.isPending}
+              onClick={() => {
+                const retryInput = refreshFailureToast.scope === "full"
+                  ? { scope: "full" as const }
+                  : { scope: "category" as const, categoryName: refreshFailureToast.categoryName ?? currentCategoryName ?? "" };
+                if (retryInput.scope === "category" && !retryInput.categoryName) {
+                  toast.error("找不到原本的分類範圍，請先選擇分類後再更新");
+                  return;
+                }
+                setRefreshFailureToast(null);
+                enqueueRefresh.mutate(retryInput);
+              }}
+            >
+              <RefreshCw className={`size-3.5 ${enqueueRefresh.isPending ? "animate-spin" : ""}`} />
+              重新嘗試
+            </Button>
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="-mr-1 -mt-1 size-8 text-red-100/80 hover:bg-red-400/15 hover:text-white"
+            aria-label="關閉更新失敗提示"
+            onClick={() => setRefreshFailureToast(null)}
           >
             <X className="size-4" />
           </Button>
