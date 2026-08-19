@@ -1563,7 +1563,55 @@ export default function Home() {
                 {totalPages || 1} 頁
               </span>
             </div>
-            <div className="overflow-auto rounded-xl border border-border" style={{ maxHeight: "calc(100vh - 200px)" }}>
+            <div className="space-y-3 md:hidden">
+              {paginatedItems.map((item, idx) => {
+                const sourceKey = item.source_key ?? sinyaId(item.sinya_name);
+                const isConfirmed = overrides.getConfirmed(sinyaId(item.sinya_name));
+                const confirmedPlatform = isConfirmed ? getOverridePlatform(isConfirmed.their_id, isConfirmed.platform) : null;
+                const priceEntries = [
+                  { label: "欣亞", value: item.sinya_price, accent: item.cheaper === "sinya" ? "text-primary font-bold" : "" },
+                  { label: "原價屋", value: item.coolpc_price, accent: item.cheaper === "coolpc" ? "text-orange-500 font-bold" : "" },
+                  { label: "PCHOME", value: item.pchome_price, accent: item.cheaper === "pchome" ? "text-blue-500 font-bold" : "" },
+                  { label: "momo", value: item.momo_price, accent: item.cheaper === "momo" ? "text-purple-500 font-bold" : "" },
+                ];
+
+                return <Card key={`${item.sinya_name}-${idx}`} className={isConfirmed ? "overflow-hidden border-green-500/35 bg-green-500/[0.03]" : "overflow-hidden"}>
+                  <div className="flex gap-3 p-3">
+                    <div className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-muted/30">
+                      {item.sinya_image ? <img src={item.sinya_image} alt="" className="size-full object-cover" loading="lazy" onError={event => { (event.target as HTMLImageElement).style.display = "none"; }} /> : <Package className="size-5 text-muted-foreground" />}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="line-clamp-2 text-sm font-semibold leading-snug">{item.name}</p>
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                        {item.category ? <Badge variant="outline" className="max-w-full truncate text-[10px]">{item.category}</Badge> : null}
+                        {isConfirmed ? <Badge className="gap-1 bg-green-500/15 text-[10px] text-green-600 hover:bg-green-500/20"><Check className="size-2.5" />已確認{confirmedPlatform === "pchome" ? " PCHOME" : confirmedPlatform === "momo" ? " momo" : ""}</Badge> : null}
+                        {item.score !== undefined ? <span className={`text-[11px] font-mono ${item.score >= 0.85 ? "text-green-600" : item.score >= 0.7 ? "text-amber-600" : "text-muted-foreground"}`}>相似 {(item.score * 100).toFixed(0)}%</span> : null}
+                      </div>
+                      {item.sinya_name !== item.coolpc_name ? <p className="mt-1 line-clamp-1 text-[11px] text-muted-foreground">原價屋：{item.coolpc_name}</p> : null}
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-px border-y border-border bg-border">
+                    {priceEntries.map(entry => <div key={entry.label} className="bg-card px-3 py-2"><p className="text-[10px] text-muted-foreground">{entry.label}</p><p className={`mt-0.5 font-mono text-sm ${entry.accent}`}>{entry.value ? formatPrice(entry.value) : "—"}</p></div>)}
+                  </div>
+                  <div className="flex items-center justify-between gap-3 px-3 py-2.5">
+                    <div className="min-w-0"><p className="text-[10px] text-muted-foreground">{item.cheaper === "tie" ? "四平台同價" : "最低價"}</p><div className="mt-0.5 flex items-center gap-1.5"><Badge className={item.cheaper === "sinya" ? "bg-primary/15 text-primary" : item.cheaper === "coolpc" ? "bg-orange-500/15 text-orange-500" : item.cheaper === "pchome" ? "bg-blue-500/15 text-blue-500" : item.cheaper === "momo" ? "bg-purple-500/15 text-purple-500" : ""}>{item.cheaper === "sinya" ? "欣亞" : item.cheaper === "coolpc" ? "原價屋" : item.cheaper === "pchome" ? "PCHOME" : item.cheaper === "momo" ? "momo" : "相同"}</Badge><span className={`font-mono text-sm ${item.price_diff < 0 ? "price-diff-positive" : item.price_diff > 0 ? "price-diff-negative" : "text-muted-foreground"}`}>{formatPriceDiff(item.price_diff)}</span></div></div>
+                    <div className="flex shrink-0 items-center gap-1">
+                      {item.sinya_url ? <Button size="icon" variant="ghost" className="size-9 text-primary" asChild><a href={item.sinya_url} target="_blank" rel="noopener noreferrer" aria-label="開啟欣亞購買頁"><ExternalLink className="size-4" /></a></Button> : null}
+                      {item.coolpc_url ? <Button size="icon" variant="ghost" className="size-9 text-orange-500" asChild><a href={item.coolpc_url} target="_blank" rel="noopener noreferrer" aria-label="開啟原價屋購買頁"><ShoppingCart className="size-4" /></a></Button> : null}
+                      {item.pchome_url ? <Button size="icon" variant="ghost" className="size-9 text-blue-500" asChild><a href={item.pchome_url} target="_blank" rel="noopener noreferrer" aria-label="開啟 PCHOME 購買頁"><ExternalLink className="size-3.5" /></a></Button> : null}
+                      {item.momo_url ? <Button size="icon" variant="ghost" className="size-9 text-purple-500" asChild><a href={item.momo_url} target="_blank" rel="noopener noreferrer" aria-label="開啟 momo 購買頁"><ShoppingCart className="size-3.5" /></a></Button> : null}
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-4 border-t border-border bg-muted/25">
+                    <Button size="sm" variant="ghost" className={favoriteKeys.has(sourceKey) ? "h-10 rounded-none text-rose-500" : "h-10 rounded-none text-muted-foreground"} onClick={() => { if (!user) { toast.info("登入後即可收藏商品並接收降價通知"); return; } if (favoriteKeys.has(sourceKey)) { toast.info("此商品已在收藏清單中"); return; } saveFavorite.mutate({ sourceKey, sinyaName: item.sinya_name }); }} aria-label="收藏商品"><Heart className="size-4" fill={favoriteKeys.has(sourceKey) ? "currentColor" : "none"} /></Button>
+                    <Button size="sm" variant="ghost" className="h-10 rounded-none text-green-600" onClick={() => handleConfirmMatch(item.sinya_name, item.coolpc_name)} aria-label="標記配對正確"><Check className="size-4" /></Button>
+                    <Button size="sm" variant="ghost" className="h-10 rounded-none text-destructive" onClick={() => handleRejectMatch(item.sinya_name, item.name, item.coolpc_name)} aria-label="標記配對錯誤"><X className="size-4" /></Button>
+                    <Button size="sm" variant="ghost" className="h-10 rounded-none text-muted-foreground" onClick={() => handleOpenManualMatch(item.sinya_name, item.sinya_price, item.sinya_url, item.sinya_image)} aria-label="手動配對"><SearchIcon className="size-4" /></Button>
+                  </div>
+                </Card>;
+              })}
+            </div>
+            <div className="hidden overflow-auto rounded-xl border border-border md:block" style={{ maxHeight: "calc(100vh - 200px)" }}>
               <Table className="table-fixed">
                 <TableHeader>
                   <TableRow className="bg-muted/50 hover:bg-muted/50 sticky top-0 z-10">
