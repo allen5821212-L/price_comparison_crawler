@@ -299,6 +299,7 @@ export default function Home() {
     jobId: number;
     scope: "full" | "category";
     categoryName?: string | null;
+    recovered?: boolean;
   } | null>(null);
   const [diagnosticsCopied, setDiagnosticsCopied] = useState(false);
   const [issueSeverity, setIssueSeverity] = useState<"low" | "medium" | "high" | "critical">("medium");
@@ -411,6 +412,7 @@ export default function Home() {
             jobId: recentFailedJob.id,
             scope: recentFailedJob.scope,
             categoryName: recentFailedJob.categoryName,
+            recovered: true,
           });
         }
       }
@@ -428,7 +430,10 @@ export default function Home() {
 
   useEffect(() => {
     if (!refreshFailureToast) return;
-    const timer = window.setTimeout(() => setRefreshFailureToast(null), 16_000);
+    const timer = window.setTimeout(
+      () => setRefreshFailureToast(null),
+      refreshFailureToast.recovered ? 60_000 : 16_000,
+    );
     return () => window.clearTimeout(timer);
   }, [refreshFailureToast]);
 
