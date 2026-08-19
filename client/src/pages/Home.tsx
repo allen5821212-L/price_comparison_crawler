@@ -397,6 +397,23 @@ export default function Home() {
           categoryName: failedJob.categoryName,
         });
       }
+    } else {
+      const recentFailedJob = jobs.find(job => {
+        if (job.status !== "failed" || !job.finishedAt) return false;
+        const finishedAt = new Date(job.finishedAt).getTime();
+        return Number.isFinite(finishedAt) && Date.now() - finishedAt < 30 * 60 * 1000;
+      });
+      if (recentFailedJob) {
+        const promptKey = `crawler-failure-prompted-${recentFailedJob.id}`;
+        if (!window.sessionStorage.getItem(promptKey)) {
+          window.sessionStorage.setItem(promptKey, "1");
+          setRefreshFailureToast({
+            jobId: recentFailedJob.id,
+            scope: recentFailedJob.scope,
+            categoryName: recentFailedJob.categoryName,
+          });
+        }
+      }
     }
 
     observedCrawlerJobStatuses.current = new Map(jobs.map(job => [job.id, job.status]));

@@ -84,5 +84,6 @@
 - [x] 為 /coverage 頁新增覆蓋率與未上架清單查詢的錯誤訊息及重試操作。
 - [x] 驗證覆蓋率分析頁在 API 查詢失敗時仍會呈現可理解的錯誤 UI。
 - [x] 為 CoolpcCoveragePage 新增受控查詢失敗測試，覆蓋 coverage 與未上架清單的錯誤訊息及重試操作。
-- [ ] 以管理員實際觸發的草稿記錄驗證 crawler_issue_reports 寫入，並確認 /crawler 顯示 severity、label 與可點擊草稿連結。
-- [ ] 執行一次使用者同意的受控爬蟲失敗工作，驗證後立即還原 worker 與正常排程。
+- [ ] 以管理員實際點擊首頁 GitHub Issue 草稿操作驗證 crawler_issue_reports 寫入，並確認 /crawler 顯示 severity、label 與可點擊草稿連結。
+- [ ] 執行一次使用者同意的受控爬蟲失敗工作，透過首頁實際草稿操作驗證後立即還原 worker 與正常排程。
+- [ ] 在首頁重新載入時為近期失敗工作提供一次性 Issue 回報提示，避免錯過失敗事件後無法建立草稿。
