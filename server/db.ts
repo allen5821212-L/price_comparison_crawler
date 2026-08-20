@@ -957,34 +957,48 @@ export async function enqueueCrawlerJob(input: CrawlerJobInput): Promise<Enqueue
   return { id: Number(result[0]?.insertId ?? 0), created: true, status: "queued" };
 }
 
+export function partitionCategoryRecrawlNames(categoryNames: string[], activeCategoryNames: ReadonlySet<string>) {
+  const requestedCategoryNames = Array.from(new Set(categoryNames.map(name => name.trim()).filter(Boolean))).slice(0, 12);
+  return {
+    requestedCategoryNames,
+    createdCategoryNames: requestedCategoryNames.filter(name => !activeCategoryNames.has(name)),
+    existingCategoryNames: requestedCategoryNames.filter(name => activeCategoryNames.has(name)),
+  };
+}
+
+export function createCategoryRecrawlJobValues(categoryNames: string[], requestedByOpenId?: string | null) {
+  return categoryNames.map(categoryName => ({
+    scope: "category" as const,
+    trigger: "manual" as const,
+    status: "queued" as const,
+    categoryName,
+    requestedByOpenId: requestedByOpenId ?? null,
+  }));
+}
+
 /** Queue several distinct category refreshes without letting identical active jobs pile up. */
 export async function enqueueCrawlerCategoryJobs(input: { categoryNames: string[]; requestedByOpenId?: string | null }): Promise<EnqueueCrawlerCategoryJobsResult> {
   const db = await getDb();
   if (!db) throw new Error("資料庫目前無法使用");
-  const categoryNames = Array.from(new Set(input.categoryNames.map(name => name.trim()).filter(Boolean))).slice(0, 12);
-  if (!categoryNames.length) throw new Error("請至少選擇一個分類");
+  const normalized = partitionCategoryRecrawlNames(input.categoryNames, new Set());
+  if (!normalized.requestedCategoryNames.length) throw new Error("請至少選擇一個分類");
 
   const activeJobs = await db.select({ categoryName: crawlerJobs.categoryName }).from(crawlerJobs)
     .where(and(
       eq(crawlerJobs.scope, "category"),
       inArray(crawlerJobs.status, ["queued", "running"]),
-      inArray(crawlerJobs.categoryName, categoryNames),
+      inArray(crawlerJobs.categoryName, normalized.requestedCategoryNames),
     ));
   const activeNames = new Set(activeJobs.map(job => job.categoryName).filter((name): name is string => Boolean(name)));
-  const createdCategoryNames = categoryNames.filter(name => !activeNames.has(name));
+  const partitioned = partitionCategoryRecrawlNames(normalized.requestedCategoryNames, activeNames);
+  const { createdCategoryNames } = partitioned;
   if (createdCategoryNames.length) {
-    await db.insert(crawlerJobs).values(createdCategoryNames.map(categoryName => ({
-      scope: "category" as const,
-      trigger: "manual" as const,
-      status: "queued" as const,
-      categoryName,
-      requestedByOpenId: input.requestedByOpenId ?? null,
-    })));
+    await db.insert(crawlerJobs).values(createCategoryRecrawlJobValues(createdCategoryNames, input.requestedByOpenId));
   }
   return {
-    requestedCount: categoryNames.length,
+    requestedCount: partitioned.requestedCategoryNames.length,
     createdCategoryNames,
-    existingCategoryNames: categoryNames.filter(name => activeNames.has(name)),
+    existingCategoryNames: partitioned.existingCategoryNames,
   };
 }
 

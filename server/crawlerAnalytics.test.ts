@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveCategoryRecrawlAnalytics } from "./db";
+import { createCategoryRecrawlJobValues, deriveCategoryRecrawlAnalytics, partitionCategoryRecrawlNames } from "./db";
 
 describe("deriveCategoryRecrawlAnalytics", () => {
   it("從已完成與失敗的分類工作計算耗時、整體成功率與五筆滾動成功率", () => {
@@ -32,5 +32,20 @@ describe("deriveCategoryRecrawlAnalytics", () => {
     ]);
 
     expect(analytics).toEqual({ sampleSize: 0, completedCount: 0, failedCount: 0, successRate: null, averageDurationMs: null, points: [] });
+  });
+
+  it("去除重複與空白分類，並保留已在佇列或執行中的分類不重複建立", () => {
+    expect(partitionCategoryRecrawlNames([" 鍵盤 ", "筆電", "鍵盤", "", "網通"], new Set(["筆電"]))).toEqual({
+      requestedCategoryNames: ["鍵盤", "筆電", "網通"],
+      createdCategoryNames: ["鍵盤", "網通"],
+      existingCategoryNames: ["筆電"],
+    });
+  });
+
+  it("多分類送出只產生多筆 category/manual 工作，絕不建立 full 工作", () => {
+    expect(createCategoryRecrawlJobValues(["鍵盤", "筆電"], "admin-open-id")).toEqual([
+      { scope: "category", trigger: "manual", status: "queued", categoryName: "鍵盤", requestedByOpenId: "admin-open-id" },
+      { scope: "category", trigger: "manual", status: "queued", categoryName: "筆電", requestedByOpenId: "admin-open-id" },
+    ]);
   });
 });
