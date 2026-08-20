@@ -1,7 +1,7 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { createBatchCategoryRequest, createRecrawlPresetInput, nextSelectedCategories, RecrawlReminderSummary } from "./CoolpcOnlyPage";
+import { createBatchCategoryRequest, createRecrawlPresetInput, nextSelectedCategories, RecrawlReminderSummary, reorderRecrawlPresetIds, shouldShowRecrawlPresetManager } from "./CoolpcOnlyPage";
 
 describe("CoolpcOnlyPage recrawl reminder summary", () => {
   it("顯示由歷史分類工作推導的 ETA 與最近成功結果", () => {
@@ -49,5 +49,17 @@ describe("CoolpcOnlyPage category selection", () => {
       name: "週末高缺口",
       categoryNames: ["鍵盤", "筆電"],
     });
+  });
+
+  it("拖曳常用清單可將來源移至目標位置，且同一項目不會造成無意義的重排", () => {
+    expect(reorderRecrawlPresetIds([11, 22, 33], 33, 11)).toEqual([33, 11, 22]);
+    expect(reorderRecrawlPresetIds([11, 22, 33], 22, 22)).toEqual([11, 22, 33]);
+    expect(reorderRecrawlPresetIds([11, 22, 33], 99, 11)).toEqual([11, 22, 33]);
+  });
+
+  it("即使最後一份常用清單已刪除，只要保有歷程仍會顯示管理與歷程面板", () => {
+    expect(shouldShowRecrawlPresetManager(2, 0)).toBe(true);
+    expect(shouldShowRecrawlPresetManager(0, 3)).toBe(true);
+    expect(shouldShowRecrawlPresetManager(0, 0)).toBe(false);
   });
 });

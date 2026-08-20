@@ -5,6 +5,7 @@ import {
   comparisonPriceHistory,
   comparisonProducts,
   comparisonRuns,
+  coolpcCategoryRecrawlPresetHistory,
   coolpcCategoryRecrawlPresets,
   coolpcCategoryRecrawlReminders,
   crawlerEvents,
@@ -49,12 +50,23 @@ export interface EnqueueCrawlerCategoryJobsResult {
   requestedCount: number;
   createdCategoryNames: string[];
   existingCategoryNames: string[];
+  createdJobIds: number[];
 }
 
 export interface CoolpcCategoryRecrawlPresetInput {
   userId: number;
   name: string;
   categoryNames: string[];
+}
+
+export type CoolpcCategoryRecrawlPresetHistoryAction = "applied" | "jobs_enqueued";
+
+export interface CoolpcCategoryRecrawlPresetHistoryInput {
+  userId: number;
+  presetId: number | null;
+  action: CoolpcCategoryRecrawlPresetHistoryAction;
+  categoryNames: string[];
+  jobIds?: number[];
 }
 
 export type CategoryRecrawlMetricInput = {
@@ -854,17 +866,38 @@ export function parseRecrawlPresetCategoryNames(value: string) {
   }
 }
 
+export function parseRecrawlPresetJobIds(value: string | null) {
+  try {
+    const parsed: unknown = value ? JSON.parse(value) : [];
+    if (!Array.isArray(parsed)) return [];
+    return Array.from(new Set(parsed.filter(item => Number.isInteger(item) && Number(item) > 0).map(Number)));
+  } catch {
+    return [];
+  }
+}
+
+export function normalizeRecrawlPresetOrder(ids: number[]) {
+  return Array.from(new Set(ids.filter(id => Number.isInteger(id) && id > 0)));
+}
+
 /** Lists only the signed-in administrator's own reusable category selections. */
 export async function listCoolpcCategoryRecrawlPresets(userId: number) {
   const db = await getDb();
   if (!db) throw new Error("資料庫目前無法使用");
-  const rows = await db.select().from(coolpcCategoryRecrawlPresets)
-    .where(eq(coolpcCategoryRecrawlPresets.userId, userId))
-    .orderBy(desc(coolpcCategoryRecrawlPresets.updatedAt), desc(coolpcCategoryRecrawlPresets.id));
+  const [rows, estimates] = await Promise.all([
+    db.select().from(coolpcCategoryRecrawlPresets)
+      .where(eq(coolpcCategoryRecrawlPresets.userId, userId))
+      .orderBy(desc(coolpcCategoryRecrawlPresets.pinned), asc(coolpcCategoryRecrawlPresets.sortOrder), desc(coolpcCategoryRecrawlPresets.updatedAt), desc(coolpcCategoryRecrawlPresets.id)),
+    getCrawlerRefreshEstimates(),
+  ]);
   return rows.map(row => ({
     id: row.id,
     name: row.name,
     categoryNames: parseRecrawlPresetCategoryNames(row.categoryNames),
+    pinned: row.pinned,
+    sortOrder: row.sortOrder,
+    estimateMs: estimates.category.estimateMs ? estimates.category.estimateMs * parseRecrawlPresetCategoryNames(row.categoryNames).length : null,
+    estimateSampleSize: estimates.category.sampleSize,
     updatedAt: row.updatedAt,
   }));
 }
@@ -879,10 +912,16 @@ export async function saveCoolpcCategoryRecrawlPreset(input: CoolpcCategoryRecra
   if (!categoryNames.length) throw new Error("請至少選擇一個分類");
   const now = new Date();
   const categoryNamesJson = JSON.stringify(categoryNames);
+  const [lastPreset] = await db.select({ sortOrder: coolpcCategoryRecrawlPresets.sortOrder })
+    .from(coolpcCategoryRecrawlPresets)
+    .where(eq(coolpcCategoryRecrawlPresets.userId, input.userId))
+    .orderBy(desc(coolpcCategoryRecrawlPresets.sortOrder))
+    .limit(1);
   await db.insert(coolpcCategoryRecrawlPresets).values({
     userId: input.userId,
     name,
     categoryNames: categoryNamesJson,
+    sortOrder: (lastPreset?.sortOrder ?? 0) + 1,
     updatedAt: now,
   }).onDuplicateKeyUpdate({
     set: { categoryNames: categoryNamesJson, updatedAt: now },
@@ -899,6 +938,96 @@ export async function deleteCoolpcCategoryRecrawlPreset(userId: number, id: numb
     eq(coolpcCategoryRecrawlPresets.userId, userId),
   ));
   return { success: true } as const;
+}
+
+export async function getCoolpcCategoryRecrawlPresetForUser(userId: number, id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const [preset] = await db.select().from(coolpcCategoryRecrawlPresets).where(and(
+    eq(coolpcCategoryRecrawlPresets.id, id),
+    eq(coolpcCategoryRecrawlPresets.userId, userId),
+  )).limit(1);
+  return preset ?? null;
+}
+
+export async function setCoolpcCategoryRecrawlPresetPinned(userId: number, id: number, pinned: boolean) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  await db.update(coolpcCategoryRecrawlPresets).set({ pinned }).where(and(
+    eq(coolpcCategoryRecrawlPresets.id, id),
+    eq(coolpcCategoryRecrawlPresets.userId, userId),
+  ));
+  return { success: true } as const;
+}
+
+export async function reorderCoolpcCategoryRecrawlPresets(userId: number, orderedIds: number[]) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const normalizedIds = normalizeRecrawlPresetOrder(orderedIds);
+  if (!normalizedIds.length) return { success: true } as const;
+  const owned = await db.select({ id: coolpcCategoryRecrawlPresets.id }).from(coolpcCategoryRecrawlPresets)
+    .where(and(eq(coolpcCategoryRecrawlPresets.userId, userId), inArray(coolpcCategoryRecrawlPresets.id, normalizedIds)));
+  if (owned.length !== normalizedIds.length) throw new Error("常用清單不存在或不屬於目前帳戶");
+  await Promise.all(normalizedIds.map((id, index) => db.update(coolpcCategoryRecrawlPresets).set({ sortOrder: index + 1 }).where(and(
+    eq(coolpcCategoryRecrawlPresets.id, id),
+    eq(coolpcCategoryRecrawlPresets.userId, userId),
+  ))));
+  return { success: true } as const;
+}
+
+export async function recordCoolpcCategoryRecrawlPresetHistory(input: CoolpcCategoryRecrawlPresetHistoryInput) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const categoryNames = normalizeRecrawlPresetCategoryNames(input.categoryNames);
+  if (!categoryNames.length) return null;
+  const jobIds = Array.from(new Set((input.jobIds ?? []).filter(id => Number.isInteger(id) && id > 0)));
+  await db.insert(coolpcCategoryRecrawlPresetHistory).values({
+    userId: input.userId,
+    presetId: input.presetId,
+    action: input.action,
+    categoryNames: JSON.stringify(categoryNames),
+    jobIds: jobIds.length ? JSON.stringify(jobIds) : null,
+  });
+  return { success: true } as const;
+}
+
+export async function listCoolpcCategoryRecrawlPresetHistory(userId: number, limit = 12) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const rows = await db.select().from(coolpcCategoryRecrawlPresetHistory)
+    .where(eq(coolpcCategoryRecrawlPresetHistory.userId, userId))
+    .orderBy(desc(coolpcCategoryRecrawlPresetHistory.createdAt), desc(coolpcCategoryRecrawlPresetHistory.id))
+    .limit(Math.min(30, Math.max(1, limit)));
+  const presetIds = Array.from(new Set(rows.map(row => row.presetId).filter((id): id is number => typeof id === "number")));
+  const jobIds = Array.from(new Set(rows.flatMap(row => parseRecrawlPresetJobIds(row.jobIds))));
+  const [presets, jobs] = await Promise.all([
+    presetIds.length ? db.select({ id: coolpcCategoryRecrawlPresets.id, name: coolpcCategoryRecrawlPresets.name }).from(coolpcCategoryRecrawlPresets)
+      .where(and(eq(coolpcCategoryRecrawlPresets.userId, userId), inArray(coolpcCategoryRecrawlPresets.id, presetIds))) : Promise.resolve([]),
+    jobIds.length ? db.select({ id: crawlerJobs.id, categoryName: crawlerJobs.categoryName, status: crawlerJobs.status, finishedAt: crawlerJobs.finishedAt })
+      .from(crawlerJobs).where(inArray(crawlerJobs.id, jobIds)) : Promise.resolve([]),
+  ]);
+  const presetNames = new Map(presets.map(preset => [preset.id, preset.name]));
+  const jobsById = new Map(jobs.map(job => [job.id, job]));
+  return rows.map(row => ({
+    id: row.id,
+    presetId: row.presetId,
+    presetName: row.presetId ? presetNames.get(row.presetId) ?? "已刪除清單" : "手動選取",
+    action: row.action,
+    categoryNames: parseRecrawlPresetCategoryNames(row.categoryNames),
+    createdAt: row.createdAt,
+    jobs: parseRecrawlPresetJobIds(row.jobIds).flatMap(id => {
+      const job = jobsById.get(id);
+      return job ? [{ id: job.id, categoryName: job.categoryName, status: job.status, finishedAt: job.finishedAt }] : [];
+    }),
+  }));
+}
+
+export async function applyCoolpcCategoryRecrawlPreset(userId: number, id: number) {
+  const preset = await getCoolpcCategoryRecrawlPresetForUser(userId, id);
+  if (!preset) throw new Error("找不到可套用的常用清單");
+  const categoryNames = parseRecrawlPresetCategoryNames(preset.categoryNames);
+  await recordCoolpcCategoryRecrawlPresetHistory({ userId, presetId: preset.id, action: "applied", categoryNames });
+  return { id: preset.id, name: preset.name, categoryNames };
 }
 
 export async function listCoolpcCategoryRecrawlReminders(userId: number) {
@@ -1060,13 +1189,17 @@ export async function enqueueCrawlerCategoryJobs(input: { categoryNames: string[
   const activeNames = new Set(activeJobs.map(job => job.categoryName).filter((name): name is string => Boolean(name)));
   const partitioned = partitionCategoryRecrawlNames(normalized.requestedCategoryNames, activeNames);
   const { createdCategoryNames } = partitioned;
+  let createdJobIds: number[] = [];
   if (createdCategoryNames.length) {
-    await db.insert(crawlerJobs).values(createCategoryRecrawlJobValues(createdCategoryNames, input.requestedByOpenId));
+    const insertResults = await Promise.all(createCategoryRecrawlJobValues(createdCategoryNames, input.requestedByOpenId)
+      .map(values => db.insert(crawlerJobs).values(values)));
+    createdJobIds = insertResults.map(result => Number(result[0]?.insertId ?? 0)).filter(id => id > 0);
   }
   return {
     requestedCount: partitioned.requestedCategoryNames.length,
     createdCategoryNames,
     existingCategoryNames: partitioned.existingCategoryNames,
+    createdJobIds,
   };
 }
 

@@ -261,12 +261,33 @@ export const coolpcCategoryRecrawlPresets = mysqlTable(
     userId: int("user_id").notNull(),
     name: varchar("name", { length: 64 }).notNull(),
     categoryNames: text("category_names").notNull(),
+    pinned: boolean("pinned").default(false).notNull(),
+    sortOrder: int("sort_order").default(0).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },
   table => ({
     uniqueUserName: uniqueIndex("coolpc_recrawl_presets_user_name_unique").on(table.userId, table.name),
     userUpdatedIdx: index("coolpc_recrawl_presets_user_updated_idx").on(table.userId, table.updatedAt),
+    userPinnedOrderIdx: index("coolpc_recrawl_presets_user_pinned_order_idx").on(table.userId, table.pinned, table.sortOrder),
+  }),
+);
+
+/** 管理員對常用補抓清單的套用與實際分類工作排入歷程，用於回溯執行狀態。 */
+export const coolpcCategoryRecrawlPresetHistory = mysqlTable(
+  "coolpc_category_recrawl_preset_history",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    userId: int("user_id").notNull(),
+    presetId: int("preset_id"),
+    action: mysqlEnum("action", ["applied", "jobs_enqueued"]).notNull(),
+    categoryNames: text("category_names").notNull(),
+    jobIds: text("job_ids"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  table => ({
+    userCreatedIdx: index("coolpc_recrawl_preset_history_user_created_idx").on(table.userId, table.createdAt),
+    presetCreatedIdx: index("coolpc_recrawl_preset_history_preset_created_idx").on(table.presetId, table.createdAt),
   }),
 );
 
@@ -318,5 +339,6 @@ export type CrawlerJob = typeof crawlerJobs.$inferSelect;
 export type CrawlerEvent = typeof crawlerEvents.$inferSelect;
 export type CrawlerIssueReport = typeof crawlerIssueReports.$inferSelect;
 export type CoolpcCategoryRecrawlPreset = typeof coolpcCategoryRecrawlPresets.$inferSelect;
+export type CoolpcCategoryRecrawlPresetHistory = typeof coolpcCategoryRecrawlPresetHistory.$inferSelect;
 export type ProductFavorite = typeof productFavorites.$inferSelect;
 export type PriceNotification = typeof priceNotifications.$inferSelect;

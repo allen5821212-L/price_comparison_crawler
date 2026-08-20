@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { downloadCsv, toCsv } from "@/lib/csvExport";
 import { trpc } from "@/lib/trpc";
-import { Bell, BellRing, BookmarkPlus, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Download, ExternalLink, ListChecks, ListPlus, PackageX, RefreshCw, Store, Trash2 } from "lucide-react";
+import { Bell, BellRing, BookmarkPlus, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Download, ExternalLink, GripVertical, History, ListChecks, ListPlus, PackageX, Pin, PinOff, Play, RefreshCw, Store, Trash2 } from "lucide-react";
 import React, { useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -58,17 +58,39 @@ export function createRecrawlPresetInput(name: string, selectedCategories: Reado
   return { name: name.trim(), categoryNames: Array.from(selectedCategories) };
 }
 
+export function reorderRecrawlPresetIds(ids: number[], sourceId: number, targetId: number) {
+  const sourceIndex = ids.indexOf(sourceId);
+  const targetIndex = ids.indexOf(targetId);
+  if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return ids;
+  const next = [...ids];
+  next.splice(sourceIndex, 1);
+  next.splice(targetIndex, 0, sourceId);
+  return next;
+}
+
+export function shouldShowRecrawlPresetManager(presetCount: number, historyCount: number) {
+  return presetCount > 0 || historyCount > 0;
+}
+
+const presetEstimateLabel = (estimateMs: number | null, sampleSize: number) => estimateMs
+  ? `預估總耗時 ${durationLabel(estimateMs)}${sampleSize ? `（依 ${sampleSize} 筆分類工作）` : ""}`
+  : "累積更多分類補抓紀錄後提供";
+
+const jobStatusLabel = (status: RecrawlReminderJob["status"]) => ({ queued: "排隊中", running: "執行中", completed: "已完成", failed: "失敗", cancelled: "已取消" }[status]);
+
 export default function CoolpcOnlyPage() {
   const [category, setCategory] = useState("all");
   const [page, setPage] = useState(1);
   const [categorySort, setCategorySort] = useState<"gap_desc" | "coverage_asc" | "coverage_desc">("gap_desc");
   const [selectedCategories, setSelectedCategories] = useState<Set<string>>(new Set());
   const [presetName, setPresetName] = useState("");
+  const [draggedPresetId, setDraggedPresetId] = useState<number | null>(null);
   const coverageQuery = trpc.comparison.sinyaCoverage.useQuery();
   const unlistedQuery = trpc.comparison.sinyaUnlisted.useQuery({ category: category === "all" ? undefined : category, page, pageSize: 25 });
   const exportQuery = trpc.comparison.sinyaUnlistedExport.useQuery({ category: category === "all" ? undefined : category }, { enabled: false });
   const remindersQuery = trpc.crawler.coolpcRecrawlReminders.useQuery(undefined, { refetchInterval: 60_000 });
   const presetsQuery = trpc.crawler.coolpcRecrawlPresets.useQuery();
+  const presetHistoryQuery = trpc.crawler.coolpcRecrawlPresetHistory.useQuery();
   const utils = trpc.useUtils();
   const saveReminder = trpc.crawler.saveCoolpcRecrawlReminder.useMutation({ onSuccess: () => void utils.crawler.coolpcRecrawlReminders.invalidate() });
   const setReminderActive = trpc.crawler.setCoolpcRecrawlReminderActive.useMutation({ onSuccess: () => void utils.crawler.coolpcRecrawlReminders.invalidate() });
@@ -101,6 +123,33 @@ export default function CoolpcOnlyPage() {
     },
     onError: error => toast.error(error.message || "無法刪除常用清單"),
   });
+  const applySavedPreset = trpc.crawler.applyCoolpcRecrawlPreset.useMutation({
+    onSuccess: result => {
+      selectPresetCategories(result.categoryNames);
+      toast.success(`已套用「${result.name}」`);
+      void utils.crawler.coolpcRecrawlPresetHistory.invalidate();
+    },
+    onError: error => toast.error(error.message || "無法套用常用清單"),
+  });
+  const setPresetPinned = trpc.crawler.setCoolpcRecrawlPresetPinned.useMutation({
+    onSuccess: () => void utils.crawler.coolpcRecrawlPresets.invalidate(),
+    onError: error => toast.error(error.message || "無法更新釘選狀態"),
+  });
+  const reorderPresets = trpc.crawler.reorderCoolpcRecrawlPresets.useMutation({
+    onSuccess: () => void utils.crawler.coolpcRecrawlPresets.invalidate(),
+    onError: error => toast.error(error.message || "無法調整常用清單排序"),
+  });
+  const enqueueSavedPreset = trpc.crawler.enqueueCoolpcRecrawlPreset.useMutation({
+    onSuccess: result => {
+      const created = result.createdCategoryNames.length;
+      const existing = result.existingCategoryNames.length;
+      toast.success(created ? `「${result.presetName}」已排入 ${created} 個分類${existing ? `；${existing} 個已在佇列中` : ""}` : `「${result.presetName}」的分類已在佇列或執行中`);
+      void utils.crawler.coolpcRecrawlPresetHistory.invalidate();
+      void utils.crawler.jobs.invalidate();
+      void utils.crawler.events.invalidate();
+    },
+    onError: error => toast.error(error.message || "無法從常用清單排入補抓"),
+  });
   const coverage = coverageQuery.data;
   const unlisted = unlistedQuery.data;
   const chooseCategory = (value: string) => { setCategory(value); setPage(1); };
@@ -123,12 +172,22 @@ export default function CoolpcOnlyPage() {
     : new Set());
   const topCategories = sortedCategories.slice(0, MAX_BATCH_CATEGORIES);
   const isTopSelected = topCategories.length > 0 && topCategories.every(item => selectedCategories.has(item.category));
-  const applyPreset = (categoryNames: string[]) => {
+  const selectPresetCategories = (categoryNames: string[]) => {
     const available = new Set(sortedCategories.map(item => item.category));
     const selected = categoryNames.filter(categoryName => available.has(categoryName)).slice(0, MAX_BATCH_CATEGORIES);
     setSelectedCategories(new Set(selected));
     const unavailableCount = categoryNames.length - selected.length;
-    toast.success(unavailableCount ? `已套用 ${selected.length} 個分類；${unavailableCount} 個已不在目前缺口清單` : `已套用 ${selected.length} 個分類`);
+    if (unavailableCount) toast.info(`已套用 ${selected.length} 個分類；${unavailableCount} 個已不在目前缺口清單`);
+  };
+  const movePreset = (sourceId: number, targetId: number) => {
+    if (!presetsQuery.data || sourceId === targetId) return;
+    const ids = reorderRecrawlPresetIds(presetsQuery.data.map(preset => preset.id), sourceId, targetId);
+    reorderPresets.mutate({ ids });
+  };
+  const applyPreset = (categoryNames: string[]) => {
+    const preset = presetsQuery.data?.find(item => item.categoryNames.join("\u0001") === categoryNames.join("\u0001"));
+    if (preset) applySavedPreset.mutate({ id: preset.id });
+    else selectPresetCategories(categoryNames);
   };
   const exportCsv = async () => {
     const result = await exportQuery.refetch();
@@ -139,7 +198,30 @@ export default function CoolpcOnlyPage() {
     ]));
   };
 
-  return <DashboardLayout><div className="mx-auto w-full max-w-7xl space-y-6">
+  const presetManager = shouldShowRecrawlPresetManager(presetsQuery.data?.length ?? 0, presetHistoryQuery.data?.length ?? 0) ? <Card className="border-primary/25 bg-primary/3 p-4">
+    <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+      <div><div className="flex items-center gap-2"><History className="size-4 text-primary" /><h2 className="font-semibold">常用清單管理與執行歷程</h2></div><p className="mt-1 text-xs text-muted-foreground">可拖曳調整順序、釘選常用清單，並從清單直接排入補抓；總耗時依真實分類工作紀錄估算。</p></div>
+      <Badge variant="outline" className="w-fit border-primary/30 bg-primary/10 text-primary">{presetsQuery.data?.length ?? 0} 份清單</Badge>
+    </div>
+    {presetsQuery.data?.length ? <div className="mt-4 space-y-2">
+      {presetsQuery.data.map(preset => <div
+        key={preset.id}
+        draggable
+        onDragStart={() => setDraggedPresetId(preset.id)}
+        onDragEnd={() => setDraggedPresetId(null)}
+        onDragOver={event => event.preventDefault()}
+        onDrop={() => { if (draggedPresetId !== null) movePreset(draggedPresetId, preset.id); setDraggedPresetId(null); }}
+        className={`flex flex-col gap-3 rounded-lg border bg-background/70 p-3 transition-colors sm:flex-row sm:items-center ${draggedPresetId === preset.id ? "border-primary/60 bg-primary/5" : "border-primary/15"}`}
+      >
+        <GripVertical className="hidden size-5 shrink-0 cursor-grab text-muted-foreground sm:block" aria-label={`拖曳排序：${preset.name}`} />
+        <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="truncate text-sm font-medium">{preset.name}</p>{preset.pinned ? <Badge className="gap-1 bg-primary/15 text-primary hover:bg-primary/15"><Pin className="size-3" />已釘選</Badge> : null}</div><p className="mt-1 text-xs text-muted-foreground">{preset.categoryNames.length} 個分類 · {presetEstimateLabel(preset.estimateMs, preset.estimateSampleSize)}</p></div>
+        <div className="flex flex-wrap gap-1.5"><Button size="sm" variant="outline" onClick={() => applySavedPreset.mutate({ id: preset.id })} disabled={applySavedPreset.isPending}><ListChecks className="mr-1.5 size-3.5" />套用</Button><Button size="sm" onClick={() => enqueueSavedPreset.mutate({ id: preset.id })} disabled={enqueueSavedPreset.isPending}><Play className="mr-1.5 size-3.5" />直接排入</Button><Button size="icon" variant="ghost" className="size-8" onClick={() => setPresetPinned.mutate({ id: preset.id, pinned: !preset.pinned })} disabled={setPresetPinned.isPending} aria-label={preset.pinned ? `取消釘選：${preset.name}` : `釘選：${preset.name}`}>{preset.pinned ? <PinOff className="size-3.5" /> : <Pin className="size-3.5" />}</Button><Button size="icon" variant="ghost" className="size-8 text-muted-foreground hover:text-destructive" onClick={() => deletePreset.mutate({ id: preset.id })} disabled={deletePreset.isPending} aria-label={`刪除常用清單：${preset.name}`}><Trash2 className="size-3.5" /></Button></div>
+      </div>)}
+    </div> : <p className="mt-4 text-xs text-muted-foreground">目前沒有可管理的常用清單；下方仍保留過去的套用與補抓歷程。</p>}
+    <div className="mt-4 border-t border-border pt-4"><div className="flex items-center gap-2"><History className="size-3.5 text-primary" /><h3 className="text-sm font-medium">最近套用與補抓執行紀錄</h3></div>{presetHistoryQuery.isLoading ? <Skeleton className="mt-3 h-14 w-full" /> : presetHistoryQuery.data?.length ? <div className="mt-3 space-y-2">{presetHistoryQuery.data.map(entry => <div className="rounded-md border border-border/70 bg-background/60 px-3 py-2 text-xs" key={entry.id}><div className="flex flex-wrap items-center gap-x-2 gap-y-1"><span className="font-medium">{entry.presetName}</span><Badge variant="outline">{entry.action === "applied" ? "已套用" : "已排入補抓"}</Badge><span className="text-muted-foreground">{entry.categoryNames.length} 個分類 · {new Date(entry.createdAt).toLocaleString("zh-TW", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</span></div>{entry.jobs.length ? <div className="mt-1 flex flex-wrap gap-1">{entry.jobs.map(job => <Badge className="bg-muted text-muted-foreground hover:bg-muted" key={job.id}>#{job.id} {job.categoryName ?? "分類"} · {jobStatusLabel(job.status)}</Badge>)}</div> : <p className="mt-1 text-muted-foreground">{entry.categoryNames.join("、")}</p>}</div>)}</div> : <p className="mt-3 text-xs text-muted-foreground">尚無套用或補抓歷程。</p>}</div>
+  </Card> : null;
+
+  return <DashboardLayout><div className="mx-auto w-full max-w-7xl space-y-6">{presetManager}
     <section className="flex flex-col gap-4 border-b border-border pb-5 lg:flex-row lg:items-start lg:justify-between"><div className="space-y-1"><div className="flex items-center gap-2 text-primary"><Store className="size-4" /><span className="text-sm font-medium">平台缺口</span></div><h1 className="text-2xl font-bold tracking-tight">原價屋有售、欣亞未上架商品</h1><p className="max-w-3xl text-sm text-muted-foreground">以最新完成爬蟲批次為準；只有已通過保守配對規則的原價屋－欣亞商品才視為「欣亞已上架」，其餘原價屋品項會列入下方缺口清單。</p></div><div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => void exportCsv()} disabled={exportQuery.isFetching || !coverage}><Download className="mr-2 size-4" />匯出 CSV</Button><Button variant="outline" onClick={() => { void coverageQuery.refetch(); void unlistedQuery.refetch(); }} disabled={coverageQuery.isFetching || unlistedQuery.isFetching}><RefreshCw className={`mr-2 size-4 ${coverageQuery.isFetching || unlistedQuery.isFetching ? "animate-spin" : ""}`} />重新整理清單</Button></div></section>
     {coverageQuery.isLoading ? <div className="grid gap-3 sm:grid-cols-3">{Array.from({ length: 3 }, (_, index) => <Skeleton key={index} className="h-28" />)}</div> : coverageQuery.isError || !coverage ? <Card className="p-10 text-center"><PackageX className="mx-auto mb-3 size-7 text-muted-foreground" /><h2 className="font-semibold">目前無法讀取原價屋缺口</h2><p className="mt-1 text-sm text-muted-foreground">請確認已有完成的爬蟲批次後再試。</p><Button className="mt-4" variant="outline" onClick={() => void coverageQuery.refetch()}>重新嘗試</Button></Card> : <>
       <div className="grid gap-3 sm:grid-cols-3"><Card className="p-4"><p className="text-xs text-muted-foreground">原價屋商品總數</p><p className="mt-1 text-3xl font-bold text-primary">{coverage.coolpcTotal.toLocaleString()} 件</p><p className="mt-1 text-xs text-muted-foreground">以原價屋為分析分母</p></Card><Card className="p-4"><p className="text-xs text-muted-foreground">欣亞已確認上架</p><p className="mt-1 text-3xl font-bold text-emerald-500">{coverage.sinyaListed.toLocaleString()} 件</p><p className="mt-1 text-xs text-muted-foreground">通過原價屋－欣亞配對</p></Card><Card className="p-4"><p className="text-xs text-muted-foreground">原價屋有售、欣亞未上架</p><p className="mt-1 text-3xl font-bold text-amber-500">{coverage.sinyaUnlisted.toLocaleString()} 件</p><p className="mt-1 text-xs text-muted-foreground">欣亞相對原價屋的缺口</p></Card></div>

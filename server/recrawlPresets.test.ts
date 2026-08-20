@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeRecrawlPresetCategoryNames, parseRecrawlPresetCategoryNames } from "./db";
+import { normalizeRecrawlPresetCategoryNames, normalizeRecrawlPresetOrder, parseRecrawlPresetCategoryNames, parseRecrawlPresetJobIds } from "./db";
 
 describe("常用分類補抓清單資料", () => {
   it("正規化分類、排除重複與空白，並限制最多十二個分類", () => {
@@ -13,5 +13,11 @@ describe("常用分類補抓清單資料", () => {
     expect(parseRecrawlPresetCategoryNames('{"category":"鍵盤"}')).toEqual([]);
     expect(parseRecrawlPresetCategoryNames('["鍵盤", 42]')).toEqual([]);
     expect(parseRecrawlPresetCategoryNames("not-json")).toEqual([]);
+  });
+
+  it("僅保留有效且不重複的排序識別與工作編號，避免跨帳戶或損壞歷程誤用", () => {
+    expect(normalizeRecrawlPresetOrder([3, 1, 3, 0, -4, 2.5, 2])).toEqual([3, 1, 2]);
+    expect(parseRecrawlPresetJobIds("[9, 9, 0, -2, 12]")).toEqual([9, 12]);
+    expect(parseRecrawlPresetJobIds('{"job":9}')).toEqual([]);
   });
 });

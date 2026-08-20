@@ -6,6 +6,12 @@ import { adminProcedure, protectedProcedure, publicProcedure, router } from "./_
 import {
   enqueueCrawlerCategoryJobs,
   deleteCoolpcCategoryRecrawlPreset,
+  applyCoolpcCategoryRecrawlPreset,
+  getCoolpcCategoryRecrawlPresetForUser,
+  listCoolpcCategoryRecrawlPresetHistory,
+  recordCoolpcCategoryRecrawlPresetHistory,
+  reorderCoolpcCategoryRecrawlPresets,
+  setCoolpcCategoryRecrawlPresetPinned,
   enqueueCrawlerJob,
   getCategoryRecrawlAnalytics,
   getCrawlerRefreshEstimates,
@@ -193,11 +199,36 @@ export const appRouter = router({
     categoryRecrawlAnalytics: adminProcedure.input(z.object({ limit: z.number().int().min(1).max(48).default(24) }).optional())
       .query(async ({ input }) => getCategoryRecrawlAnalytics(input?.limit ?? 24)),
     coolpcRecrawlPresets: adminProcedure.query(async ({ ctx }) => listCoolpcCategoryRecrawlPresets(ctx.user.id)),
+    coolpcRecrawlPresetHistory: adminProcedure.input(z.object({ limit: z.number().int().min(1).max(30).default(12) }).optional())
+      .query(async ({ ctx, input }) => listCoolpcCategoryRecrawlPresetHistory(ctx.user.id, input?.limit ?? 12)),
     saveCoolpcRecrawlPreset: adminProcedure.input(z.object({
       name: z.string().min(1).max(64),
       categoryNames: z.array(z.string().min(1).max(512)).min(1).max(12),
     }).refine(value => new Set(value.categoryNames.map(name => name.trim())).size === value.categoryNames.length, "分類不可重複"))
       .mutation(async ({ ctx, input }) => saveCoolpcCategoryRecrawlPreset({ userId: ctx.user.id, ...input })),
+    applyCoolpcRecrawlPreset: adminProcedure.input(z.object({ id: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => applyCoolpcCategoryRecrawlPreset(ctx.user.id, input.id)),
+    setCoolpcRecrawlPresetPinned: adminProcedure.input(z.object({ id: z.number().int().positive(), pinned: z.boolean() }))
+      .mutation(async ({ ctx, input }) => setCoolpcCategoryRecrawlPresetPinned(ctx.user.id, input.id, input.pinned)),
+    reorderCoolpcRecrawlPresets: adminProcedure.input(z.object({ ids: z.array(z.number().int().positive()).min(1).max(100) })
+      .refine(value => new Set(value.ids).size === value.ids.length, "常用清單不可重複"))
+      .mutation(async ({ ctx, input }) => reorderCoolpcCategoryRecrawlPresets(ctx.user.id, input.ids)),
+    enqueueCoolpcRecrawlPreset: adminProcedure.input(z.object({ id: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        const preset = await getCoolpcCategoryRecrawlPresetForUser(ctx.user.id, input.id);
+        if (!preset) throw new Error("找不到可排入的常用清單");
+        const categoryNames = JSON.parse(preset.categoryNames) as unknown;
+        if (!Array.isArray(categoryNames) || !categoryNames.every(item => typeof item === "string")) throw new Error("常用清單資料格式不正確");
+        const result = await enqueueCrawlerCategoryJobs({ categoryNames, requestedByOpenId: ctx.user.openId });
+        await recordCoolpcCategoryRecrawlPresetHistory({
+          userId: ctx.user.id,
+          presetId: preset.id,
+          action: "jobs_enqueued",
+          categoryNames,
+          jobIds: result.createdJobIds,
+        });
+        return { ...result, presetName: preset.name };
+      }),
     deleteCoolpcRecrawlPreset: adminProcedure.input(z.object({ id: z.number().int().positive() }))
       .mutation(async ({ ctx, input }) => deleteCoolpcCategoryRecrawlPreset(ctx.user.id, input.id)),
     coolpcRecrawlReminders: adminProcedure.query(async ({ ctx }) => listCoolpcCategoryRecrawlReminders(ctx.user.id)),

@@ -64,6 +64,13 @@
       "when": 1787222545118,
       "tag": "0008_clever_blade",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "5",
+      "when": 1787223790276,
+      "tag": "0009_curvy_firelord",
+      "breakpoints": true
     }
   ]
 }
