@@ -1,7 +1,7 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { createBatchCategoryRequest, createRecrawlPresetInput, nextSelectedCategories, RecrawlReminderSummary, reorderRecrawlPresetIds, shouldShowRecrawlPresetManager } from "./CoolpcOnlyPage";
+import { createBatchCategoryRequest, createRecrawlPresetInput, createRecrawlPresetReorderInput, nextSelectedCategories, readRecrawlPresetDragPayload, RecrawlReminderSummary, RECRAWL_PRESET_DRAG_MIME, reorderRecrawlPresetIds, shouldShowRecrawlPresetManager, writeRecrawlPresetDragPayload } from "./CoolpcOnlyPage";
 
 describe("CoolpcOnlyPage recrawl reminder summary", () => {
   it("顯示由歷史分類工作推導的 ETA 與最近成功結果", () => {
@@ -55,6 +55,21 @@ describe("CoolpcOnlyPage category selection", () => {
     expect(reorderRecrawlPresetIds([11, 22, 33], 33, 11)).toEqual([33, 11, 22]);
     expect(reorderRecrawlPresetIds([11, 22, 33], 22, 22)).toEqual([11, 22, 33]);
     expect(reorderRecrawlPresetIds([11, 22, 33], 99, 11)).toEqual([11, 22, 33]);
+  });
+
+  it("DataTransfer 拖放會讀取來源清單並提交重排後的排序輸入", () => {
+    const data = new Map<string, string>();
+    const transfer = {
+      effectAllowed: "none",
+      getData: (type: string) => data.get(type) ?? "",
+      setData: (type: string, value: string) => data.set(type, value),
+    };
+
+    writeRecrawlPresetDragPayload(transfer as unknown as DataTransfer, 22);
+    expect(data.get(RECRAWL_PRESET_DRAG_MIME)).toBe("22");
+    expect(transfer.effectAllowed).toBe("move");
+    const sourceId = readRecrawlPresetDragPayload(transfer as unknown as DataTransfer);
+    expect(createRecrawlPresetReorderInput(reorderRecrawlPresetIds([11, 22], sourceId ?? 0, 11))).toEqual({ ids: [22, 11] });
   });
 
   it("即使最後一份常用清單已刪除，只要保有歷程仍會顯示管理與歷程面板", () => {

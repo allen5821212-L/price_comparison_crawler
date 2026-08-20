@@ -68,6 +68,23 @@ export function reorderRecrawlPresetIds(ids: number[], sourceId: number, targetI
   return next;
 }
 
+export const RECRAWL_PRESET_DRAG_MIME = "application/x-recrawl-preset-id";
+type RecrawlPresetDataTransfer = Pick<DataTransfer, "effectAllowed" | "getData" | "setData">;
+
+export function writeRecrawlPresetDragPayload(dataTransfer: RecrawlPresetDataTransfer, presetId: number) {
+  dataTransfer.setData(RECRAWL_PRESET_DRAG_MIME, String(presetId));
+  dataTransfer.effectAllowed = "move";
+}
+
+export function readRecrawlPresetDragPayload(dataTransfer: Pick<DataTransfer, "getData">) {
+  const presetId = Number(dataTransfer.getData(RECRAWL_PRESET_DRAG_MIME));
+  return Number.isInteger(presetId) && presetId > 0 ? presetId : null;
+}
+
+export function createRecrawlPresetReorderInput(ids: number[]) {
+  return { ids };
+}
+
 export function shouldShowRecrawlPresetManager(presetCount: number, historyCount: number) {
   return presetCount > 0 || historyCount > 0;
 }
@@ -182,7 +199,7 @@ export default function CoolpcOnlyPage() {
   const movePreset = (sourceId: number, targetId: number) => {
     if (!presetsQuery.data || sourceId === targetId) return;
     const ids = reorderRecrawlPresetIds(presetsQuery.data.map(preset => preset.id), sourceId, targetId);
-    reorderPresets.mutate({ ids });
+    reorderPresets.mutate(createRecrawlPresetReorderInput(ids));
   };
   const applyPreset = (categoryNames: string[]) => {
     const preset = presetsQuery.data?.find(item => item.categoryNames.join("\u0001") === categoryNames.join("\u0001"));
@@ -207,10 +224,10 @@ export default function CoolpcOnlyPage() {
       {presetsQuery.data.map(preset => <div
         key={preset.id}
         draggable
-        onDragStart={event => { event.dataTransfer.setData("application/x-recrawl-preset-id", String(preset.id)); event.dataTransfer.effectAllowed = "move"; setDraggedPresetId(preset.id); }}
+        onDragStart={event => { writeRecrawlPresetDragPayload(event.dataTransfer, preset.id); setDraggedPresetId(preset.id); }}
         onDragEnd={() => setDraggedPresetId(null)}
         onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
-        onDrop={event => { event.preventDefault(); const transferredId = Number(event.dataTransfer.getData("application/x-recrawl-preset-id")); const sourceId = Number.isInteger(transferredId) && transferredId > 0 ? transferredId : draggedPresetId; if (sourceId !== null) movePreset(sourceId, preset.id); setDraggedPresetId(null); }}
+        onDrop={event => { event.preventDefault(); const sourceId = readRecrawlPresetDragPayload(event.dataTransfer) ?? draggedPresetId; if (sourceId !== null) movePreset(sourceId, preset.id); setDraggedPresetId(null); }}
         className={`flex flex-col gap-3 rounded-lg border bg-background/70 p-3 transition-colors sm:flex-row sm:items-center ${draggedPresetId === preset.id ? "border-primary/60 bg-primary/5" : "border-primary/15"}`}
       >
         <GripVertical className="hidden size-5 shrink-0 cursor-grab text-muted-foreground sm:block" aria-label={`拖曳排序：${preset.name}`} />
