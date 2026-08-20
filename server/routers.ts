@@ -4,7 +4,9 @@ import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { adminProcedure, protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import {
+  enqueueCrawlerCategoryJobs,
   enqueueCrawlerJob,
+  getCategoryRecrawlAnalytics,
   getCrawlerRefreshEstimates,
   getDynamicPriceHistory,
   getFavoriteForUser,
@@ -178,6 +180,15 @@ export const appRouter = router({
         requestedByOpenId: ctx.user.openId,
       });
     }),
+    enqueueCategories: adminProcedure.input(z.object({
+      categoryNames: z.array(z.string().min(1).max(512)).min(1).max(12),
+    }).refine(value => new Set(value.categoryNames.map(name => name.trim())).size === value.categoryNames.length, "分類不可重複"))
+      .mutation(async ({ ctx, input }) => enqueueCrawlerCategoryJobs({
+        categoryNames: input.categoryNames,
+        requestedByOpenId: ctx.user.openId,
+      })),
+    categoryRecrawlAnalytics: adminProcedure.input(z.object({ limit: z.number().int().min(1).max(48).default(24) }).optional())
+      .query(async ({ input }) => getCategoryRecrawlAnalytics(input?.limit ?? 24)),
     coolpcRecrawlReminders: adminProcedure.query(async ({ ctx }) => listCoolpcCategoryRecrawlReminders(ctx.user.id)),
     saveCoolpcRecrawlReminder: adminProcedure.input(z.object({ categoryName: z.string().min(1).max(512) }))
       .mutation(async ({ ctx, input }) => saveCoolpcCategoryRecrawlReminder({ userId: ctx.user.id, categoryName: input.categoryName })),

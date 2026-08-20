@@ -44,6 +44,36 @@ export interface EnqueueCrawlerJobResult {
   status: "queued" | "running" | "completed" | "failed" | "cancelled";
 }
 
+export interface EnqueueCrawlerCategoryJobsResult {
+  requestedCount: number;
+  createdCategoryNames: string[];
+  existingCategoryNames: string[];
+}
+
+export type CategoryRecrawlMetricInput = {
+  id: number;
+  categoryName: string | null;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  startedAt: Date | string | null;
+  finishedAt: Date | string | null;
+};
+
+export type CategoryRecrawlAnalytics = {
+  sampleSize: number;
+  completedCount: number;
+  failedCount: number;
+  successRate: number | null;
+  averageDurationMs: number | null;
+  points: Array<{
+    id: number;
+    categoryName: string;
+    finishedAt: Date | string;
+    durationMinutes: number;
+    rollingSuccessRate: number;
+    succeeded: boolean;
+  }>;
+};
+
 export interface CrawlerRefreshEstimate {
   estimateMs: number | null;
   sampleSize: number;
@@ -806,18 +836,36 @@ export async function exportSinyaUnlistedCoolpcProducts(category?: string) {
 export async function listCoolpcCategoryRecrawlReminders(userId: number) {
   const db = await getDb();
   if (!db) throw new Error("資料庫目前無法使用");
-  const [reminders, summary] = await Promise.all([
+  const [reminders, summary, estimates, recentCategoryJobs] = await Promise.all([
     db.select().from(coolpcCategoryRecrawlReminders).where(and(
       eq(coolpcCategoryRecrawlReminders.userId, userId),
       eq(coolpcCategoryRecrawlReminders.active, true),
     )).orderBy(desc(coolpcCategoryRecrawlReminders.updatedAt)),
     getSinyaCoverageSummary(),
+    getCrawlerRefreshEstimates(),
+    db.select({
+      categoryName: crawlerJobs.categoryName,
+      status: crawlerJobs.status,
+      startedAt: crawlerJobs.startedAt,
+      finishedAt: crawlerJobs.finishedAt,
+    }).from(crawlerJobs).where(and(
+      eq(crawlerJobs.scope, "category"),
+      isNotNull(crawlerJobs.categoryName),
+    )).orderBy(desc(crawlerJobs.requestedAt), desc(crawlerJobs.id)).limit(200),
   ]);
   const categories = new Map(summary?.categories.map(category => [category.category, category]) ?? []);
+  const latestJobs = new Map<string, typeof recentCategoryJobs[number]>();
+  recentCategoryJobs.forEach(job => {
+    if (job.categoryName && !latestJobs.has(job.categoryName)) latestJobs.set(job.categoryName, job);
+  });
   return reminders.map(reminder => {
     const current = categories.get(reminder.categoryName);
     const currentRunId = summary?.run.id ?? null;
     const hasGap = (current?.sinyaUnlisted ?? 0) > 0;
+    const latestJob = latestJobs.get(reminder.categoryName) ?? null;
+    const durationMs = latestJob?.startedAt && latestJob.finishedAt
+      ? Math.max(0, new Date(latestJob.finishedAt).getTime() - new Date(latestJob.startedAt).getTime())
+      : null;
     return {
       id: reminder.id,
       categoryName: reminder.categoryName,
@@ -825,6 +873,14 @@ export async function listCoolpcCategoryRecrawlReminders(userId: number) {
       currentRunId,
       sinyaUnlisted: current?.sinyaUnlisted ?? 0,
       isDue: Boolean(hasGap && currentRunId && (!reminder.lastNotifiedRunId || currentRunId > reminder.lastNotifiedRunId)),
+      estimateMs: estimates.category.estimateMs,
+      estimateSampleSize: estimates.category.sampleSize,
+      latestJob: latestJob ? {
+        status: latestJob.status,
+        startedAt: latestJob.startedAt,
+        finishedAt: latestJob.finishedAt,
+        durationMs,
+      } : null,
       updatedAt: reminder.updatedAt,
     };
   });
@@ -899,6 +955,88 @@ export async function enqueueCrawlerJob(input: CrawlerJobInput): Promise<Enqueue
     requestedByOpenId: input.requestedByOpenId ?? null,
   });
   return { id: Number(result[0]?.insertId ?? 0), created: true, status: "queued" };
+}
+
+/** Queue several distinct category refreshes without letting identical active jobs pile up. */
+export async function enqueueCrawlerCategoryJobs(input: { categoryNames: string[]; requestedByOpenId?: string | null }): Promise<EnqueueCrawlerCategoryJobsResult> {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const categoryNames = Array.from(new Set(input.categoryNames.map(name => name.trim()).filter(Boolean))).slice(0, 12);
+  if (!categoryNames.length) throw new Error("請至少選擇一個分類");
+
+  const activeJobs = await db.select({ categoryName: crawlerJobs.categoryName }).from(crawlerJobs)
+    .where(and(
+      eq(crawlerJobs.scope, "category"),
+      inArray(crawlerJobs.status, ["queued", "running"]),
+      inArray(crawlerJobs.categoryName, categoryNames),
+    ));
+  const activeNames = new Set(activeJobs.map(job => job.categoryName).filter((name): name is string => Boolean(name)));
+  const createdCategoryNames = categoryNames.filter(name => !activeNames.has(name));
+  if (createdCategoryNames.length) {
+    await db.insert(crawlerJobs).values(createdCategoryNames.map(categoryName => ({
+      scope: "category" as const,
+      trigger: "manual" as const,
+      status: "queued" as const,
+      categoryName,
+      requestedByOpenId: input.requestedByOpenId ?? null,
+    })));
+  }
+  return {
+    requestedCount: categoryNames.length,
+    createdCategoryNames,
+    existingCategoryNames: categoryNames.filter(name => activeNames.has(name)),
+  };
+}
+
+/** Derives a compact trend series from terminal category jobs, with a rolling five-job success rate. */
+export function deriveCategoryRecrawlAnalytics(rows: CategoryRecrawlMetricInput[]): CategoryRecrawlAnalytics {
+  const terminalRows = rows.filter(row => (row.status === "completed" || row.status === "failed") && row.categoryName && row.startedAt && row.finishedAt)
+    .map(row => ({ ...row, startedMs: new Date(row.startedAt as Date | string).getTime(), finishedMs: new Date(row.finishedAt as Date | string).getTime() }))
+    .filter(row => Number.isFinite(row.startedMs) && Number.isFinite(row.finishedMs) && row.finishedMs >= row.startedMs)
+    .sort((left, right) => left.finishedMs - right.finishedMs)
+    .slice(-24);
+  const completedCount = terminalRows.filter(row => row.status === "completed").length;
+  const failedCount = terminalRows.length - completedCount;
+  const averageDurationMs = terminalRows.length
+    ? Math.round(terminalRows.reduce((total, row) => total + row.finishedMs - row.startedMs, 0) / terminalRows.length)
+    : null;
+
+  return {
+    sampleSize: terminalRows.length,
+    completedCount,
+    failedCount,
+    successRate: terminalRows.length ? completedCount / terminalRows.length : null,
+    averageDurationMs,
+    points: terminalRows.map((row, index) => {
+      const window = terminalRows.slice(Math.max(0, index - 4), index + 1);
+      const windowCompleted = window.filter(entry => entry.status === "completed").length;
+      return {
+        id: row.id,
+        categoryName: row.categoryName ?? "未分類",
+        finishedAt: row.finishedAt as Date | string,
+        durationMinutes: Math.round(((row.finishedMs - row.startedMs) / 60_000) * 10) / 10,
+        rollingSuccessRate: Math.round((windowCompleted / window.length) * 1000) / 10,
+        succeeded: row.status === "completed",
+      };
+    }),
+  };
+}
+
+/** Category-only metrics stay separate from full catalog timing, preventing skewed manual-recrawl reports. */
+export async function getCategoryRecrawlAnalytics(limit = 24) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const rows = await db.select({
+    id: crawlerJobs.id,
+    categoryName: crawlerJobs.categoryName,
+    status: crawlerJobs.status,
+    startedAt: crawlerJobs.startedAt,
+    finishedAt: crawlerJobs.finishedAt,
+  }).from(crawlerJobs).where(and(
+    eq(crawlerJobs.scope, "category"),
+    inArray(crawlerJobs.status, ["completed", "failed"]),
+  )).orderBy(desc(crawlerJobs.finishedAt), desc(crawlerJobs.id)).limit(Math.min(48, Math.max(1, limit)));
+  return deriveCategoryRecrawlAnalytics(rows);
 }
 
 /** Recent crawler work is intentionally limited to keep the monitor page fast. */
