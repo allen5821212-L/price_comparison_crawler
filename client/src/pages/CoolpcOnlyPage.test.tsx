@@ -1,7 +1,7 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { createBatchCategoryRequest, createRecrawlPresetImportInput, createRecrawlPresetInput, createRecrawlPresetReorderInput, moveRecrawlPresetId, nextSelectedCategories, readRecrawlPresetDragPayload, RecrawlReminderSummary, RECRAWL_PRESET_DRAG_MIME, reorderRecrawlPresetIds, shouldShowRecrawlPresetManager, writeRecrawlPresetDragPayload } from "./CoolpcOnlyPage";
+import { createBatchCategoryRequest, createRecrawlPresetImportInput, createRecrawlPresetInput, createRecrawlPresetReorderInput, formatRecrawlExecutionProgress, formatRecrawlExecutionSuccessRate, moveRecrawlPresetId, nextSelectedCategories, readRecrawlPresetDragPayload, RecrawlReminderSummary, RECRAWL_PRESET_DRAG_MIME, reorderRecrawlPresetIds, shouldShowRecrawlPresetManager, writeRecrawlPresetDragPayload } from "./CoolpcOnlyPage";
 
 describe("CoolpcOnlyPage recrawl reminder summary", () => {
   it("顯示由歷史分類工作推導的 ETA 與最近成功結果", () => {
@@ -87,5 +87,10 @@ describe("CoolpcOnlyPage category selection", () => {
     expect(shouldShowRecrawlPresetManager(2, 0)).toBe(true);
     expect(shouldShowRecrawlPresetManager(0, 3)).toBe(true);
     expect(shouldShowRecrawlPresetManager(0, 0)).toBe(false);
+  });
+
+  it("部分完成時分開顯示處理進度與終態成功率，避免將一筆完成誤標為全部完成", () => {
+    expect(formatRecrawlExecutionProgress(2, 1, 0)).toBe("處理進度 1/2（50%）");
+    expect(formatRecrawlExecutionSuccessRate(1)).toBe("終態成功率 100%");
   });
 });

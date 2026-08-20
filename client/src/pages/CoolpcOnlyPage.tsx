@@ -105,7 +105,17 @@ const presetEstimateLabel = (estimateMs: number | null, sampleSize: number) => e
   : "累積更多分類補抓紀錄後提供";
 
 const jobStatusLabel = (status: RecrawlReminderJob["status"]) => ({ queued: "排隊中", running: "執行中", completed: "已完成", failed: "失敗", cancelled: "已取消" }[status]);
-const completionRateLabel = (rate: number | null) => rate === null ? "等待工作完成" : `完成率 ${Math.round(rate * 100)}%`;
+export function formatRecrawlExecutionProgress(total: number, completedCount: number, failedCount: number) {
+  if (!total) return "尚未連結分類工作";
+  const terminalCount = completedCount + failedCount;
+  return `處理進度 ${terminalCount}/${total}（${Math.round(terminalCount / total * 100)}%）`;
+}
+
+export function formatRecrawlExecutionSuccessRate(rate: number | null) {
+  return rate === null ? "尚未有終態工作" : `終態成功率 ${Math.round(rate * 100)}%`;
+}
+
+const completionRateLabel = formatRecrawlExecutionSuccessRate;
 
 export default function CoolpcOnlyPage() {
   const [category, setCategory] = useState("all");
