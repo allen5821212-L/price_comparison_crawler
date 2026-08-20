@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createCategoryRecrawlJobValues, deriveCategoryRecrawlAnalytics, partitionCategoryRecrawlNames } from "./db";
+import { collectExistingCategoryJobIds, createCategoryRecrawlJobValues, deriveCategoryRecrawlAnalytics, partitionCategoryRecrawlNames } from "./db";
 
 describe("deriveCategoryRecrawlAnalytics", () => {
   it("從已完成與失敗的分類工作計算耗時、整體成功率與五筆滾動成功率", () => {
@@ -47,5 +47,13 @@ describe("deriveCategoryRecrawlAnalytics", () => {
       { scope: "category", trigger: "manual", status: "queued", categoryName: "鍵盤", requestedByOpenId: "admin-open-id" },
       { scope: "category", trigger: "manual", status: "queued", categoryName: "筆電", requestedByOpenId: "admin-open-id" },
     ]);
+  });
+
+  it("將既有排隊或執行分類的工作編號回傳給常用清單歷程", () => {
+    expect(collectExistingCategoryJobIds([
+      { id: 101, categoryName: "鍵盤" },
+      { id: 102, categoryName: "筆電" },
+      { id: 103, categoryName: null },
+    ], ["筆電", "網通"])).toEqual([102]);
   });
 });

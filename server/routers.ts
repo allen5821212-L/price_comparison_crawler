@@ -230,7 +230,7 @@ export const appRouter = router({
           presetId: preset.id,
           action: "jobs_enqueued",
           categoryNames,
-          jobIds: result.createdJobIds,
+          jobIds: [...result.createdJobIds, ...result.existingJobIds],
         });
         return { ...result, presetName: preset.name };
       }),

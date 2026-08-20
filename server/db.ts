@@ -51,6 +51,7 @@ export interface EnqueueCrawlerCategoryJobsResult {
   createdCategoryNames: string[];
   existingCategoryNames: string[];
   createdJobIds: number[];
+  existingJobIds: number[];
 }
 
 export interface CoolpcCategoryRecrawlPresetInput {
@@ -1319,6 +1320,16 @@ export function createCategoryRecrawlJobValues(categoryNames: string[], requeste
   }));
 }
 
+export function collectExistingCategoryJobIds(
+  activeJobs: Array<{ id: number; categoryName: string | null }>,
+  requestedCategoryNames: string[],
+) {
+  const requested = new Set(requestedCategoryNames);
+  return activeJobs
+    .filter(job => job.categoryName !== null && requested.has(job.categoryName))
+    .map(job => job.id);
+}
+
 /** Queue several distinct category refreshes without letting identical active jobs pile up. */
 export async function enqueueCrawlerCategoryJobs(input: { categoryNames: string[]; requestedByOpenId?: string | null }): Promise<EnqueueCrawlerCategoryJobsResult> {
   const db = await getDb();
@@ -1326,13 +1337,14 @@ export async function enqueueCrawlerCategoryJobs(input: { categoryNames: string[
   const normalized = partitionCategoryRecrawlNames(input.categoryNames, new Set());
   if (!normalized.requestedCategoryNames.length) throw new Error("請至少選擇一個分類");
 
-  const activeJobs = await db.select({ categoryName: crawlerJobs.categoryName }).from(crawlerJobs)
+  const activeJobs = await db.select({ id: crawlerJobs.id, categoryName: crawlerJobs.categoryName }).from(crawlerJobs)
     .where(and(
       eq(crawlerJobs.scope, "category"),
       inArray(crawlerJobs.status, ["queued", "running"]),
       inArray(crawlerJobs.categoryName, normalized.requestedCategoryNames),
     ));
   const activeNames = new Set(activeJobs.map(job => job.categoryName).filter((name): name is string => Boolean(name)));
+  const existingJobIds = collectExistingCategoryJobIds(activeJobs, normalized.requestedCategoryNames);
   const partitioned = partitionCategoryRecrawlNames(normalized.requestedCategoryNames, activeNames);
   const { createdCategoryNames } = partitioned;
   let createdJobIds: number[] = [];
@@ -1346,6 +1358,7 @@ export async function enqueueCrawlerCategoryJobs(input: { categoryNames: string[
     createdCategoryNames,
     existingCategoryNames: partitioned.existingCategoryNames,
     createdJobIds,
+    existingJobIds,
   };
 }
 
