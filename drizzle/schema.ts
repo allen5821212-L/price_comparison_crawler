@@ -253,6 +253,23 @@ export const coolpcCategoryRecrawlReminders = mysqlTable(
   }),
 );
 
+/** 管理員可重用的原價屋分類補抓清單；分類以 JSON 字串保存，並嚴格歸屬建立者帳戶。 */
+export const coolpcCategoryRecrawlPresets = mysqlTable(
+  "coolpc_category_recrawl_presets",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    userId: int("user_id").notNull(),
+    name: varchar("name", { length: 64 }).notNull(),
+    categoryNames: text("category_names").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    uniqueUserName: uniqueIndex("coolpc_recrawl_presets_user_name_unique").on(table.userId, table.name),
+    userUpdatedIdx: index("coolpc_recrawl_presets_user_updated_idx").on(table.userId, table.updatedAt),
+  }),
+);
+
 /** 使用者收藏的欣亞來源商品，可選擇指定可接受價格。 */
 export const productFavorites = mysqlTable(
   "product_favorites",
@@ -300,5 +317,6 @@ export type ComparisonPriceHistory = typeof comparisonPriceHistory.$inferSelect;
 export type CrawlerJob = typeof crawlerJobs.$inferSelect;
 export type CrawlerEvent = typeof crawlerEvents.$inferSelect;
 export type CrawlerIssueReport = typeof crawlerIssueReports.$inferSelect;
+export type CoolpcCategoryRecrawlPreset = typeof coolpcCategoryRecrawlPresets.$inferSelect;
 export type ProductFavorite = typeof productFavorites.$inferSelect;
 export type PriceNotification = typeof priceNotifications.$inferSelect;

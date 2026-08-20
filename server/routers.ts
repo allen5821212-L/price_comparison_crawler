@@ -5,6 +5,7 @@ import { systemRouter } from "./_core/systemRouter";
 import { adminProcedure, protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import {
   enqueueCrawlerCategoryJobs,
+  deleteCoolpcCategoryRecrawlPreset,
   enqueueCrawlerJob,
   getCategoryRecrawlAnalytics,
   getCrawlerRefreshEstimates,
@@ -19,6 +20,7 @@ import {
   listCoolpcUnlistedSinyaProducts,
   listSinyaUnlistedCoolpcProducts,
   listCoolpcCategoryRecrawlReminders,
+  listCoolpcCategoryRecrawlPresets,
   listCrawlerEvents,
   listCrawlerJobs,
   listFavoritesForUser,
@@ -34,6 +36,7 @@ import {
   upsertMatchingFeedback,
   upsertFavoriteForUser,
   saveCoolpcCategoryRecrawlReminder,
+  saveCoolpcCategoryRecrawlPreset,
   setCoolpcCategoryRecrawlReminderActive,
   acknowledgeCoolpcCategoryRecrawlReminder,
 } from "./db";
@@ -189,6 +192,14 @@ export const appRouter = router({
       })),
     categoryRecrawlAnalytics: adminProcedure.input(z.object({ limit: z.number().int().min(1).max(48).default(24) }).optional())
       .query(async ({ input }) => getCategoryRecrawlAnalytics(input?.limit ?? 24)),
+    coolpcRecrawlPresets: adminProcedure.query(async ({ ctx }) => listCoolpcCategoryRecrawlPresets(ctx.user.id)),
+    saveCoolpcRecrawlPreset: adminProcedure.input(z.object({
+      name: z.string().min(1).max(64),
+      categoryNames: z.array(z.string().min(1).max(512)).min(1).max(12),
+    }).refine(value => new Set(value.categoryNames.map(name => name.trim())).size === value.categoryNames.length, "分類不可重複"))
+      .mutation(async ({ ctx, input }) => saveCoolpcCategoryRecrawlPreset({ userId: ctx.user.id, ...input })),
+    deleteCoolpcRecrawlPreset: adminProcedure.input(z.object({ id: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => deleteCoolpcCategoryRecrawlPreset(ctx.user.id, input.id)),
     coolpcRecrawlReminders: adminProcedure.query(async ({ ctx }) => listCoolpcCategoryRecrawlReminders(ctx.user.id)),
     saveCoolpcRecrawlReminder: adminProcedure.input(z.object({ categoryName: z.string().min(1).max(512) }))
       .mutation(async ({ ctx, input }) => saveCoolpcCategoryRecrawlReminder({ userId: ctx.user.id, categoryName: input.categoryName })),

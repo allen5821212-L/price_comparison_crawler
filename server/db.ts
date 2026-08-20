@@ -5,6 +5,7 @@ import {
   comparisonPriceHistory,
   comparisonProducts,
   comparisonRuns,
+  coolpcCategoryRecrawlPresets,
   coolpcCategoryRecrawlReminders,
   crawlerEvents,
   crawlerIssueReports,
@@ -48,6 +49,12 @@ export interface EnqueueCrawlerCategoryJobsResult {
   requestedCount: number;
   createdCategoryNames: string[];
   existingCategoryNames: string[];
+}
+
+export interface CoolpcCategoryRecrawlPresetInput {
+  userId: number;
+  name: string;
+  categoryNames: string[];
 }
 
 export type CategoryRecrawlMetricInput = {
@@ -831,6 +838,67 @@ export async function exportSinyaUnlistedCoolpcProducts(category?: string) {
         url: product.url ?? "",
       })),
   };
+}
+
+export function normalizeRecrawlPresetCategoryNames(categoryNames: string[]) {
+  return Array.from(new Set(categoryNames.map(name => name.trim()).filter(Boolean))).slice(0, 12);
+}
+
+export function parseRecrawlPresetCategoryNames(value: string) {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed) || !parsed.every(item => typeof item === "string")) return [];
+    return normalizeRecrawlPresetCategoryNames(parsed);
+  } catch {
+    return [];
+  }
+}
+
+/** Lists only the signed-in administrator's own reusable category selections. */
+export async function listCoolpcCategoryRecrawlPresets(userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const rows = await db.select().from(coolpcCategoryRecrawlPresets)
+    .where(eq(coolpcCategoryRecrawlPresets.userId, userId))
+    .orderBy(desc(coolpcCategoryRecrawlPresets.updatedAt), desc(coolpcCategoryRecrawlPresets.id));
+  return rows.map(row => ({
+    id: row.id,
+    name: row.name,
+    categoryNames: parseRecrawlPresetCategoryNames(row.categoryNames),
+    updatedAt: row.updatedAt,
+  }));
+}
+
+/** Saving the same name updates that personal preset instead of producing ambiguous duplicates. */
+export async function saveCoolpcCategoryRecrawlPreset(input: CoolpcCategoryRecrawlPresetInput) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const name = input.name.trim();
+  const categoryNames = normalizeRecrawlPresetCategoryNames(input.categoryNames);
+  if (!name) throw new Error("請輸入清單名稱");
+  if (!categoryNames.length) throw new Error("請至少選擇一個分類");
+  const now = new Date();
+  const categoryNamesJson = JSON.stringify(categoryNames);
+  await db.insert(coolpcCategoryRecrawlPresets).values({
+    userId: input.userId,
+    name,
+    categoryNames: categoryNamesJson,
+    updatedAt: now,
+  }).onDuplicateKeyUpdate({
+    set: { categoryNames: categoryNamesJson, updatedAt: now },
+  });
+  return { success: true, name, categoryNames } as const;
+}
+
+/** The user id condition prevents a preset identifier alone from deleting another account's data. */
+export async function deleteCoolpcCategoryRecrawlPreset(userId: number, id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  await db.delete(coolpcCategoryRecrawlPresets).where(and(
+    eq(coolpcCategoryRecrawlPresets.id, id),
+    eq(coolpcCategoryRecrawlPresets.userId, userId),
+  ));
+  return { success: true } as const;
 }
 
 export async function listCoolpcCategoryRecrawlReminders(userId: number) {

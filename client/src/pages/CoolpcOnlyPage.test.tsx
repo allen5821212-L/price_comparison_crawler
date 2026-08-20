@@ -1,7 +1,7 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { createBatchCategoryRequest, nextSelectedCategories, RecrawlReminderSummary } from "./CoolpcOnlyPage";
+import { createBatchCategoryRequest, createRecrawlPresetInput, nextSelectedCategories, RecrawlReminderSummary } from "./CoolpcOnlyPage";
 
 describe("CoolpcOnlyPage recrawl reminder summary", () => {
   it("顯示由歷史分類工作推導的 ETA 與最近成功結果", () => {
@@ -41,6 +41,13 @@ describe("CoolpcOnlyPage category selection", () => {
     const selected = new Set(["鍵盤+鼠｜搖桿｜桌+椅", "筆電｜平板｜穿戴配件"]);
     expect(createBatchCategoryRequest(selected)).toEqual({
       categoryNames: ["鍵盤+鼠｜搖桿｜桌+椅", "筆電｜平板｜穿戴配件"],
+    });
+  });
+
+  it("儲存常用清單時會修剪名稱並保留全部已勾選分類", () => {
+    expect(createRecrawlPresetInput("  週末高缺口  ", new Set(["鍵盤", "筆電"]))).toEqual({
+      name: "週末高缺口",
+      categoryNames: ["鍵盤", "筆電"],
     });
   });
 });
