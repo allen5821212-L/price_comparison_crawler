@@ -51,8 +51,8 @@ describe("deriveCategoryRecrawlAnalytics", () => {
 
   it("將既有排隊或執行分類的工作編號回傳給常用清單歷程", () => {
     expect(collectExistingCategoryJobIds([
-      { id: 101, categoryName: "鍵盤" },
-      { id: 102, categoryName: "筆電" },
+      { id: "101", categoryName: "鍵盤" },
+      { id: "102", categoryName: "筆電" },
       { id: 103, categoryName: null },
     ], ["筆電", "網通"])).toEqual([102]);
   });

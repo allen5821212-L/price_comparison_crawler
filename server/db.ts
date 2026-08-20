@@ -1321,13 +1321,14 @@ export function createCategoryRecrawlJobValues(categoryNames: string[], requeste
 }
 
 export function collectExistingCategoryJobIds(
-  activeJobs: Array<{ id: number; categoryName: string | null }>,
+  activeJobs: Array<{ id: number | string; categoryName: string | null }>,
   requestedCategoryNames: string[],
 ) {
   const requested = new Set(requestedCategoryNames);
   return activeJobs
     .filter(job => job.categoryName !== null && requested.has(job.categoryName))
-    .map(job => job.id);
+    .map(job => Number(job.id))
+    .filter(id => Number.isInteger(id) && id > 0);
 }
 
 /** Queue several distinct category refreshes without letting identical active jobs pile up. */
