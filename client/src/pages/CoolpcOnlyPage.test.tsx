@@ -1,7 +1,7 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { createBatchCategoryRequest, createRecrawlPresetInput, createRecrawlPresetReorderInput, nextSelectedCategories, readRecrawlPresetDragPayload, RecrawlReminderSummary, RECRAWL_PRESET_DRAG_MIME, reorderRecrawlPresetIds, shouldShowRecrawlPresetManager, writeRecrawlPresetDragPayload } from "./CoolpcOnlyPage";
+import { createBatchCategoryRequest, createRecrawlPresetImportInput, createRecrawlPresetInput, createRecrawlPresetReorderInput, moveRecrawlPresetId, nextSelectedCategories, readRecrawlPresetDragPayload, RecrawlReminderSummary, RECRAWL_PRESET_DRAG_MIME, reorderRecrawlPresetIds, shouldShowRecrawlPresetManager, writeRecrawlPresetDragPayload } from "./CoolpcOnlyPage";
 
 describe("CoolpcOnlyPage recrawl reminder summary", () => {
   it("顯示由歷史分類工作推導的 ETA 與最近成功結果", () => {
@@ -70,6 +70,17 @@ describe("CoolpcOnlyPage category selection", () => {
     expect(transfer.effectAllowed).toBe("move");
     const sourceId = readRecrawlPresetDragPayload(transfer as unknown as DataTransfer);
     expect(createRecrawlPresetReorderInput(reorderRecrawlPresetIds([11, 22], sourceId ?? 0, 11))).toEqual({ ids: [22, 11] });
+  });
+
+  it("鍵盤與行動排序可上移或下移，且抵達邊界時維持原順序", () => {
+    expect(moveRecrawlPresetId([11, 22, 33], 22, -1)).toEqual([22, 11, 33]);
+    expect(moveRecrawlPresetId([11, 22, 33], 22, 1)).toEqual([11, 33, 22]);
+    expect(moveRecrawlPresetId([11, 22], 11, -1)).toEqual([11, 22]);
+  });
+
+  it("匯入操作會將解析後的備份包裝為受控 API 輸入", () => {
+    const backup = { version: 1, exportedAt: "2026-08-20T00:00:00.000Z", presets: [] };
+    expect(createRecrawlPresetImportInput(backup)).toEqual({ backup });
   });
 
   it("即使最後一份常用清單已刪除，只要保有歷程仍會顯示管理與歷程面板", () => {

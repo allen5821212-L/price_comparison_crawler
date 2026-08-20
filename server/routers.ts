@@ -5,9 +5,11 @@ import { systemRouter } from "./_core/systemRouter";
 import { adminProcedure, protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import {
   enqueueCrawlerCategoryJobs,
+  exportCoolpcCategoryRecrawlPresets,
   deleteCoolpcCategoryRecrawlPreset,
   applyCoolpcCategoryRecrawlPreset,
   getCoolpcCategoryRecrawlPresetForUser,
+  importCoolpcCategoryRecrawlPresets,
   listCoolpcCategoryRecrawlPresetHistory,
   recordCoolpcCategoryRecrawlPresetHistory,
   reorderCoolpcCategoryRecrawlPresets,
@@ -201,6 +203,9 @@ export const appRouter = router({
     coolpcRecrawlPresets: adminProcedure.query(async ({ ctx }) => listCoolpcCategoryRecrawlPresets(ctx.user.id)),
     coolpcRecrawlPresetHistory: adminProcedure.input(z.object({ limit: z.number().int().min(1).max(30).default(12) }).optional())
       .query(async ({ ctx, input }) => listCoolpcCategoryRecrawlPresetHistory(ctx.user.id, input?.limit ?? 12)),
+    exportCoolpcRecrawlPresets: adminProcedure.query(async ({ ctx }) => exportCoolpcCategoryRecrawlPresets(ctx.user.id)),
+    importCoolpcRecrawlPresets: adminProcedure.input(z.object({ backup: z.unknown() }))
+      .mutation(async ({ ctx, input }) => importCoolpcCategoryRecrawlPresets(ctx.user.id, input.backup)),
     saveCoolpcRecrawlPreset: adminProcedure.input(z.object({
       name: z.string().min(1).max(64),
       categoryNames: z.array(z.string().min(1).max(512)).min(1).max(12),

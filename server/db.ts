@@ -880,6 +880,79 @@ export function normalizeRecrawlPresetOrder(ids: number[]) {
   return Array.from(new Set(ids.filter(id => Number.isInteger(id) && id > 0)));
 }
 
+export const RECRAWL_PRESET_BACKUP_VERSION = 1;
+export type RecrawlPresetBackupItem = {
+  name: string;
+  categoryNames: string[];
+  pinned: boolean;
+  sortOrder: number;
+};
+
+export type RecrawlPresetBackup = {
+  version: typeof RECRAWL_PRESET_BACKUP_VERSION;
+  exportedAt: string;
+  presets: RecrawlPresetBackupItem[];
+};
+
+/** Accepts only the small, versioned data envelope emitted by the export endpoint. */
+export function parseRecrawlPresetBackup(value: unknown): RecrawlPresetBackup | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const candidate = value as { version?: unknown; exportedAt?: unknown; presets?: unknown };
+  if (candidate.version !== RECRAWL_PRESET_BACKUP_VERSION || typeof candidate.exportedAt !== "string" || !Array.isArray(candidate.presets)) return null;
+  const seenNames = new Set<string>();
+  const presets: RecrawlPresetBackupItem[] = [];
+  candidate.presets.slice(0, 50).forEach((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return;
+    const input = item as { name?: unknown; categoryNames?: unknown; pinned?: unknown; sortOrder?: unknown };
+    if (typeof input.name !== "string" || !Array.isArray(input.categoryNames) || !input.categoryNames.every(category => typeof category === "string")) return;
+    const name = input.name.trim().slice(0, 64);
+    const categoryNames = normalizeRecrawlPresetCategoryNames(input.categoryNames);
+    if (!name || !categoryNames.length || seenNames.has(name)) return;
+    seenNames.add(name);
+    presets.push({
+      name,
+      categoryNames,
+      pinned: input.pinned === true,
+      sortOrder: typeof input.sortOrder === "number" && Number.isInteger(input.sortOrder) && input.sortOrder >= 0 ? input.sortOrder : index + 1,
+    });
+  });
+  return { version: RECRAWL_PRESET_BACKUP_VERSION, exportedAt: candidate.exportedAt, presets };
+}
+
+export type RecrawlPresetExecutionJob = {
+  id: number;
+  categoryName: string | null;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  startedAt: Date | string | null;
+  finishedAt: Date | string | null;
+  errorMessage: string | null;
+  summary: string | null;
+};
+
+export function deriveRecrawlPresetExecutionSummary(jobs: RecrawlPresetExecutionJob[]) {
+  const completed = jobs.filter(job => job.status === "completed");
+  const failed = jobs.filter(job => job.status === "failed");
+  const terminalCount = completed.length + failed.length;
+  const timestamps = jobs.flatMap(job => [job.startedAt, job.finishedAt]
+    .filter((value): value is Date | string => Boolean(value))
+    .map(value => new Date(value).getTime())
+    .filter(Number.isFinite));
+  const durationMs = timestamps.length >= 2 ? Math.max(...timestamps) - Math.min(...timestamps) : null;
+  const failures = failed.slice(0, 2).map(job => ({
+    categoryName: job.categoryName ?? "未分類",
+    message: job.errorMessage?.trim() || job.summary?.trim() || "未提供錯誤摘要",
+  }));
+  return {
+    total: jobs.length,
+    completedCount: completed.length,
+    failedCount: failed.length,
+    pendingCount: jobs.length - terminalCount,
+    completionRate: terminalCount ? completed.length / terminalCount : null,
+    durationMs: durationMs !== null && durationMs >= 0 ? durationMs : null,
+    failures,
+  };
+}
+
 /** Lists only the signed-in administrator's own reusable category selections. */
 export async function listCoolpcCategoryRecrawlPresets(userId: number) {
   const db = await getDb();
@@ -900,6 +973,63 @@ export async function listCoolpcCategoryRecrawlPresets(userId: number) {
     estimateSampleSize: estimates.category.sampleSize,
     updatedAt: row.updatedAt,
   }));
+}
+
+/** Exports only user-owned, portable fields; database ids, ownership and runtime history never leave the account. */
+export async function exportCoolpcCategoryRecrawlPresets(userId: number): Promise<RecrawlPresetBackup> {
+  const presets = await listCoolpcCategoryRecrawlPresets(userId);
+  return {
+    version: RECRAWL_PRESET_BACKUP_VERSION,
+    exportedAt: new Date().toISOString(),
+    presets: presets.map(preset => ({
+      name: preset.name,
+      categoryNames: preset.categoryNames,
+      pinned: preset.pinned,
+      sortOrder: preset.sortOrder,
+    })),
+  };
+}
+
+/** Imports by name into the caller's account only. Existing names update in place; new names append safely. */
+export async function importCoolpcCategoryRecrawlPresets(userId: number, backupInput: unknown) {
+  const backup = parseRecrawlPresetBackup(backupInput);
+  if (!backup) throw new Error("備份格式不正確或版本不支援");
+  if (!backup.presets.length) throw new Error("備份中沒有可匯入的常用清單");
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const existing = await db.select({
+    id: coolpcCategoryRecrawlPresets.id,
+    name: coolpcCategoryRecrawlPresets.name,
+    sortOrder: coolpcCategoryRecrawlPresets.sortOrder,
+  }).from(coolpcCategoryRecrawlPresets).where(eq(coolpcCategoryRecrawlPresets.userId, userId));
+  const existingByName = new Map(existing.map(preset => [preset.name, preset]));
+  let nextSortOrder = Math.max(0, ...existing.map(preset => preset.sortOrder)) + 1;
+  let created = 0;
+  let updated = 0;
+  const now = new Date();
+  const orderedPresets = [...backup.presets].sort((left, right) => Number(right.pinned) - Number(left.pinned) || left.sortOrder - right.sortOrder || left.name.localeCompare(right.name, "zh-TW"));
+  for (const preset of orderedPresets) {
+    const current = existingByName.get(preset.name);
+    if (current) {
+      await db.update(coolpcCategoryRecrawlPresets).set({
+        categoryNames: JSON.stringify(preset.categoryNames),
+        pinned: preset.pinned,
+        updatedAt: now,
+      }).where(and(eq(coolpcCategoryRecrawlPresets.id, current.id), eq(coolpcCategoryRecrawlPresets.userId, userId)));
+      updated += 1;
+    } else {
+      await db.insert(coolpcCategoryRecrawlPresets).values({
+        userId,
+        name: preset.name,
+        categoryNames: JSON.stringify(preset.categoryNames),
+        pinned: preset.pinned,
+        sortOrder: nextSortOrder++,
+        updatedAt: now,
+      });
+      created += 1;
+    }
+  }
+  return { created, updated, total: backup.presets.length } as const;
 }
 
 /** Saving the same name updates that personal preset instead of producing ambiguous duplicates. */
@@ -1003,7 +1133,15 @@ export async function listCoolpcCategoryRecrawlPresetHistory(userId: number, lim
   const [presets, jobs] = await Promise.all([
     presetIds.length ? db.select({ id: coolpcCategoryRecrawlPresets.id, name: coolpcCategoryRecrawlPresets.name }).from(coolpcCategoryRecrawlPresets)
       .where(and(eq(coolpcCategoryRecrawlPresets.userId, userId), inArray(coolpcCategoryRecrawlPresets.id, presetIds))) : Promise.resolve([]),
-    jobIds.length ? db.select({ id: crawlerJobs.id, categoryName: crawlerJobs.categoryName, status: crawlerJobs.status, finishedAt: crawlerJobs.finishedAt })
+    jobIds.length ? db.select({
+      id: crawlerJobs.id,
+      categoryName: crawlerJobs.categoryName,
+      status: crawlerJobs.status,
+      startedAt: crawlerJobs.startedAt,
+      finishedAt: crawlerJobs.finishedAt,
+      errorMessage: crawlerJobs.errorMessage,
+      summary: crawlerJobs.summary,
+    })
       .from(crawlerJobs).where(inArray(crawlerJobs.id, jobIds)) : Promise.resolve([]),
   ]);
   const presetNames = new Map(presets.map(preset => [preset.id, preset.name]));
@@ -1017,9 +1155,17 @@ export async function listCoolpcCategoryRecrawlPresetHistory(userId: number, lim
     createdAt: row.createdAt,
     jobs: parseRecrawlPresetJobIds(row.jobIds).flatMap(id => {
       const job = jobsById.get(id);
-      return job ? [{ id: job.id, categoryName: job.categoryName, status: job.status, finishedAt: job.finishedAt }] : [];
+      return job ? [{
+        id: job.id,
+        categoryName: job.categoryName,
+        status: job.status,
+        startedAt: job.startedAt,
+        finishedAt: job.finishedAt,
+        errorMessage: job.errorMessage,
+        summary: job.summary,
+      }] : [];
     }),
-  }));
+  })).map(entry => ({ ...entry, execution: deriveRecrawlPresetExecutionSummary(entry.jobs) }));
 }
 
 export async function applyCoolpcCategoryRecrawlPreset(userId: number, id: number) {
