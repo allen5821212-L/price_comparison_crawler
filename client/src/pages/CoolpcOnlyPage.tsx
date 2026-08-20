@@ -207,10 +207,10 @@ export default function CoolpcOnlyPage() {
       {presetsQuery.data.map(preset => <div
         key={preset.id}
         draggable
-        onDragStart={() => setDraggedPresetId(preset.id)}
+        onDragStart={event => { event.dataTransfer.setData("application/x-recrawl-preset-id", String(preset.id)); event.dataTransfer.effectAllowed = "move"; setDraggedPresetId(preset.id); }}
         onDragEnd={() => setDraggedPresetId(null)}
-        onDragOver={event => event.preventDefault()}
-        onDrop={() => { if (draggedPresetId !== null) movePreset(draggedPresetId, preset.id); setDraggedPresetId(null); }}
+        onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
+        onDrop={event => { event.preventDefault(); const transferredId = Number(event.dataTransfer.getData("application/x-recrawl-preset-id")); const sourceId = Number.isInteger(transferredId) && transferredId > 0 ? transferredId : draggedPresetId; if (sourceId !== null) movePreset(sourceId, preset.id); setDraggedPresetId(null); }}
         className={`flex flex-col gap-3 rounded-lg border bg-background/70 p-3 transition-colors sm:flex-row sm:items-center ${draggedPresetId === preset.id ? "border-primary/60 bg-primary/5" : "border-primary/15"}`}
       >
         <GripVertical className="hidden size-5 shrink-0 cursor-grab text-muted-foreground sm:block" aria-label={`拖曳排序：${preset.name}`} />
