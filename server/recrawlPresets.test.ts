@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveRecrawlPresetExecutionSummary, normalizeRecrawlPresetCategoryNames, normalizeRecrawlPresetOrder, parseRecrawlPresetBackup, parseRecrawlPresetCategoryNames, parseRecrawlPresetJobIds, RECRAWL_PRESET_BACKUP_VERSION } from "./db";
+import { buildRecrawlPresetImportPreview, deriveRecrawlPresetExecutionSummary, getRecrawlPresetHistoryStatus, normalizeRecrawlPresetCategoryNames, normalizeRecrawlPresetOrder, parseRecrawlPresetBackup, parseRecrawlPresetCategoryNames, parseRecrawlPresetJobIds, RECRAWL_PRESET_BACKUP_VERSION } from "./db";
 
 describe("常用分類補抓清單資料", () => {
   it("正規化分類、排除重複與空白，並限制最多十二個分類", () => {
@@ -43,5 +43,31 @@ describe("常用分類補抓清單資料", () => {
     ]);
     expect(summary).toMatchObject({ total: 3, completedCount: 1, failedCount: 1, pendingCount: 1, completionRate: 0.5, durationMs: 12 * 60_000 });
     expect(summary.failures).toEqual([{ categoryName: "筆電", message: "來源逾時" }]);
+  });
+
+  it("在匯入前將備份正確分類為新增、內容相同與同名衝突", () => {
+    const preview = buildRecrawlPresetImportPreview({
+      version: RECRAWL_PRESET_BACKUP_VERSION,
+      exportedAt: "2026-08-21T00:00:00.000Z",
+      presets: [
+        { name: "相同", categoryNames: ["鍵盤"], pinned: false, sortOrder: 1 },
+        { name: "衝突", categoryNames: ["筆電"], pinned: true, sortOrder: 2 },
+        { name: "新增", categoryNames: ["網通"], pinned: false, sortOrder: 3 },
+      ],
+    }, [
+      { id: 1, name: "相同", categoryNames: ["鍵盤"], pinned: false, sortOrder: 1 },
+      { id: 2, name: "衝突", categoryNames: ["舊分類"], pinned: false, sortOrder: 2 },
+    ]);
+    expect(preview.counts).toEqual({ new: 1, unchanged: 1, conflict: 1 });
+    expect(preview.items.map(item => [item.name, item.kind])).toEqual([["相同", "unchanged"], ["衝突", "conflict"], ["新增", "new"]]);
+  });
+
+  it("依工作終態與待處理狀態提供成功、失敗與執行中歷程篩選分類", () => {
+    const success = deriveRecrawlPresetExecutionSummary([{ id: 1, categoryName: "鍵盤", status: "completed", startedAt: null, finishedAt: null, errorMessage: null, summary: null }]);
+    const failed = deriveRecrawlPresetExecutionSummary([{ id: 2, categoryName: "筆電", status: "failed", startedAt: null, finishedAt: null, errorMessage: "失敗", summary: null }]);
+    const running = deriveRecrawlPresetExecutionSummary([{ id: 3, categoryName: "網通", status: "running", startedAt: null, finishedAt: null, errorMessage: null, summary: null }]);
+    expect(getRecrawlPresetHistoryStatus({ execution: success })).toBe("success");
+    expect(getRecrawlPresetHistoryStatus({ execution: failed })).toBe("failed");
+    expect(getRecrawlPresetHistoryStatus({ execution: running })).toBe("running");
   });
 });

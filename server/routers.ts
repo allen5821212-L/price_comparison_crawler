@@ -8,11 +8,17 @@ import {
   exportCoolpcCategoryRecrawlPresets,
   deleteCoolpcCategoryRecrawlPreset,
   applyCoolpcCategoryRecrawlPreset,
+  copyCoolpcCategoryRecrawlPresetTemplate,
   getCoolpcCategoryRecrawlPresetForUser,
+  getCoolpcCategoryRecrawlPresetTemplateByToken,
   importCoolpcCategoryRecrawlPresets,
   listCoolpcCategoryRecrawlPresetHistory,
+  listCoolpcCategoryRecrawlPresetTemplates,
+  previewCoolpcCategoryRecrawlPresetImport,
+  publishCoolpcCategoryRecrawlPresetTemplate,
   recordCoolpcCategoryRecrawlPresetHistory,
   reorderCoolpcCategoryRecrawlPresets,
+  revokeCoolpcCategoryRecrawlPresetTemplate,
   setCoolpcCategoryRecrawlPresetPinned,
   enqueueCrawlerJob,
   getCategoryRecrawlAnalytics,
@@ -201,11 +207,17 @@ export const appRouter = router({
     categoryRecrawlAnalytics: adminProcedure.input(z.object({ limit: z.number().int().min(1).max(48).default(24) }).optional())
       .query(async ({ input }) => getCategoryRecrawlAnalytics(input?.limit ?? 24)),
     coolpcRecrawlPresets: adminProcedure.query(async ({ ctx }) => listCoolpcCategoryRecrawlPresets(ctx.user.id)),
-    coolpcRecrawlPresetHistory: adminProcedure.input(z.object({ limit: z.number().int().min(1).max(30).default(12) }).optional())
-      .query(async ({ ctx, input }) => listCoolpcCategoryRecrawlPresetHistory(ctx.user.id, input?.limit ?? 12)),
+    coolpcRecrawlPresetHistory: adminProcedure.input(z.object({
+      limit: z.number().int().min(1).max(30).default(12),
+      status: z.enum(["all", "success", "failed", "running"]).default("all"),
+    }).optional()).query(async ({ ctx, input }) => listCoolpcCategoryRecrawlPresetHistory(ctx.user.id, input?.limit ?? 12, input?.status ?? "all")),
     exportCoolpcRecrawlPresets: adminProcedure.query(async ({ ctx }) => exportCoolpcCategoryRecrawlPresets(ctx.user.id)),
-    importCoolpcRecrawlPresets: adminProcedure.input(z.object({ backup: z.unknown() }))
-      .mutation(async ({ ctx, input }) => importCoolpcCategoryRecrawlPresets(ctx.user.id, input.backup)),
+    previewCoolpcRecrawlPresetImport: adminProcedure.input(z.object({ backup: z.unknown() }))
+      .mutation(async ({ ctx, input }) => previewCoolpcCategoryRecrawlPresetImport(ctx.user.id, input.backup)),
+    importCoolpcRecrawlPresets: adminProcedure.input(z.object({
+      backup: z.unknown(),
+      conflictStrategies: z.record(z.string(), z.enum(["overwrite", "skip", "copy"])).optional(),
+    })).mutation(async ({ ctx, input }) => importCoolpcCategoryRecrawlPresets(ctx.user.id, input.backup, input.conflictStrategies)),
     saveCoolpcRecrawlPreset: adminProcedure.input(z.object({
       name: z.string().min(1).max(64),
       categoryNames: z.array(z.string().min(1).max(512)).min(1).max(12),
@@ -234,6 +246,15 @@ export const appRouter = router({
         });
         return { ...result, presetName: preset.name };
       }),
+    coolpcRecrawlPresetTemplates: adminProcedure.query(async ({ ctx }) => listCoolpcCategoryRecrawlPresetTemplates(ctx.user.id)),
+    publishCoolpcRecrawlPresetTemplate: adminProcedure.input(z.object({ id: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => publishCoolpcCategoryRecrawlPresetTemplate(ctx.user.id, input.id)),
+    revokeCoolpcRecrawlPresetTemplate: adminProcedure.input(z.object({ id: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => revokeCoolpcCategoryRecrawlPresetTemplate(ctx.user.id, input.id)),
+    coolpcRecrawlPresetTemplateByToken: adminProcedure.input(z.object({ token: z.string().min(16).max(64) }))
+      .query(async ({ input }) => getCoolpcCategoryRecrawlPresetTemplateByToken(input.token)),
+    copyCoolpcRecrawlPresetTemplate: adminProcedure.input(z.object({ token: z.string().min(16).max(64) }))
+      .mutation(async ({ ctx, input }) => copyCoolpcCategoryRecrawlPresetTemplate(ctx.user.id, input.token)),
     deleteCoolpcRecrawlPreset: adminProcedure.input(z.object({ id: z.number().int().positive() }))
       .mutation(async ({ ctx, input }) => deleteCoolpcCategoryRecrawlPreset(ctx.user.id, input.id)),
     coolpcRecrawlReminders: adminProcedure.query(async ({ ctx }) => listCoolpcCategoryRecrawlReminders(ctx.user.id)),

@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { and, asc, desc, eq, inArray, isNotNull, like, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
@@ -7,6 +8,7 @@ import {
   comparisonRuns,
   coolpcCategoryRecrawlPresetHistory,
   coolpcCategoryRecrawlPresets,
+  coolpcCategoryRecrawlPresetTemplates,
   coolpcCategoryRecrawlReminders,
   crawlerEvents,
   crawlerIssueReports,
@@ -895,6 +897,58 @@ export type RecrawlPresetBackup = {
   presets: RecrawlPresetBackupItem[];
 };
 
+export type RecrawlPresetConflictStrategy = "overwrite" | "skip" | "copy";
+export type RecrawlPresetImportDiffKind = "new" | "unchanged" | "conflict";
+export type RecrawlPresetHistoryStatusFilter = "all" | "success" | "failed" | "running";
+
+type ExistingRecrawlPresetForImport = {
+  id: number;
+  name: string;
+  categoryNames: string[];
+  pinned: boolean;
+  sortOrder: number;
+};
+
+export function buildRecrawlPresetImportPreview(backupInput: unknown, existing: ExistingRecrawlPresetForImport[]) {
+  const backup = parseRecrawlPresetBackup(backupInput);
+  if (!backup) throw new Error("備份格式不正確或版本不支援");
+  const existingByName = new Map(existing.map(preset => [preset.name, preset]));
+  const sameCategories = (left: string[], right: string[]) => left.length === right.length && left.every((name, index) => name === right[index]);
+  const items = backup.presets.map(preset => {
+    const current = existingByName.get(preset.name);
+    const kind: RecrawlPresetImportDiffKind = !current
+      ? "new"
+      : sameCategories(preset.categoryNames, current.categoryNames) && preset.pinned === current.pinned && preset.sortOrder === current.sortOrder
+        ? "unchanged"
+        : "conflict";
+    return {
+      name: preset.name,
+      categoryNames: preset.categoryNames,
+      pinned: preset.pinned,
+      sortOrder: preset.sortOrder,
+      kind,
+      existing: current ? { categoryNames: current.categoryNames, pinned: current.pinned, sortOrder: current.sortOrder } : null,
+    };
+  });
+  return {
+    version: backup.version,
+    exportedAt: backup.exportedAt,
+    items,
+    counts: {
+      new: items.filter(item => item.kind === "new").length,
+      unchanged: items.filter(item => item.kind === "unchanged").length,
+      conflict: items.filter(item => item.kind === "conflict").length,
+    },
+  } as const;
+}
+
+export function getRecrawlPresetHistoryStatus(entry: { execution: { total: number; completedCount: number; failedCount: number; pendingCount: number } }): RecrawlPresetHistoryStatusFilter {
+  if (!entry.execution.total) return "all";
+  if (entry.execution.failedCount > 0) return "failed";
+  if (entry.execution.pendingCount > 0) return "running";
+  return entry.execution.completedCount === entry.execution.total ? "success" : "all";
+}
+
 /** Accepts only the small, versioned data envelope emitted by the export endpoint. */
 export function parseRecrawlPresetBackup(value: unknown): RecrawlPresetBackup | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -991,8 +1045,35 @@ export async function exportCoolpcCategoryRecrawlPresets(userId: number): Promis
   };
 }
 
-/** Imports by name into the caller's account only. Existing names update in place; new names append safely. */
-export async function importCoolpcCategoryRecrawlPresets(userId: number, backupInput: unknown) {
+/** Shows the signed-in user's import differences without persisting any change. */
+export async function previewCoolpcCategoryRecrawlPresetImport(userId: number, backupInput: unknown) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const rows = await db.select({
+    id: coolpcCategoryRecrawlPresets.id,
+    name: coolpcCategoryRecrawlPresets.name,
+    categoryNames: coolpcCategoryRecrawlPresets.categoryNames,
+    pinned: coolpcCategoryRecrawlPresets.pinned,
+    sortOrder: coolpcCategoryRecrawlPresets.sortOrder,
+  }).from(coolpcCategoryRecrawlPresets).where(eq(coolpcCategoryRecrawlPresets.userId, userId));
+  return buildRecrawlPresetImportPreview(backupInput, rows.map(row => ({ ...row, categoryNames: parseRecrawlPresetCategoryNames(row.categoryNames) })));
+}
+
+function nextImportedPresetName(baseName: string, existingNames: Set<string>) {
+  const suffix = "（匯入）";
+  const stem = baseName.slice(0, Math.max(1, 64 - suffix.length));
+  let candidate = `${stem}${suffix}`;
+  let index = 2;
+  while (existingNames.has(candidate)) {
+    const numberedSuffix = `（匯入 ${index}）`;
+    candidate = `${baseName.slice(0, Math.max(1, 64 - numberedSuffix.length))}${numberedSuffix}`;
+    index += 1;
+  }
+  return candidate;
+}
+
+/** Imports by name into the caller's account only, with an explicit strategy for each same-name conflict. */
+export async function importCoolpcCategoryRecrawlPresets(userId: number, backupInput: unknown, conflictStrategies: Record<string, RecrawlPresetConflictStrategy> = {}) {
   const backup = parseRecrawlPresetBackup(backupInput);
   if (!backup) throw new Error("備份格式不正確或版本不支援");
   if (!backup.presets.length) throw new Error("備份中沒有可匯入的常用清單");
@@ -1005,13 +1086,34 @@ export async function importCoolpcCategoryRecrawlPresets(userId: number, backupI
   }).from(coolpcCategoryRecrawlPresets).where(eq(coolpcCategoryRecrawlPresets.userId, userId));
   const existingByName = new Map(existing.map(preset => [preset.name, preset]));
   let nextSortOrder = Math.max(0, ...existing.map(preset => preset.sortOrder)) + 1;
+  const existingNames = new Set(existing.map(preset => preset.name));
   let created = 0;
   let updated = 0;
+  let skipped = 0;
   const now = new Date();
   const orderedPresets = [...backup.presets].sort((left, right) => Number(right.pinned) - Number(left.pinned) || left.sortOrder - right.sortOrder || left.name.localeCompare(right.name, "zh-TW"));
   for (const preset of orderedPresets) {
     const current = existingByName.get(preset.name);
     if (current) {
+      const strategy = conflictStrategies[preset.name] ?? "overwrite";
+      if (strategy === "skip") {
+        skipped += 1;
+        continue;
+      }
+      if (strategy === "copy") {
+        const name = nextImportedPresetName(preset.name, existingNames);
+        await db.insert(coolpcCategoryRecrawlPresets).values({
+          userId,
+          name,
+          categoryNames: JSON.stringify(preset.categoryNames),
+          pinned: preset.pinned,
+          sortOrder: nextSortOrder++,
+          updatedAt: now,
+        });
+        existingNames.add(name);
+        created += 1;
+        continue;
+      }
       await db.update(coolpcCategoryRecrawlPresets).set({
         categoryNames: JSON.stringify(preset.categoryNames),
         pinned: preset.pinned,
@@ -1027,10 +1129,11 @@ export async function importCoolpcCategoryRecrawlPresets(userId: number, backupI
         sortOrder: nextSortOrder++,
         updatedAt: now,
       });
+      existingNames.add(preset.name);
       created += 1;
     }
   }
-  return { created, updated, total: backup.presets.length } as const;
+  return { created, updated, skipped, total: backup.presets.length } as const;
 }
 
 /** Saving the same name updates that personal preset instead of producing ambiguous duplicates. */
@@ -1122,13 +1225,13 @@ export async function recordCoolpcCategoryRecrawlPresetHistory(input: CoolpcCate
   return { success: true } as const;
 }
 
-export async function listCoolpcCategoryRecrawlPresetHistory(userId: number, limit = 12) {
+export async function listCoolpcCategoryRecrawlPresetHistory(userId: number, limit = 12, statusFilter: RecrawlPresetHistoryStatusFilter = "all") {
   const db = await getDb();
   if (!db) throw new Error("資料庫目前無法使用");
   const rows = await db.select().from(coolpcCategoryRecrawlPresetHistory)
     .where(eq(coolpcCategoryRecrawlPresetHistory.userId, userId))
     .orderBy(desc(coolpcCategoryRecrawlPresetHistory.createdAt), desc(coolpcCategoryRecrawlPresetHistory.id))
-    .limit(Math.min(30, Math.max(1, limit)));
+    .limit(30);
   const presetIds = Array.from(new Set(rows.map(row => row.presetId).filter((id): id is number => typeof id === "number")));
   const jobIds = Array.from(new Set(rows.flatMap(row => parseRecrawlPresetJobIds(row.jobIds))));
   const [presets, jobs] = await Promise.all([
@@ -1147,7 +1250,7 @@ export async function listCoolpcCategoryRecrawlPresetHistory(userId: number, lim
   ]);
   const presetNames = new Map(presets.map(preset => [preset.id, preset.name]));
   const jobsById = new Map(jobs.map(job => [job.id, job]));
-  return rows.map(row => ({
+  const entries = rows.map(row => ({
     id: row.id,
     presetId: row.presetId,
     presetName: row.presetId ? presetNames.get(row.presetId) ?? "已刪除清單" : "手動選取",
@@ -1167,6 +1270,110 @@ export async function listCoolpcCategoryRecrawlPresetHistory(userId: number, lim
       }] : [];
     }),
   })).map(entry => ({ ...entry, execution: deriveRecrawlPresetExecutionSummary(entry.jobs) }));
+  return entries.filter(entry => statusFilter === "all" || getRecrawlPresetHistoryStatus(entry) === statusFilter)
+    .slice(0, Math.min(30, Math.max(1, limit)));
+}
+
+function createRecrawlPresetShareToken() {
+  return randomBytes(24).toString("base64url");
+}
+
+async function getRecrawlPresetTemplateSource(token: string) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const [template] = await db.select().from(coolpcCategoryRecrawlPresetTemplates)
+    .where(and(eq(coolpcCategoryRecrawlPresetTemplates.shareToken, token), eq(coolpcCategoryRecrawlPresetTemplates.active, true)))
+    .limit(1);
+  if (!template) return null;
+  const [preset] = await db.select().from(coolpcCategoryRecrawlPresets)
+    .where(and(eq(coolpcCategoryRecrawlPresets.id, template.presetId), eq(coolpcCategoryRecrawlPresets.userId, template.userId)))
+    .limit(1);
+  return preset ? { template, preset } : null;
+}
+
+/** Lists only metadata necessary for team copying; creator identity is not exposed. */
+export async function listCoolpcCategoryRecrawlPresetTemplates(userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const templates = await db.select().from(coolpcCategoryRecrawlPresetTemplates)
+    .where(eq(coolpcCategoryRecrawlPresetTemplates.active, true))
+    .orderBy(desc(coolpcCategoryRecrawlPresetTemplates.updatedAt), desc(coolpcCategoryRecrawlPresetTemplates.id));
+  const sourcePresetIds = Array.from(new Set(templates.map(template => template.presetId)));
+  const presets = sourcePresetIds.length ? await db.select().from(coolpcCategoryRecrawlPresets)
+    .where(inArray(coolpcCategoryRecrawlPresets.id, sourcePresetIds)) : [];
+  const presetById = new Map(presets.map(preset => [preset.id, preset]));
+  return templates.flatMap(template => {
+    const preset = presetById.get(template.presetId);
+    if (!preset) return [];
+    return [{
+      id: template.id,
+      token: template.shareToken,
+      sourcePresetId: template.presetId,
+      canRevoke: template.userId === userId,
+      name: preset.name,
+      categoryNames: parseRecrawlPresetCategoryNames(preset.categoryNames),
+      pinned: preset.pinned,
+      updatedAt: template.updatedAt,
+    }];
+  });
+}
+
+/** Reuses one template per source preset and rotates a revoked link when publishing it again. */
+export async function publishCoolpcCategoryRecrawlPresetTemplate(userId: number, presetId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const preset = await getCoolpcCategoryRecrawlPresetForUser(userId, presetId);
+  if (!preset) throw new Error("找不到可分享的常用清單");
+  const [existing] = await db.select().from(coolpcCategoryRecrawlPresetTemplates)
+    .where(eq(coolpcCategoryRecrawlPresetTemplates.presetId, presetId)).limit(1);
+  if (existing?.active) return { token: existing.shareToken, presetName: preset.name, created: false } as const;
+  const token = createRecrawlPresetShareToken();
+  if (existing) {
+    await db.update(coolpcCategoryRecrawlPresetTemplates).set({ shareToken: token, active: true, updatedAt: new Date() })
+      .where(and(eq(coolpcCategoryRecrawlPresetTemplates.id, existing.id), eq(coolpcCategoryRecrawlPresetTemplates.userId, userId)));
+  } else {
+    await db.insert(coolpcCategoryRecrawlPresetTemplates).values({ userId, presetId, shareToken: token, active: true });
+  }
+  return { token, presetName: preset.name, created: true } as const;
+}
+
+export async function revokeCoolpcCategoryRecrawlPresetTemplate(userId: number, templateId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  await db.update(coolpcCategoryRecrawlPresetTemplates).set({ active: false, updatedAt: new Date() })
+    .where(and(eq(coolpcCategoryRecrawlPresetTemplates.id, templateId), eq(coolpcCategoryRecrawlPresetTemplates.userId, userId)));
+  return { success: true } as const;
+}
+
+export async function getCoolpcCategoryRecrawlPresetTemplateByToken(token: string) {
+  const source = await getRecrawlPresetTemplateSource(token);
+  if (!source) return null;
+  return {
+    name: source.preset.name,
+    categoryNames: parseRecrawlPresetCategoryNames(source.preset.categoryNames),
+    pinned: source.preset.pinned,
+    updatedAt: source.template.updatedAt,
+  };
+}
+
+/** Copies an active team template into the caller's account without linking later edits or history. */
+export async function copyCoolpcCategoryRecrawlPresetTemplate(userId: number, token: string) {
+  const source = await getRecrawlPresetTemplateSource(token);
+  if (!source) throw new Error("分享連結已撤銷、失效或不存在");
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const existing = await db.select({ name: coolpcCategoryRecrawlPresets.name, sortOrder: coolpcCategoryRecrawlPresets.sortOrder })
+    .from(coolpcCategoryRecrawlPresets).where(eq(coolpcCategoryRecrawlPresets.userId, userId));
+  const name = nextImportedPresetName(source.preset.name, new Set(existing.map(preset => preset.name)));
+  const sortOrder = Math.max(0, ...existing.map(preset => preset.sortOrder)) + 1;
+  await db.insert(coolpcCategoryRecrawlPresets).values({
+    userId,
+    name,
+    categoryNames: source.preset.categoryNames,
+    pinned: false,
+    sortOrder,
+  });
+  return { name, categoryNames: parseRecrawlPresetCategoryNames(source.preset.categoryNames) } as const;
 }
 
 export async function applyCoolpcCategoryRecrawlPreset(userId: number, id: number) {

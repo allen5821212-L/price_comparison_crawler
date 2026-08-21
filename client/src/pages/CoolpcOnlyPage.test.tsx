@@ -80,7 +80,7 @@ describe("CoolpcOnlyPage category selection", () => {
 
   it("匯入操作會將解析後的備份包裝為受控 API 輸入", () => {
     const backup = { version: 1, exportedAt: "2026-08-20T00:00:00.000Z", presets: [] };
-    expect(createRecrawlPresetImportInput(backup)).toEqual({ backup });
+    expect(createRecrawlPresetImportInput(backup, { "同名衝突": "copy" })).toEqual({ backup, conflictStrategies: { "同名衝突": "copy" } });
   });
 
   it("即使最後一份常用清單已刪除，只要保有歷程仍會顯示管理與歷程面板", () => {

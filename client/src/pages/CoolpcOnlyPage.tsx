@@ -3,12 +3,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { downloadCsv, toCsv } from "@/lib/csvExport";
 import { trpc } from "@/lib/trpc";
-import { Bell, BellRing, BookmarkPlus, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock3, Download, ExternalLink, GripVertical, History, ListChecks, ListPlus, PackageX, Pin, PinOff, Play, RefreshCw, Store, Trash2, Upload } from "lucide-react";
+import { Bell, BellRing, BookmarkPlus, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock3, Copy, Download, ExternalLink, GripVertical, History, Link, ListChecks, ListPlus, PackageX, Pin, PinOff, Play, RefreshCw, Share2, Store, Trash2, Upload } from "lucide-react";
 import React, { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -92,8 +93,8 @@ export function moveRecrawlPresetId(ids: number[], sourceId: number, offset: -1 
   return reorderRecrawlPresetIds(ids, sourceId, ids[targetIndex]!);
 }
 
-export function createRecrawlPresetImportInput(backup: unknown) {
-  return { backup };
+export function createRecrawlPresetImportInput(backup: unknown, conflictStrategies: Record<string, "overwrite" | "skip" | "copy"> = {}) {
+  return { backup, conflictStrategies };
 }
 
 export function shouldShowRecrawlPresetManager(presetCount: number, historyCount: number) {
@@ -117,6 +118,15 @@ export function formatRecrawlExecutionSuccessRate(rate: number | null) {
 
 const completionRateLabel = formatRecrawlExecutionSuccessRate;
 
+type RecrawlPresetImportPreview = {
+  counts: { new: number; unchanged: number; conflict: number };
+  items: Array<{
+    name: string;
+    categoryNames: string[];
+    kind: "new" | "unchanged" | "conflict";
+  }>;
+};
+
 export default function CoolpcOnlyPage() {
   const [category, setCategory] = useState("all");
   const [page, setPage] = useState(1);
@@ -124,14 +134,23 @@ export default function CoolpcOnlyPage() {
   const [selectedCategories, setSelectedCategories] = useState<Set<string>>(new Set());
   const [presetName, setPresetName] = useState("");
   const [draggedPresetId, setDraggedPresetId] = useState<number | null>(null);
+  const [historyStatus, setHistoryStatus] = useState<"all" | "success" | "failed" | "running">("all");
+  const [importBackup, setImportBackup] = useState<unknown>(null);
+  const [importPreview, setImportPreview] = useState<RecrawlPresetImportPreview | null>(null);
+  const [importConflictStrategies, setImportConflictStrategies] = useState<Record<string, "overwrite" | "skip" | "copy">>({});
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
   const importPresetInputRef = useRef<HTMLInputElement>(null);
   const coverageQuery = trpc.comparison.sinyaCoverage.useQuery();
   const unlistedQuery = trpc.comparison.sinyaUnlisted.useQuery({ category: category === "all" ? undefined : category, page, pageSize: 25 });
   const exportQuery = trpc.comparison.sinyaUnlistedExport.useQuery({ category: category === "all" ? undefined : category }, { enabled: false });
   const remindersQuery = trpc.crawler.coolpcRecrawlReminders.useQuery(undefined, { refetchInterval: 60_000 });
   const presetsQuery = trpc.crawler.coolpcRecrawlPresets.useQuery();
-  const presetHistoryQuery = trpc.crawler.coolpcRecrawlPresetHistory.useQuery();
+  const historyInput = useMemo(() => ({ status: historyStatus }), [historyStatus]);
+  const presetHistoryQuery = trpc.crawler.coolpcRecrawlPresetHistory.useQuery(historyInput);
   const presetExportQuery = trpc.crawler.exportCoolpcRecrawlPresets.useQuery(undefined, { enabled: false });
+  const teamTemplatesQuery = trpc.crawler.coolpcRecrawlPresetTemplates.useQuery();
+  const sharedTemplateToken = useMemo(() => typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("template"), []);
+  const sharedTemplateQuery = trpc.crawler.coolpcRecrawlPresetTemplateByToken.useQuery({ token: sharedTemplateToken ?? "invalid" }, { enabled: Boolean(sharedTemplateToken) });
   const utils = trpc.useUtils();
   const saveReminder = trpc.crawler.saveCoolpcRecrawlReminder.useMutation({ onSuccess: () => void utils.crawler.coolpcRecrawlReminders.invalidate() });
   const setReminderActive = trpc.crawler.setCoolpcRecrawlReminderActive.useMutation({ onSuccess: () => void utils.crawler.coolpcRecrawlReminders.invalidate() });
@@ -164,9 +183,20 @@ export default function CoolpcOnlyPage() {
     },
     onError: error => toast.error(error.message || "無法刪除常用清單"),
   });
+  const previewCoolpcRecrawlPresetImport = trpc.crawler.previewCoolpcRecrawlPresetImport.useMutation({
+    onSuccess: result => {
+      setImportPreview(result);
+      setImportConflictStrategies(Object.fromEntries(result.items.filter(item => item.kind === "conflict").map(item => [item.name, "overwrite"] as const)));
+      setImportDialogOpen(true);
+    },
+    onError: error => toast.error(error.message || "無法預覽常用清單備份"),
+  });
   const importPresets = trpc.crawler.importCoolpcRecrawlPresets.useMutation({
     onSuccess: result => {
-      toast.success(`已匯入 ${result.total} 份清單（新增 ${result.created}、更新 ${result.updated}）`);
+      toast.success(`已匯入 ${result.total} 份清單（新增 ${result.created}、更新 ${result.updated}、略過 ${result.skipped}）`);
+      setImportDialogOpen(false);
+      setImportPreview(null);
+      setImportBackup(null);
       void utils.crawler.coolpcRecrawlPresets.invalidate();
     },
     onError: error => toast.error(error.message || "無法匯入常用清單備份"),
@@ -197,6 +227,23 @@ export default function CoolpcOnlyPage() {
       void utils.crawler.events.invalidate();
     },
     onError: error => toast.error(error.message || "無法從常用清單排入補抓"),
+  });
+  const publishPresetTemplate = trpc.crawler.publishCoolpcRecrawlPresetTemplate.useMutation({
+    onSuccess: result => {
+      const link = `${window.location.origin}/coolpc-only?template=${result.token}`;
+      void navigator.clipboard?.writeText(link);
+      toast.success(`已發佈「${result.presetName}」，分享連結已複製`);
+      void utils.crawler.coolpcRecrawlPresetTemplates.invalidate();
+    },
+    onError: error => toast.error(error.message || "無法發佈團隊範本"),
+  });
+  const revokePresetTemplate = trpc.crawler.revokeCoolpcRecrawlPresetTemplate.useMutation({
+    onSuccess: () => { toast.success("已撤銷團隊範本分享連結"); void utils.crawler.coolpcRecrawlPresetTemplates.invalidate(); },
+    onError: error => toast.error(error.message || "無法撤銷團隊範本"),
+  });
+  const copyTeamTemplate = trpc.crawler.copyCoolpcRecrawlPresetTemplate.useMutation({
+    onSuccess: result => { toast.success(`已複製團隊範本為「${result.name}」`); void utils.crawler.coolpcRecrawlPresets.invalidate(); },
+    onError: error => toast.error(error.message || "無法複製團隊範本"),
   });
   const coverage = coverageQuery.data;
   const unlisted = unlistedQuery.data;
@@ -259,10 +306,21 @@ export default function CoolpcOnlyPage() {
     if (!file) return;
     if (file.size > 256 * 1024) return toast.error("備份檔案不可超過 256 KB");
     try {
-      importPresets.mutate(createRecrawlPresetImportInput(JSON.parse(await file.text())));
+      const backup = JSON.parse(await file.text());
+      setImportBackup(backup);
+      previewCoolpcRecrawlPresetImport.mutate({ backup });
     } catch {
       toast.error("無法讀取 JSON 備份檔案");
     }
+  };
+  const confirmPresetImport = () => {
+    if (!importBackup) return;
+    importPresets.mutate(createRecrawlPresetImportInput(importBackup, importConflictStrategies));
+  };
+  const copyPresetShareLink = (token: string) => {
+    const link = `${window.location.origin}/coolpc-only?template=${token}`;
+    void navigator.clipboard?.writeText(link);
+    toast.success("團隊範本分享連結已複製");
   };
   const applyPreset = (categoryNames: string[]) => {
     const preset = presetsQuery.data?.find(item => item.categoryNames.join("\u0001") === categoryNames.join("\u0001"));
@@ -306,14 +364,18 @@ export default function CoolpcOnlyPage() {
         >
           <GripVertical className="hidden size-5 shrink-0 cursor-grab text-muted-foreground sm:block" aria-label={`拖曳排序：${preset.name}`} />
           <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="truncate text-sm font-medium">{preset.name}</p>{preset.pinned ? <Badge className="gap-1 bg-primary/15 text-primary hover:bg-primary/15"><Pin className="size-3" />已釘選</Badge> : null}</div><p className="mt-1 text-xs text-muted-foreground">{preset.categoryNames.length} 個分類 · {presetEstimateLabel(preset.estimateMs, preset.estimateSampleSize)}</p></div>
-          <div className="flex flex-wrap gap-1.5"><Button size="sm" variant="outline" onClick={() => applySavedPreset.mutate({ id: preset.id })} disabled={applySavedPreset.isPending}><ListChecks className="mr-1.5 size-3.5" />套用</Button><Button size="sm" onClick={() => enqueueSavedPreset.mutate({ id: preset.id })} disabled={enqueueSavedPreset.isPending}><Play className="mr-1.5 size-3.5" />直接排入</Button><Button size="icon" variant="ghost" className="size-8" onClick={() => movePresetByOffset(preset.id, preset.pinned, -1)} disabled={!canMoveUp || reorderPresets.isPending} aria-label={`上移常用清單：${preset.name}`}><ChevronUp className="size-3.5" /></Button><Button size="icon" variant="ghost" className="size-8" onClick={() => movePresetByOffset(preset.id, preset.pinned, 1)} disabled={!canMoveDown || reorderPresets.isPending} aria-label={`下移常用清單：${preset.name}`}><ChevronDown className="size-3.5" /></Button><Button size="icon" variant="ghost" className="size-8" onClick={() => setPresetPinned.mutate({ id: preset.id, pinned: !preset.pinned })} disabled={setPresetPinned.isPending} aria-label={preset.pinned ? `取消釘選：${preset.name}` : `釘選：${preset.name}`}>{preset.pinned ? <PinOff className="size-3.5" /> : <Pin className="size-3.5" />}</Button><Button size="icon" variant="ghost" className="size-8 text-muted-foreground hover:text-destructive" onClick={() => deletePreset.mutate({ id: preset.id })} disabled={deletePreset.isPending} aria-label={`刪除常用清單：${preset.name}`}><Trash2 className="size-3.5" /></Button></div>
+          <div className="flex flex-wrap gap-1.5"><Button size="sm" variant="outline" onClick={() => applySavedPreset.mutate({ id: preset.id })} disabled={applySavedPreset.isPending}><ListChecks className="mr-1.5 size-3.5" />套用</Button><Button size="sm" onClick={() => enqueueSavedPreset.mutate({ id: preset.id })} disabled={enqueueSavedPreset.isPending}><Play className="mr-1.5 size-3.5" />直接排入</Button><Button size="sm" variant="ghost" onClick={() => publishPresetTemplate.mutate({ id: preset.id })} disabled={publishPresetTemplate.isPending}><Share2 className="mr-1 size-3.5" />分享</Button><Button size="icon" variant="ghost" className="size-8" onClick={() => movePresetByOffset(preset.id, preset.pinned, -1)} disabled={!canMoveUp || reorderPresets.isPending} aria-label={`上移常用清單：${preset.name}`}><ChevronUp className="size-3.5" /></Button><Button size="icon" variant="ghost" className="size-8" onClick={() => movePresetByOffset(preset.id, preset.pinned, 1)} disabled={!canMoveDown || reorderPresets.isPending} aria-label={`下移常用清單：${preset.name}`}><ChevronDown className="size-3.5" /></Button><Button size="icon" variant="ghost" className="size-8" onClick={() => setPresetPinned.mutate({ id: preset.id, pinned: !preset.pinned })} disabled={setPresetPinned.isPending} aria-label={preset.pinned ? `取消釘選：${preset.name}` : `釘選：${preset.name}`}>{preset.pinned ? <PinOff className="size-3.5" /> : <Pin className="size-3.5" />}</Button><Button size="icon" variant="ghost" className="size-8 text-muted-foreground hover:text-destructive" onClick={() => deletePreset.mutate({ id: preset.id })} disabled={deletePreset.isPending} aria-label={`刪除常用清單：${preset.name}`}><Trash2 className="size-3.5" /></Button></div>
         </div>;
       })}
     </div> : <p className="mt-4 text-xs text-muted-foreground">目前沒有可管理的常用清單；下方仍保留過去的套用與補抓歷程。</p>}
-    <div className="mt-4 border-t border-border pt-4"><div className="flex items-center gap-2"><History className="size-3.5 text-primary" /><h3 className="text-sm font-medium">最近套用與補抓執行紀錄</h3></div>{presetHistoryQuery.isLoading ? <Skeleton className="mt-3 h-14 w-full" /> : presetHistoryQuery.data?.length ? <div className="mt-3 space-y-2">{presetHistoryQuery.data.map(entry => <div className="rounded-md border border-border/70 bg-background/60 px-3 py-2 text-xs" key={entry.id}><div className="flex flex-wrap items-center gap-x-2 gap-y-1"><span className="font-medium">{entry.presetName}</span><Badge variant="outline">{entry.action === "applied" ? "已套用" : "已排入補抓"}</Badge><span className="text-muted-foreground">{entry.categoryNames.length} 個分類 · {new Date(entry.createdAt).toLocaleString("zh-TW", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</span></div>{entry.jobs.length ? <><div className="mt-1 flex flex-wrap gap-1">{entry.jobs.map(job => <Badge className="bg-muted text-muted-foreground hover:bg-muted" key={job.id}>#{job.id} {job.categoryName ?? "分類"} · {jobStatusLabel(job.status)}</Badge>)}</div><p className="mt-1 text-muted-foreground">{entry.execution.completedCount}/{entry.execution.total} 已完成 · {completionRateLabel(entry.execution.completionRate)}{entry.execution.durationMs !== null ? ` · 耗時 ${durationLabel(entry.execution.durationMs)}` : ""}{entry.execution.failedCount ? ` · ${entry.execution.failedCount} 個失敗` : ""}</p>{entry.execution.failures.length ? <p className="mt-1 text-destructive">失敗摘要：{entry.execution.failures.map(failure => `${failure.categoryName}：${failure.message}`).join("；")}</p> : null}</> : <p className="mt-1 text-muted-foreground">{entry.categoryNames.join("、")}</p>}</div>)}</div> : <p className="mt-3 text-xs text-muted-foreground">尚無套用或補抓歷程。</p>}</div>
+    <div className="mt-4 border-t border-border pt-4"><div className="flex flex-wrap items-center justify-between gap-2"><div className="flex items-center gap-2"><History className="size-3.5 text-primary" /><h3 className="text-sm font-medium">最近套用與補抓執行紀錄</h3></div><Select value={historyStatus} onValueChange={value => setHistoryStatus(value as typeof historyStatus)}><SelectTrigger className="h-8 w-32 text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">全部狀態</SelectItem><SelectItem value="success">成功</SelectItem><SelectItem value="failed">失敗</SelectItem><SelectItem value="running">執行中</SelectItem></SelectContent></Select></div>{presetHistoryQuery.isLoading ? <Skeleton className="mt-3 h-14 w-full" /> : presetHistoryQuery.data?.length ? <div className="mt-3 space-y-2">{presetHistoryQuery.data.map(entry => <div className="rounded-md border border-border/70 bg-background/60 px-3 py-2 text-xs" key={entry.id}><div className="flex flex-wrap items-center gap-x-2 gap-y-1"><span className="font-medium">{entry.presetName}</span><Badge variant="outline">{entry.action === "applied" ? "已套用" : "已排入補抓"}</Badge><span className="text-muted-foreground">{entry.categoryNames.length} 個分類 · {new Date(entry.createdAt).toLocaleString("zh-TW", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</span></div>{entry.jobs.length ? <><div className="mt-1 flex flex-wrap gap-1">{entry.jobs.map(job => <Badge className="bg-muted text-muted-foreground hover:bg-muted" key={job.id}>#{job.id} {job.categoryName ?? "分類"} · {jobStatusLabel(job.status)}</Badge>)}</div><p className="mt-1 text-muted-foreground">{entry.execution.completedCount}/{entry.execution.total} 已完成 · {completionRateLabel(entry.execution.completionRate)}{entry.execution.durationMs !== null ? ` · 耗時 ${durationLabel(entry.execution.durationMs)}` : ""}{entry.execution.failedCount ? ` · ${entry.execution.failedCount} 個失敗` : ""}</p>{entry.execution.failures.length ? <p className="mt-1 text-destructive">失敗摘要：{entry.execution.failures.map(failure => `${failure.categoryName}：${failure.message}`).join("；")}</p> : null}</> : <p className="mt-1 text-muted-foreground">{entry.categoryNames.join("、")}</p>}</div>)}</div> : <p className="mt-3 text-xs text-muted-foreground">此篩選條件下尚無套用或補抓歷程。</p>}</div>
+    {teamTemplatesQuery.data?.length ? <div className="mt-4 border-t border-border pt-4"><div className="flex items-center gap-2"><Share2 className="size-3.5 text-primary" /><h3 className="text-sm font-medium">團隊範本</h3></div><p className="mt-1 text-xs text-muted-foreground">範本只包含名稱與分類選取；複製後會成為自己的獨立清單。</p><div className="mt-3 space-y-2">{teamTemplatesQuery.data.map(template => <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/70 bg-background/60 px-3 py-2 text-xs" key={template.id}><span className="font-medium">{template.name} · {template.categoryNames.length} 個分類</span>{template.canRevoke ? <div className="flex gap-1"><Button size="sm" variant="ghost" onClick={() => copyPresetShareLink(template.token)}><Link className="mr-1 size-3.5" />複製連結</Button><Button size="sm" variant="ghost" className="text-destructive" onClick={() => revokePresetTemplate.mutate({ id: template.id })}>撤銷</Button></div> : <Button size="sm" variant="outline" onClick={() => copyTeamTemplate.mutate({ token: template.token })}><Copy className="mr-1 size-3.5" />複製為我的清單</Button>}</div>)}</div></div> : null}
   </Card> : null;
 
-  return <DashboardLayout><div className="mx-auto w-full max-w-7xl space-y-6">{presetManager}
+  const importDialog = <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}><DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>匯入差異預覽</DialogTitle><DialogDescription>檢查備份與目前清單的差異，對同名但內容不同的清單選擇處理方式。</DialogDescription></DialogHeader>{importPreview ? <div className="space-y-3"><div className="flex flex-wrap gap-2 text-xs"><Badge variant="outline">新增 {importPreview.counts.new}</Badge><Badge variant="outline">衝突 {importPreview.counts.conflict}</Badge><Badge variant="outline">相同 {importPreview.counts.unchanged}</Badge></div><div className="max-h-72 space-y-2 overflow-y-auto pr-1">{importPreview.items.map(item => <div className="rounded-md border p-3 text-sm" key={item.name}><div className="flex flex-wrap items-center justify-between gap-2"><div><p className="font-medium">{item.name}</p><p className="text-xs text-muted-foreground">{item.categoryNames.length} 個分類 · {item.kind === "new" ? "新增" : item.kind === "unchanged" ? "內容相同" : "同名衝突"}</p></div>{item.kind === "conflict" ? <Select value={importConflictStrategies[item.name] ?? "overwrite"} onValueChange={value => setImportConflictStrategies(current => ({ ...current, [item.name]: value as "overwrite" | "skip" | "copy" }))}><SelectTrigger className="h-8 w-32 text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="overwrite">覆寫目前清單</SelectItem><SelectItem value="skip">略過此清單</SelectItem><SelectItem value="copy">複製建立</SelectItem></SelectContent></Select> : null}</div></div>)}</div></div> : null}<DialogFooter><Button variant="outline" onClick={() => setImportDialogOpen(false)}>取消</Button><Button onClick={confirmPresetImport} disabled={!importPreview || importPresets.isPending}>{importPresets.isPending ? "匯入中…" : "確認匯入"}</Button></DialogFooter></DialogContent></Dialog>;
+  const receivedTemplate = sharedTemplateToken && sharedTemplateQuery.data ? <Card className="border-primary/30 bg-primary/5 p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="font-medium">收到團隊範本：{sharedTemplateQuery.data.name}</p><p className="mt-1 text-xs text-muted-foreground">包含 {sharedTemplateQuery.data.categoryNames.length} 個分類；複製後將成為你的獨立常用清單。</p></div><Button onClick={() => copyTeamTemplate.mutate({ token: sharedTemplateToken })} disabled={copyTeamTemplate.isPending}><Copy className="mr-2 size-4" />複製為我的清單</Button></div></Card> : null;
+
+  return <DashboardLayout><div className="mx-auto w-full max-w-7xl space-y-6">{importDialog}{receivedTemplate}{presetManager}
     <section className="flex flex-col gap-4 border-b border-border pb-5 lg:flex-row lg:items-start lg:justify-between"><div className="space-y-1"><div className="flex items-center gap-2 text-primary"><Store className="size-4" /><span className="text-sm font-medium">平台缺口</span></div><h1 className="text-2xl font-bold tracking-tight">原價屋有售、欣亞未上架商品</h1><p className="max-w-3xl text-sm text-muted-foreground">以最新完成爬蟲批次為準；只有已通過保守配對規則的原價屋－欣亞商品才視為「欣亞已上架」，其餘原價屋品項會列入下方缺口清單。</p></div><div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => void exportCsv()} disabled={exportQuery.isFetching || !coverage}><Download className="mr-2 size-4" />匯出 CSV</Button><Button variant="outline" onClick={() => { void coverageQuery.refetch(); void unlistedQuery.refetch(); }} disabled={coverageQuery.isFetching || unlistedQuery.isFetching}><RefreshCw className={`mr-2 size-4 ${coverageQuery.isFetching || unlistedQuery.isFetching ? "animate-spin" : ""}`} />重新整理清單</Button></div></section>
     {coverageQuery.isLoading ? <div className="grid gap-3 sm:grid-cols-3">{Array.from({ length: 3 }, (_, index) => <Skeleton key={index} className="h-28" />)}</div> : coverageQuery.isError || !coverage ? <Card className="p-10 text-center"><PackageX className="mx-auto mb-3 size-7 text-muted-foreground" /><h2 className="font-semibold">目前無法讀取原價屋缺口</h2><p className="mt-1 text-sm text-muted-foreground">請確認已有完成的爬蟲批次後再試。</p><Button className="mt-4" variant="outline" onClick={() => void coverageQuery.refetch()}>重新嘗試</Button></Card> : <>
       <div className="grid gap-3 sm:grid-cols-3"><Card className="p-4"><p className="text-xs text-muted-foreground">原價屋商品總數</p><p className="mt-1 text-3xl font-bold text-primary">{coverage.coolpcTotal.toLocaleString()} 件</p><p className="mt-1 text-xs text-muted-foreground">以原價屋為分析分母</p></Card><Card className="p-4"><p className="text-xs text-muted-foreground">欣亞已確認上架</p><p className="mt-1 text-3xl font-bold text-emerald-500">{coverage.sinyaListed.toLocaleString()} 件</p><p className="mt-1 text-xs text-muted-foreground">通過原價屋－欣亞配對</p></Card><Card className="p-4"><p className="text-xs text-muted-foreground">原價屋有售、欣亞未上架</p><p className="mt-1 text-3xl font-bold text-amber-500">{coverage.sinyaUnlisted.toLocaleString()} 件</p><p className="mt-1 text-xs text-muted-foreground">欣亞相對原價屋的缺口</p></Card></div>

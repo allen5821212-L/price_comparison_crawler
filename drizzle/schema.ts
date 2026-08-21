@@ -291,6 +291,25 @@ export const coolpcCategoryRecrawlPresetHistory = mysqlTable(
   }),
 );
 
+/** 管理員可將自己的常用補抓清單發佈為可複製的團隊範本；權杖可隨時撤銷。 */
+export const coolpcCategoryRecrawlPresetTemplates = mysqlTable(
+  "coolpc_category_recrawl_preset_templates",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    userId: int("user_id").notNull(),
+    presetId: int("preset_id").notNull(),
+    shareToken: varchar("share_token", { length: 64 }).notNull(),
+    active: boolean("active").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    uniquePreset: uniqueIndex("coolpc_recrawl_preset_templates_preset_unique").on(table.presetId),
+    uniqueToken: uniqueIndex("coolpc_recrawl_preset_templates_token_unique").on(table.shareToken),
+    userActiveIdx: index("coolpc_recrawl_preset_templates_user_active_idx").on(table.userId, table.active),
+  }),
+);
+
 /** 使用者收藏的欣亞來源商品，可選擇指定可接受價格。 */
 export const productFavorites = mysqlTable(
   "product_favorites",
@@ -340,5 +359,6 @@ export type CrawlerEvent = typeof crawlerEvents.$inferSelect;
 export type CrawlerIssueReport = typeof crawlerIssueReports.$inferSelect;
 export type CoolpcCategoryRecrawlPreset = typeof coolpcCategoryRecrawlPresets.$inferSelect;
 export type CoolpcCategoryRecrawlPresetHistory = typeof coolpcCategoryRecrawlPresetHistory.$inferSelect;
+export type CoolpcCategoryRecrawlPresetTemplate = typeof coolpcCategoryRecrawlPresetTemplates.$inferSelect;
 export type ProductFavorite = typeof productFavorites.$inferSelect;
 export type PriceNotification = typeof priceNotifications.$inferSelect;
