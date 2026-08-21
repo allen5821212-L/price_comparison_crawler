@@ -1,7 +1,7 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { createBatchCategoryRequest, createRecrawlPresetImportInput, createRecrawlPresetInput, createRecrawlPresetReorderInput, formatRecrawlExecutionProgress, formatRecrawlExecutionSuccessRate, moveRecrawlPresetId, nextSelectedCategories, readRecrawlPresetDragPayload, RecrawlReminderSummary, RECRAWL_PRESET_DRAG_MIME, reorderRecrawlPresetIds, shouldShowRecrawlPresetManager, writeRecrawlPresetDragPayload } from "./CoolpcOnlyPage";
+import { createBatchCategoryRequest, createRecrawlPresetImportInput, createRecrawlPresetInput, createRecrawlPresetReorderInput, filterRecrawlPresetHistoryEntries, formatRecrawlExecutionProgress, formatRecrawlExecutionSuccessRate, moveRecrawlPresetId, nextSelectedCategories, readRecrawlPresetDragPayload, RecrawlReminderSummary, RECRAWL_PRESET_DRAG_MIME, reorderRecrawlPresetIds, shouldShowRecrawlPresetManager, writeRecrawlPresetDragPayload } from "./CoolpcOnlyPage";
 
 describe("CoolpcOnlyPage recrawl reminder summary", () => {
   it("顯示由歷史分類工作推導的 ETA 與最近成功結果", () => {
@@ -92,5 +92,16 @@ describe("CoolpcOnlyPage category selection", () => {
   it("部分完成時分開顯示處理進度與終態成功率，避免將一筆完成誤標為全部完成", () => {
     expect(formatRecrawlExecutionProgress(2, 1, 0)).toBe("處理進度 1/2（50%）");
     expect(formatRecrawlExecutionSuccessRate(1)).toBe("終態成功率 100%");
+  });
+
+  it("成功篩選保留所有工作皆已完成的歷程，並與失敗及執行中狀態正確區隔", () => {
+    const entries = [
+      { id: 1, execution: { total: 2, completedCount: 2, failedCount: 0, pendingCount: 0 } },
+      { id: 2, execution: { total: 2, completedCount: 1, failedCount: 1, pendingCount: 0 } },
+      { id: 3, execution: { total: 2, completedCount: 1, failedCount: 0, pendingCount: 1 } },
+    ];
+    expect(filterRecrawlPresetHistoryEntries(entries, "success").map(entry => entry.id)).toEqual([1]);
+    expect(filterRecrawlPresetHistoryEntries(entries, "failed").map(entry => entry.id)).toEqual([2]);
+    expect(filterRecrawlPresetHistoryEntries(entries, "running").map(entry => entry.id)).toEqual([3]);
   });
 });

@@ -118,6 +118,16 @@ export function formatRecrawlExecutionSuccessRate(rate: number | null) {
 
 const completionRateLabel = formatRecrawlExecutionSuccessRate;
 
+export function filterRecrawlPresetHistoryEntries<T extends { execution: { total: number; completedCount: number; failedCount: number; pendingCount: number } }>(entries: T[], status: "all" | "success" | "failed" | "running") {
+  if (status === "all") return entries;
+  return entries.filter(entry => {
+    if (!entry.execution.total) return false;
+    if (status === "failed") return entry.execution.failedCount > 0;
+    if (status === "running") return entry.execution.pendingCount > 0 && entry.execution.failedCount === 0;
+    return entry.execution.completedCount === entry.execution.total && entry.execution.failedCount === 0;
+  });
+}
+
 type RecrawlPresetImportPreview = {
   counts: { new: number; unchanged: number; conflict: number };
   items: Array<{
@@ -145,8 +155,7 @@ export default function CoolpcOnlyPage() {
   const exportQuery = trpc.comparison.sinyaUnlistedExport.useQuery({ category: category === "all" ? undefined : category }, { enabled: false });
   const remindersQuery = trpc.crawler.coolpcRecrawlReminders.useQuery(undefined, { refetchInterval: 60_000 });
   const presetsQuery = trpc.crawler.coolpcRecrawlPresets.useQuery();
-  const historyInput = useMemo(() => ({ status: historyStatus }), [historyStatus]);
-  const presetHistoryQuery = trpc.crawler.coolpcRecrawlPresetHistory.useQuery(historyInput);
+  const presetHistoryQuery = trpc.crawler.coolpcRecrawlPresetHistory.useQuery();
   const presetExportQuery = trpc.crawler.exportCoolpcRecrawlPresets.useQuery(undefined, { enabled: false });
   const teamTemplatesQuery = trpc.crawler.coolpcRecrawlPresetTemplates.useQuery();
   const sharedTemplateToken = useMemo(() => typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("template"), []);
@@ -256,6 +265,7 @@ export default function CoolpcOnlyPage() {
       return right.sinyaUnlisted - left.sinyaUnlisted || left.coverageRate - right.coverageRate;
     });
   }, [coverage, categorySort]);
+  const visiblePresetHistory = useMemo(() => filterRecrawlPresetHistoryEntries(presetHistoryQuery.data ?? [], historyStatus), [presetHistoryQuery.data, historyStatus]);
   const dueReminders = remindersQuery.data?.filter(reminder => reminder.isDue) ?? [];
   const toggleCategory = (categoryName: string, checked: boolean) => setSelectedCategories(current => {
     const next = nextSelectedCategories(current, categoryName, checked);
@@ -368,7 +378,7 @@ export default function CoolpcOnlyPage() {
         </div>;
       })}
     </div> : <p className="mt-4 text-xs text-muted-foreground">目前沒有可管理的常用清單；下方仍保留過去的套用與補抓歷程。</p>}
-    <div className="mt-4 border-t border-border pt-4"><div className="flex flex-wrap items-center justify-between gap-2"><div className="flex items-center gap-2"><History className="size-3.5 text-primary" /><h3 className="text-sm font-medium">最近套用與補抓執行紀錄</h3></div><Select value={historyStatus} onValueChange={value => setHistoryStatus(value as typeof historyStatus)}><SelectTrigger className="h-8 w-32 text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">全部狀態</SelectItem><SelectItem value="success">成功</SelectItem><SelectItem value="failed">失敗</SelectItem><SelectItem value="running">執行中</SelectItem></SelectContent></Select></div>{presetHistoryQuery.isLoading ? <Skeleton className="mt-3 h-14 w-full" /> : presetHistoryQuery.data?.length ? <div className="mt-3 space-y-2">{presetHistoryQuery.data.map(entry => <div className="rounded-md border border-border/70 bg-background/60 px-3 py-2 text-xs" key={entry.id}><div className="flex flex-wrap items-center gap-x-2 gap-y-1"><span className="font-medium">{entry.presetName}</span><Badge variant="outline">{entry.action === "applied" ? "已套用" : "已排入補抓"}</Badge><span className="text-muted-foreground">{entry.categoryNames.length} 個分類 · {new Date(entry.createdAt).toLocaleString("zh-TW", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</span></div>{entry.jobs.length ? <><div className="mt-1 flex flex-wrap gap-1">{entry.jobs.map(job => <Badge className="bg-muted text-muted-foreground hover:bg-muted" key={job.id}>#{job.id} {job.categoryName ?? "分類"} · {jobStatusLabel(job.status)}</Badge>)}</div><p className="mt-1 text-muted-foreground">{entry.execution.completedCount}/{entry.execution.total} 已完成 · {completionRateLabel(entry.execution.completionRate)}{entry.execution.durationMs !== null ? ` · 耗時 ${durationLabel(entry.execution.durationMs)}` : ""}{entry.execution.failedCount ? ` · ${entry.execution.failedCount} 個失敗` : ""}</p>{entry.execution.failures.length ? <p className="mt-1 text-destructive">失敗摘要：{entry.execution.failures.map(failure => `${failure.categoryName}：${failure.message}`).join("；")}</p> : null}</> : <p className="mt-1 text-muted-foreground">{entry.categoryNames.join("、")}</p>}</div>)}</div> : <p className="mt-3 text-xs text-muted-foreground">此篩選條件下尚無套用或補抓歷程。</p>}</div>
+    <div className="mt-4 border-t border-border pt-4"><div className="flex flex-wrap items-center justify-between gap-2"><div className="flex items-center gap-2"><History className="size-3.5 text-primary" /><h3 className="text-sm font-medium">最近套用與補抓執行紀錄</h3></div><Select value={historyStatus} onValueChange={value => setHistoryStatus(value as typeof historyStatus)}><SelectTrigger className="h-8 w-32 text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">全部狀態</SelectItem><SelectItem value="success">成功</SelectItem><SelectItem value="failed">失敗</SelectItem><SelectItem value="running">執行中</SelectItem></SelectContent></Select></div>{presetHistoryQuery.isLoading ? <Skeleton className="mt-3 h-14 w-full" /> : visiblePresetHistory.length ? <div className="mt-3 space-y-2">{visiblePresetHistory.map(entry => <div className="rounded-md border border-border/70 bg-background/60 px-3 py-2 text-xs" key={entry.id}><div className="flex flex-wrap items-center gap-x-2 gap-y-1"><span className="font-medium">{entry.presetName}</span><Badge variant="outline">{entry.action === "applied" ? "已套用" : "已排入補抓"}</Badge><span className="text-muted-foreground">{entry.categoryNames.length} 個分類 · {new Date(entry.createdAt).toLocaleString("zh-TW", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</span></div>{entry.jobs.length ? <><div className="mt-1 flex flex-wrap gap-1">{entry.jobs.map(job => <Badge className="bg-muted text-muted-foreground hover:bg-muted" key={job.id}>#{job.id} {job.categoryName ?? "分類"} · {jobStatusLabel(job.status)}</Badge>)}</div><p className="mt-1 text-muted-foreground">{entry.execution.completedCount}/{entry.execution.total} 已完成 · {completionRateLabel(entry.execution.completionRate)}{entry.execution.durationMs !== null ? ` · 耗時 ${durationLabel(entry.execution.durationMs)}` : ""}{entry.execution.failedCount ? ` · ${entry.execution.failedCount} 個失敗` : ""}</p>{entry.execution.failures.length ? <p className="mt-1 text-destructive">失敗摘要：{entry.execution.failures.map(failure => `${failure.categoryName}：${failure.message}`).join("；")}</p> : null}</> : <p className="mt-1 text-muted-foreground">{entry.categoryNames.join("、")}</p>}</div>)}</div> : <p className="mt-3 text-xs text-muted-foreground">此篩選條件下尚無套用或補抓歷程。</p>}</div>
     {teamTemplatesQuery.data?.length ? <div className="mt-4 border-t border-border pt-4"><div className="flex items-center gap-2"><Share2 className="size-3.5 text-primary" /><h3 className="text-sm font-medium">團隊範本</h3></div><p className="mt-1 text-xs text-muted-foreground">範本只包含名稱與分類選取；複製後會成為自己的獨立清單。</p><div className="mt-3 space-y-2">{teamTemplatesQuery.data.map(template => <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/70 bg-background/60 px-3 py-2 text-xs" key={template.id}><span className="font-medium">{template.name} · {template.categoryNames.length} 個分類</span>{template.canRevoke ? <div className="flex gap-1"><Button size="sm" variant="ghost" onClick={() => copyPresetShareLink(template.token)}><Link className="mr-1 size-3.5" />複製連結</Button><Button size="sm" variant="ghost" className="text-destructive" onClick={() => revokePresetTemplate.mutate({ id: template.id })}>撤銷</Button></div> : <Button size="sm" variant="outline" onClick={() => copyTeamTemplate.mutate({ token: template.token })}><Copy className="mr-1 size-3.5" />複製為我的清單</Button>}</div>)}</div></div> : null}
   </Card> : null;
 
