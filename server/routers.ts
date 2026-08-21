@@ -5,6 +5,7 @@ import { systemRouter } from "./_core/systemRouter";
 import { adminProcedure, protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import {
   enqueueCrawlerCategoryJobs,
+  addCoolpcCategoryRecrawlPresetTemplateCollaborator,
   exportCoolpcCategoryRecrawlPresets,
   deleteCoolpcCategoryRecrawlPreset,
   applyCoolpcCategoryRecrawlPreset,
@@ -18,8 +19,11 @@ import {
   publishCoolpcCategoryRecrawlPresetTemplate,
   recordCoolpcCategoryRecrawlPresetHistory,
   reorderCoolpcCategoryRecrawlPresets,
+  removeCoolpcCategoryRecrawlPresetTemplateCollaborator,
   revokeCoolpcCategoryRecrawlPresetTemplate,
+  setCoolpcCategoryRecrawlPresetTemplateCollaborationMode,
   setCoolpcCategoryRecrawlPresetPinned,
+  updateCoolpcCategoryRecrawlPresetTemplateCategories,
   enqueueCrawlerJob,
   getCategoryRecrawlAnalytics,
   getCrawlerRefreshEstimates,
@@ -251,6 +255,23 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => publishCoolpcCategoryRecrawlPresetTemplate(ctx.user.id, input.id)),
     revokeCoolpcRecrawlPresetTemplate: adminProcedure.input(z.object({ id: z.number().int().positive() }))
       .mutation(async ({ ctx, input }) => revokeCoolpcCategoryRecrawlPresetTemplate(ctx.user.id, input.id)),
+    setCoolpcRecrawlPresetTemplateMode: adminProcedure.input(z.object({
+      id: z.number().int().positive(),
+      collaborationMode: z.enum(["read_only", "collaborative"]),
+    })).mutation(async ({ ctx, input }) => setCoolpcCategoryRecrawlPresetTemplateCollaborationMode(ctx.user.id, input.id, input.collaborationMode)),
+    addCoolpcRecrawlPresetTemplateCollaborator: adminProcedure.input(z.object({
+      id: z.number().int().positive(),
+      email: z.string().email().max(320),
+    })).mutation(async ({ ctx, input }) => addCoolpcCategoryRecrawlPresetTemplateCollaborator(ctx.user.id, input.id, input.email)),
+    removeCoolpcRecrawlPresetTemplateCollaborator: adminProcedure.input(z.object({
+      id: z.number().int().positive(),
+      collaboratorUserId: z.number().int().positive(),
+    })).mutation(async ({ ctx, input }) => removeCoolpcCategoryRecrawlPresetTemplateCollaborator(ctx.user.id, input.id, input.collaboratorUserId)),
+    updateCoolpcRecrawlPresetTemplateCategories: adminProcedure.input(z.object({
+      id: z.number().int().positive(),
+      categoryNames: z.array(z.string().min(1).max(512)).min(1).max(12),
+    }).refine(value => new Set(value.categoryNames.map(name => name.trim())).size === value.categoryNames.length, "分類不可重複"))
+      .mutation(async ({ ctx, input }) => updateCoolpcCategoryRecrawlPresetTemplateCategories(ctx.user.id, input.id, input.categoryNames)),
     coolpcRecrawlPresetTemplateByToken: adminProcedure.input(z.object({ token: z.string().min(16).max(64) }))
       .query(async ({ input }) => getCoolpcCategoryRecrawlPresetTemplateByToken(input.token)),
     copyCoolpcRecrawlPresetTemplate: adminProcedure.input(z.object({ token: z.string().min(16).max(64) }))

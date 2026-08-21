@@ -300,6 +300,7 @@ export const coolpcCategoryRecrawlPresetTemplates = mysqlTable(
     presetId: int("preset_id").notNull(),
     shareToken: varchar("share_token", { length: 64 }).notNull(),
     active: boolean("active").default(true).notNull(),
+    collaborationMode: mysqlEnum("collaboration_mode", ["read_only", "collaborative"]).default("read_only").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },
@@ -307,6 +308,21 @@ export const coolpcCategoryRecrawlPresetTemplates = mysqlTable(
     uniquePreset: uniqueIndex("coolpc_recrawl_preset_templates_preset_unique").on(table.presetId),
     uniqueToken: uniqueIndex("coolpc_recrawl_preset_templates_token_unique").on(table.shareToken),
     userActiveIdx: index("coolpc_recrawl_preset_templates_user_active_idx").on(table.userId, table.active),
+  }),
+);
+
+/** 共同維護範本的具名協作者；只有範本擁有者可以增刪授權。 */
+export const coolpcCategoryRecrawlPresetTemplateCollaborators = mysqlTable(
+  "coolpc_category_recrawl_preset_template_collaborators",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    templateId: int("template_id").notNull(),
+    userId: int("user_id").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  table => ({
+    uniqueTemplateUser: uniqueIndex("coolpc_recrawl_template_collaborators_unique").on(table.templateId, table.userId),
+    userTemplateIdx: index("coolpc_recrawl_template_collaborators_user_idx").on(table.userId, table.templateId),
   }),
 );
 
@@ -360,5 +376,6 @@ export type CrawlerIssueReport = typeof crawlerIssueReports.$inferSelect;
 export type CoolpcCategoryRecrawlPreset = typeof coolpcCategoryRecrawlPresets.$inferSelect;
 export type CoolpcCategoryRecrawlPresetHistory = typeof coolpcCategoryRecrawlPresetHistory.$inferSelect;
 export type CoolpcCategoryRecrawlPresetTemplate = typeof coolpcCategoryRecrawlPresetTemplates.$inferSelect;
+export type CoolpcCategoryRecrawlPresetTemplateCollaborator = typeof coolpcCategoryRecrawlPresetTemplateCollaborators.$inferSelect;
 export type ProductFavorite = typeof productFavorites.$inferSelect;
 export type PriceNotification = typeof priceNotifications.$inferSelect;

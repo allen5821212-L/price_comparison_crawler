@@ -8,6 +8,7 @@ import {
   comparisonRuns,
   coolpcCategoryRecrawlPresetHistory,
   coolpcCategoryRecrawlPresets,
+  coolpcCategoryRecrawlPresetTemplateCollaborators,
   coolpcCategoryRecrawlPresetTemplates,
   coolpcCategoryRecrawlReminders,
   crawlerEvents,
@@ -900,6 +901,7 @@ export type RecrawlPresetBackup = {
 export type RecrawlPresetConflictStrategy = "overwrite" | "skip" | "copy";
 export type RecrawlPresetImportDiffKind = "new" | "unchanged" | "conflict";
 export type RecrawlPresetHistoryStatusFilter = "all" | "success" | "failed" | "running";
+export type RecrawlPresetTemplateCollaborationMode = "read_only" | "collaborative";
 
 type ExistingRecrawlPresetForImport = {
   id: number;
@@ -1291,7 +1293,38 @@ async function getRecrawlPresetTemplateSource(token: string) {
   return preset ? { template, preset } : null;
 }
 
-/** Lists only metadata necessary for team copying; creator identity is not exposed. */
+async function getRecrawlPresetTemplateForOwner(userId: number, templateId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const [template] = await db.select().from(coolpcCategoryRecrawlPresetTemplates).where(and(
+    eq(coolpcCategoryRecrawlPresetTemplates.id, templateId),
+    eq(coolpcCategoryRecrawlPresetTemplates.userId, userId),
+  )).limit(1);
+  if (!template) throw new Error("找不到可管理的團隊範本");
+  return template;
+}
+
+export function canMaintainRecrawlPresetTemplate(
+  collaborationMode: RecrawlPresetTemplateCollaborationMode,
+  isOwner: boolean,
+  isCollaborator: boolean,
+) {
+  return isOwner || (collaborationMode === "collaborative" && isCollaborator);
+}
+
+export function deriveRecrawlPresetTemplateEstimate(categoryCount: number, categoryEstimateMs: number | null, estimateSampleSize: number) {
+  return {
+    estimateMs: categoryEstimateMs && categoryCount > 0 ? categoryEstimateMs * categoryCount : null,
+    estimateSampleSize,
+  };
+}
+
+async function getRecrawlPresetTemplateEstimate(categoryNames: string[]) {
+  const estimates = await getCrawlerRefreshEstimates();
+  return deriveRecrawlPresetTemplateEstimate(categoryNames.length, estimates.category.estimateMs, estimates.category.sampleSize);
+}
+
+/** Lists safely shareable template metadata, plus owner information needed for collaboration. */
 export async function listCoolpcCategoryRecrawlPresetTemplates(userId: number) {
   const db = await getDb();
   if (!db) throw new Error("資料庫目前無法使用");
@@ -1299,21 +1332,48 @@ export async function listCoolpcCategoryRecrawlPresetTemplates(userId: number) {
     .where(eq(coolpcCategoryRecrawlPresetTemplates.active, true))
     .orderBy(desc(coolpcCategoryRecrawlPresetTemplates.updatedAt), desc(coolpcCategoryRecrawlPresetTemplates.id));
   const sourcePresetIds = Array.from(new Set(templates.map(template => template.presetId)));
-  const presets = sourcePresetIds.length ? await db.select().from(coolpcCategoryRecrawlPresets)
-    .where(inArray(coolpcCategoryRecrawlPresets.id, sourcePresetIds)) : [];
+  const ownerIds = Array.from(new Set(templates.map(template => template.userId)));
+  const [presets, owners, collaborators, estimates] = await Promise.all([
+    sourcePresetIds.length ? db.select().from(coolpcCategoryRecrawlPresets)
+      .where(inArray(coolpcCategoryRecrawlPresets.id, sourcePresetIds)) : Promise.resolve([]),
+    ownerIds.length ? db.select({ id: users.id, name: users.name, email: users.email }).from(users)
+      .where(inArray(users.id, ownerIds)) : Promise.resolve([]),
+    templates.length ? db.select({ templateId: coolpcCategoryRecrawlPresetTemplateCollaborators.templateId, userId: coolpcCategoryRecrawlPresetTemplateCollaborators.userId, name: users.name, email: users.email })
+      .from(coolpcCategoryRecrawlPresetTemplateCollaborators)
+      .innerJoin(users, eq(coolpcCategoryRecrawlPresetTemplateCollaborators.userId, users.id))
+      .where(inArray(coolpcCategoryRecrawlPresetTemplateCollaborators.templateId, templates.map(template => template.id))) : Promise.resolve([]),
+    getCrawlerRefreshEstimates(),
+  ]);
   const presetById = new Map(presets.map(preset => [preset.id, preset]));
+  const ownerById = new Map(owners.map(owner => [owner.id, owner]));
+  const collaboratorsByTemplate = new Map<number, Array<{ userId: number; name: string | null; email: string | null }>>();
+  collaborators.forEach(collaborator => {
+    const current = collaboratorsByTemplate.get(collaborator.templateId) ?? [];
+    current.push(collaborator);
+    collaboratorsByTemplate.set(collaborator.templateId, current);
+  });
   return templates.flatMap(template => {
     const preset = presetById.get(template.presetId);
     if (!preset) return [];
+    const categoryNames = parseRecrawlPresetCategoryNames(preset.categoryNames);
+    const owner = ownerById.get(template.userId);
+    const templateCollaborators = collaboratorsByTemplate.get(template.id) ?? [];
+    const updatedAt = new Date(template.updatedAt).getTime() >= new Date(preset.updatedAt).getTime() ? template.updatedAt : preset.updatedAt;
     return [{
       id: template.id,
       token: template.shareToken,
       sourcePresetId: template.presetId,
       canRevoke: template.userId === userId,
+      isOwner: template.userId === userId,
+      canCollaborate: template.collaborationMode === "collaborative" && templateCollaborators.some(collaborator => collaborator.userId === userId),
       name: preset.name,
-      categoryNames: parseRecrawlPresetCategoryNames(preset.categoryNames),
+      categoryNames,
       pinned: preset.pinned,
-      updatedAt: template.updatedAt,
+      ownerName: owner?.name?.trim() || owner?.email || "未知擁有者",
+      collaborationMode: template.collaborationMode,
+      collaborators: template.userId === userId ? templateCollaborators : [],
+      ...deriveRecrawlPresetTemplateEstimate(categoryNames.length, estimates.category.estimateMs, estimates.category.sampleSize),
+      updatedAt,
     }];
   });
 }
@@ -1345,14 +1405,94 @@ export async function revokeCoolpcCategoryRecrawlPresetTemplate(userId: number, 
   return { success: true } as const;
 }
 
+export async function setCoolpcCategoryRecrawlPresetTemplateCollaborationMode(
+  userId: number,
+  templateId: number,
+  collaborationMode: RecrawlPresetTemplateCollaborationMode,
+) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  await getRecrawlPresetTemplateForOwner(userId, templateId);
+  await db.update(coolpcCategoryRecrawlPresetTemplates).set({ collaborationMode, updatedAt: new Date() }).where(and(
+    eq(coolpcCategoryRecrawlPresetTemplates.id, templateId),
+    eq(coolpcCategoryRecrawlPresetTemplates.userId, userId),
+  ));
+  return { success: true, collaborationMode } as const;
+}
+
+export async function addCoolpcCategoryRecrawlPresetTemplateCollaborator(userId: number, templateId: number, email: string) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const template = await getRecrawlPresetTemplateForOwner(userId, templateId);
+  const normalizedEmail = email.trim().toLowerCase();
+  const [collaborator] = await db.select({ id: users.id, name: users.name, email: users.email }).from(users)
+    .where(eq(users.email, normalizedEmail)).limit(1);
+  if (!collaborator) throw new Error("找不到此電子郵件對應的已註冊使用者");
+  if (collaborator.id === template.userId) throw new Error("範本擁有者不需要重複加入協作者");
+  await db.insert(coolpcCategoryRecrawlPresetTemplateCollaborators).values({ templateId, userId: collaborator.id }).onDuplicateKeyUpdate({
+    set: { templateId },
+  });
+  return { id: collaborator.id, name: collaborator.name, email: collaborator.email } as const;
+}
+
+export async function removeCoolpcCategoryRecrawlPresetTemplateCollaborator(userId: number, templateId: number, collaboratorUserId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  await getRecrawlPresetTemplateForOwner(userId, templateId);
+  await db.delete(coolpcCategoryRecrawlPresetTemplateCollaborators).where(and(
+    eq(coolpcCategoryRecrawlPresetTemplateCollaborators.templateId, templateId),
+    eq(coolpcCategoryRecrawlPresetTemplateCollaborators.userId, collaboratorUserId),
+  ));
+  return { success: true } as const;
+}
+
+export async function updateCoolpcCategoryRecrawlPresetTemplateCategories(userId: number, templateId: number, categoryNamesInput: string[]) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const categoryNames = normalizeRecrawlPresetCategoryNames(categoryNamesInput);
+  if (!categoryNames.length) throw new Error("請至少選擇一個分類");
+  const [template] = await db.select().from(coolpcCategoryRecrawlPresetTemplates).where(and(
+    eq(coolpcCategoryRecrawlPresetTemplates.id, templateId),
+    eq(coolpcCategoryRecrawlPresetTemplates.active, true),
+  )).limit(1);
+  if (!template) throw new Error("找不到有效的團隊範本");
+  const isOwner = template.userId === userId;
+  const [collaboration] = isOwner ? [null] : await db.select({ id: coolpcCategoryRecrawlPresetTemplateCollaborators.id }).from(coolpcCategoryRecrawlPresetTemplateCollaborators)
+    .where(and(
+      eq(coolpcCategoryRecrawlPresetTemplateCollaborators.templateId, templateId),
+      eq(coolpcCategoryRecrawlPresetTemplateCollaborators.userId, userId),
+    )).limit(1);
+  if (!canMaintainRecrawlPresetTemplate(template.collaborationMode, isOwner, Boolean(collaboration))) throw new Error("此團隊範本為只讀，或你沒有共同維護權限");
+  await db.update(coolpcCategoryRecrawlPresets).set({ categoryNames: JSON.stringify(categoryNames), updatedAt: new Date() }).where(and(
+    eq(coolpcCategoryRecrawlPresets.id, template.presetId),
+    eq(coolpcCategoryRecrawlPresets.userId, template.userId),
+  ));
+  await db.update(coolpcCategoryRecrawlPresetTemplates).set({ updatedAt: new Date() }).where(eq(coolpcCategoryRecrawlPresetTemplates.id, templateId));
+  return { success: true, categoryNames } as const;
+}
+
 export async function getCoolpcCategoryRecrawlPresetTemplateByToken(token: string) {
   const source = await getRecrawlPresetTemplateSource(token);
   if (!source) return null;
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const categoryNames = parseRecrawlPresetCategoryNames(source.preset.categoryNames);
+  const [[owner], estimate] = await Promise.all([
+    db.select({ name: users.name, email: users.email }).from(users).where(eq(users.id, source.template.userId)).limit(1),
+    getRecrawlPresetTemplateEstimate(categoryNames),
+  ]);
+  const updatedAt = new Date(source.template.updatedAt).getTime() >= new Date(source.preset.updatedAt).getTime()
+    ? source.template.updatedAt
+    : source.preset.updatedAt;
   return {
     name: source.preset.name,
-    categoryNames: parseRecrawlPresetCategoryNames(source.preset.categoryNames),
+    categoryNames,
     pinned: source.preset.pinned,
-    updatedAt: source.template.updatedAt,
+    ownerName: owner?.name?.trim() || owner?.email || "未知擁有者",
+    collaborationMode: source.template.collaborationMode,
+    estimateMs: estimate.estimateMs,
+    estimateSampleSize: estimate.estimateSampleSize,
+    updatedAt,
   };
 }
 
