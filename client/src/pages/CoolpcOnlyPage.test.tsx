@@ -96,9 +96,9 @@ describe("CoolpcOnlyPage category selection", () => {
 
   it("成功篩選保留所有工作皆已完成的歷程，並與失敗及執行中狀態正確區隔", () => {
     const entries = [
-      { id: 1, execution: { total: 2, completedCount: 2, failedCount: 0, pendingCount: 0 } },
-      { id: 2, execution: { total: 2, completedCount: 1, failedCount: 1, pendingCount: 0 } },
-      { id: 3, execution: { total: 2, completedCount: 1, failedCount: 0, pendingCount: 1 } },
+      { id: 1, jobs: [{ status: "completed" }, { status: "completed" }], execution: { total: 2, completedCount: 2, failedCount: 0, pendingCount: 0 } },
+      { id: 2, jobs: [{ status: "completed" }, { status: "failed" }], execution: { total: 2, completedCount: 1, failedCount: 1, pendingCount: 0 } },
+      { id: 3, jobs: [{ status: "completed" }, { status: "running" }], execution: { total: 2, completedCount: 1, failedCount: 0, pendingCount: 1 } },
     ];
     expect(filterRecrawlPresetHistoryEntries(entries, "success").map(entry => entry.id)).toEqual([1]);
     expect(filterRecrawlPresetHistoryEntries(entries, "failed").map(entry => entry.id)).toEqual([2]);

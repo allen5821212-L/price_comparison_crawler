@@ -118,13 +118,13 @@ export function formatRecrawlExecutionSuccessRate(rate: number | null) {
 
 const completionRateLabel = formatRecrawlExecutionSuccessRate;
 
-export function filterRecrawlPresetHistoryEntries<T extends { execution: { total: number; completedCount: number; failedCount: number; pendingCount: number } }>(entries: T[], status: "all" | "success" | "failed" | "running") {
+export function filterRecrawlPresetHistoryEntries<T extends { jobs: Array<{ status: string }>; execution: { total: number; completedCount: number; failedCount: number; pendingCount: number } }>(entries: T[], status: "all" | "success" | "failed" | "running") {
   if (status === "all") return entries;
   return entries.filter(entry => {
-    if (!entry.execution.total) return false;
-    if (status === "failed") return entry.execution.failedCount > 0;
-    if (status === "running") return entry.execution.pendingCount > 0 && entry.execution.failedCount === 0;
-    return entry.execution.completedCount === entry.execution.total && entry.execution.failedCount === 0;
+    if (!entry.jobs.length) return false;
+    if (status === "failed") return entry.jobs.some(job => job.status === "failed");
+    if (status === "running") return entry.jobs.some(job => job.status === "queued" || job.status === "running");
+    return entry.jobs.every(job => job.status === "completed");
   });
 }
 
