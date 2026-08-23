@@ -134,7 +134,7 @@ export const appRouter = router({
     }).optional()).query(async ({ input }) => getLatestDynamicComparison(input ?? { page: 1, pageSize: 25 })),
     /** Limits manual-match lookup to one requested platform rather than returning the entire catalog. */
     searchProducts: publicProcedure.input(z.object({
-      platform: z.enum(["coolpc", "pchome", "momo"]),
+      platform: z.enum(["sinya", "coolpc", "pchome", "momo"]),
       query: z.string().min(1).max(200),
       limit: z.number().int().min(1).max(50).optional(),
     })).query(async ({ input }) => searchDynamicProducts(input)),

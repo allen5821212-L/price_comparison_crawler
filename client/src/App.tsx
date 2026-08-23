@@ -11,6 +11,7 @@ import CrawlerMonitor from "./pages/CrawlerMonitor";
 import FavoritesPage from "./pages/FavoritesPage";
 import CoolpcCoveragePage from "./pages/CoolpcCoveragePage";
 import CoolpcOnlyPage from "./pages/CoolpcOnlyPage";
+import PrecisionMatchingPage from "./pages/PrecisionMatchingPage";
 
 function Router() {
   // make sure to consider if you need authentication for certain routes
@@ -20,6 +21,7 @@ function Router() {
       <Route path={"/rules"} component={RulesManagement} />
       <Route path={"/crawler"} component={CrawlerMonitor} />
       <Route path={"/favorites"} component={FavoritesPage} />
+      <Route path={"/matching"} component={PrecisionMatchingPage} />
       <Route path={"/coverage"} component={CoolpcCoveragePage} />
       <Route path={"/coolpc-only"} component={CoolpcOnlyPage} />
       <Route path={"/404"} component={NotFound} />

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Activity, BarChart3, Moon, Package, RefreshCw, SlidersHorizontal, Sun } from "lucide-react";
+import { Activity, BarChart3, Crosshair, Moon, Package, RefreshCw, SlidersHorizontal, Sun } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { trpc } from "@/lib/trpc";
 import { Badge } from "@/components/ui/badge";
@@ -172,6 +172,14 @@ export default function Home() {
             </div>
           </div>
           <div className="flex items-center gap-1">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" asChild>
+                  <a href="/matching" aria-label="精準比對與修正品項"><Crosshair className="size-4" /></a>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>精準比對與修正品項</TooltipContent>
+            </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button variant="ghost" size="icon" asChild>

@@ -571,7 +571,7 @@ export async function getLatestListingAvailability() {
 
 /** Searches only the active platform catalog needed by the manual-match dialog. */
 export async function searchDynamicProducts(input: {
-  platform: "coolpc" | "pchome" | "momo";
+  platform: "sinya" | "coolpc" | "pchome" | "momo";
   query: string;
   limit?: number;
 }) {
@@ -601,6 +601,7 @@ export async function searchDynamicProducts(input: {
     .where(and(
       eq(comparisonProducts.lastSeenRunId, run.id),
       eq(comparisonProducts.platform, input.platform),
+      sql`${comparisonProducts.price} > 0`,
       or(like(comparisonProducts.name, pattern), like(comparisonProducts.subtitle, pattern))!,
     ))
     .orderBy(asc(comparisonProducts.name))
