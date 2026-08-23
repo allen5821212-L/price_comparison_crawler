@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Activity, BarChart3, Crosshair, Moon, Package, RefreshCw, SlidersHorizontal, Sun } from "lucide-react";
+import { Activity, BarChart3, Crosshair, List, Moon, Package, RefreshCw, SlidersHorizontal, Sun } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { trpc } from "@/lib/trpc";
+import { getCompletedRunIdToRefresh } from "@/lib/comparisonSync";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -40,16 +41,6 @@ type CategoryAvailability = {
   pchome: { listedCount: number; listingRate: number };
   momo: { listedCount: number; listingRate: number };
 };
-
-/** Returns a completed batch ID only when it is newer than the one already rendered. */
-export function getCompletedRunIdToRefresh(
-  observedRunId: number | null,
-  run: { id: number; status: string } | null | undefined,
-) {
-  if (!run || run.status !== "completed") return null;
-  if (observedRunId === null || observedRunId === run.id) return null;
-  return run.id;
-}
 
 const platformTone: Record<PlatformKey, { text: string; track: string; fill: string }> = {
   sinya: { text: "text-primary", track: "bg-primary/15", fill: "bg-primary" },
@@ -179,6 +170,14 @@ export default function Home() {
                 </Button>
               </TooltipTrigger>
               <TooltipContent>精準比對與修正品項</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" asChild>
+                  <a href="/comparisons" aria-label="商品比價列表"><List className="size-4" /></a>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>商品比價列表</TooltipContent>
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>

@@ -12,12 +12,14 @@ import FavoritesPage from "./pages/FavoritesPage";
 import CoolpcCoveragePage from "./pages/CoolpcCoveragePage";
 import CoolpcOnlyPage from "./pages/CoolpcOnlyPage";
 import PrecisionMatchingPage from "./pages/PrecisionMatchingPage";
+import ComparisonListPage from "./pages/ComparisonListPage";
 
 function Router() {
   // make sure to consider if you need authentication for certain routes
   return (
     <Switch>
       <Route path={"/"} component={Home} />
+      <Route path={"/comparisons"} component={ComparisonListPage} />
       <Route path={"/rules"} component={RulesManagement} />
       <Route path={"/crawler"} component={CrawlerMonitor} />
       <Route path={"/favorites"} component={FavoritesPage} />
