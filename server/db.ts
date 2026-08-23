@@ -1,11 +1,18 @@
-import { and, asc, desc, eq, inArray, like, or, sql } from "drizzle-orm";
+import { randomBytes } from "node:crypto";
+import { and, asc, desc, eq, inArray, isNotNull, like, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   comparisonMatches,
   comparisonPriceHistory,
   comparisonProducts,
   comparisonRuns,
+  coolpcCategoryRecrawlPresetHistory,
+  coolpcCategoryRecrawlPresets,
+  coolpcCategoryRecrawlPresetTemplateCollaborators,
+  coolpcCategoryRecrawlPresetTemplates,
+  coolpcCategoryRecrawlReminders,
   crawlerEvents,
+  crawlerIssueReports,
   crawlerJobs,
   InsertUser,
   matchingFeedback,
@@ -37,11 +44,113 @@ export interface CrawlerJobInput {
   categoryName?: string | null;
 }
 
+export interface EnqueueCrawlerJobResult {
+  id: number;
+  created: boolean;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+}
+
+export interface EnqueueCrawlerCategoryJobsResult {
+  requestedCount: number;
+  createdCategoryNames: string[];
+  existingCategoryNames: string[];
+  createdJobIds: number[];
+  existingJobIds: number[];
+}
+
+export interface CoolpcCategoryRecrawlPresetInput {
+  userId: number;
+  name: string;
+  categoryNames: string[];
+}
+
+export type CoolpcCategoryRecrawlPresetHistoryAction = "applied" | "jobs_enqueued";
+
+export interface CoolpcCategoryRecrawlPresetHistoryInput {
+  userId: number;
+  presetId: number | null;
+  action: CoolpcCategoryRecrawlPresetHistoryAction;
+  categoryNames: string[];
+  jobIds?: number[];
+}
+
+export type CategoryRecrawlMetricInput = {
+  id: number;
+  categoryName: string | null;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  startedAt: Date | string | null;
+  finishedAt: Date | string | null;
+};
+
+export type CategoryRecrawlAnalytics = {
+  sampleSize: number;
+  completedCount: number;
+  failedCount: number;
+  successRate: number | null;
+  averageDurationMs: number | null;
+  points: Array<{
+    id: number;
+    categoryName: string;
+    finishedAt: Date | string;
+    durationMinutes: number;
+    rollingSuccessRate: number;
+    succeeded: boolean;
+  }>;
+};
+
+export interface CrawlerRefreshEstimate {
+  estimateMs: number | null;
+  sampleSize: number;
+  source: "scope_history" | "full_history_ratio" | "unavailable";
+}
+
 export interface FavoriteInput {
   sourceKey: string;
   sinyaName: string;
   targetPrice?: number | null;
 }
+
+export interface CoolpcCoverageCategory {
+  category: string;
+  sinyaTotal: number;
+  coolpcListed: number;
+  coolpcUnlisted: number;
+  coverageRate: number;
+}
+
+export interface SinyaCoverageCategory {
+  category: string;
+  coolpcTotal: number;
+  sinyaListed: number;
+  sinyaUnlisted: number;
+  coverageRate: number;
+}
+
+export type CrawlerIssueSeverity = "low" | "medium" | "high" | "critical";
+export type CrawlerIssueLabel = "crawler" | "data" | "source";
+
+export interface CrawlerIssueReportInput {
+  jobId: number;
+  severity: CrawlerIssueSeverity;
+  issueLabel: CrawlerIssueLabel;
+  issueDraftUrl: string;
+  errorSummary?: string | null;
+  createdByOpenId: string;
+}
+
+export interface CoolpcRecrawlReminderInput {
+  userId: number;
+  categoryName: string;
+}
+
+type PlatformCoverageProduct = {
+  externalId: string;
+  name: string;
+  category: string | null;
+  price: number;
+  url: string | null;
+  image: string | null;
+};
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -547,15 +656,1073 @@ export async function getDynamicPriceHistory() {
 export async function getLatestCrawlerStatus() {
   const db = await getDb();
   if (!db) throw new Error("資料庫目前無法使用");
-  const [run] = await db.select().from(comparisonRuns)
+  const [latestRun] = await db.select().from(comparisonRuns)
     .orderBy(desc(comparisonRuns.id)).limit(1);
-  return run ?? null;
+  const [latestCompletedRun] = await db.select().from(comparisonRuns)
+    .where(eq(comparisonRuns.status, "completed"))
+    .orderBy(desc(comparisonRuns.id)).limit(1);
+  return {
+    latestRun: latestRun ?? null,
+    latestCompletedRun: latestCompletedRun ?? null,
+  };
 }
 
-/** Queue a crawler task for the persistent cloud worker. */
-export async function enqueueCrawlerJob(input: CrawlerJobInput) {
+/**
+ * Estimate a job duration from actual successful worker history. Categories
+ * fall back to a quarter of the measured full-refresh average only until the
+ * system has completed category-specific jobs to learn from.
+ */
+export async function getCrawlerRefreshEstimates(): Promise<Record<"full" | "category", CrawlerRefreshEstimate>> {
   const db = await getDb();
   if (!db) throw new Error("資料庫目前無法使用");
+
+  const rows = await db.select({
+    scope: crawlerJobs.scope,
+    startedAt: crawlerJobs.startedAt,
+    finishedAt: crawlerJobs.finishedAt,
+  }).from(crawlerJobs)
+    .where(and(
+      eq(crawlerJobs.status, "completed"),
+      isNotNull(crawlerJobs.startedAt),
+      isNotNull(crawlerJobs.finishedAt),
+    ))
+    .orderBy(desc(crawlerJobs.finishedAt), desc(crawlerJobs.id))
+    .limit(40);
+
+  const durations = { full: [] as number[], category: [] as number[] };
+  rows.forEach(row => {
+    if (!row.startedAt || !row.finishedAt) return;
+    const startedAt = new Date(row.startedAt).getTime();
+    const finishedAt = new Date(row.finishedAt).getTime();
+    const durationMs = finishedAt - startedAt;
+    // Ignore clock-skew and clearly abnormal jobs so one bad record cannot
+    // make the user-facing estimate misleading.
+    if (durationMs >= 60_000 && durationMs <= 12 * 60 * 60_000) {
+      durations[row.scope].push(durationMs);
+    }
+  });
+
+  const average = (values: number[]) => values.length
+    ? Math.round(values.reduce((total, value) => total + value, 0) / values.length)
+    : null;
+  const fullEstimateMs = average(durations.full);
+  const categoryEstimateMs = average(durations.category);
+
+  return {
+    full: {
+      estimateMs: fullEstimateMs,
+      sampleSize: durations.full.length,
+      source: fullEstimateMs ? "scope_history" : "unavailable",
+    },
+    category: categoryEstimateMs
+      ? { estimateMs: categoryEstimateMs, sampleSize: durations.category.length, source: "scope_history" }
+      : fullEstimateMs
+        ? { estimateMs: Math.round(fullEstimateMs / 4), sampleSize: durations.full.length, source: "full_history_ratio" }
+        : { estimateMs: null, sampleSize: 0, source: "unavailable" },
+  };
+}
+
+export function deriveCoolpcCoverage(products: PlatformCoverageProduct[], coolpcListedNames: Set<string>) {
+  const grouped = new Map<string, { sinyaTotal: number; coolpcListed: number }>();
+  for (const product of products) {
+    const category = product.category?.trim() || "未分類";
+    const current = grouped.get(category) ?? { sinyaTotal: 0, coolpcListed: 0 };
+    current.sinyaTotal += 1;
+    if (coolpcListedNames.has(product.name)) current.coolpcListed += 1;
+    grouped.set(category, current);
+  }
+
+  const categories: CoolpcCoverageCategory[] = Array.from(grouped.entries()).map(([category, totals]) => ({
+    category,
+    sinyaTotal: totals.sinyaTotal,
+    coolpcListed: totals.coolpcListed,
+    coolpcUnlisted: totals.sinyaTotal - totals.coolpcListed,
+    coverageRate: totals.sinyaTotal ? totals.coolpcListed / totals.sinyaTotal : 0,
+  })).sort((left, right) => right.sinyaTotal - left.sinyaTotal || left.category.localeCompare(right.category, "zh-TW"));
+
+  const sinyaTotal = products.length;
+  const coolpcListed = categories.reduce((sum, category) => sum + category.coolpcListed, 0);
+  return {
+    sinyaTotal,
+    coolpcListed,
+    coolpcUnlisted: sinyaTotal - coolpcListed,
+    coverageRate: sinyaTotal ? coolpcListed / sinyaTotal : 0,
+    categories,
+  };
+}
+
+async function getLatestCoolpcCoverageSource() {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const [run] = await db.select({ id: comparisonRuns.id, finishedAt: comparisonRuns.finishedAt })
+    .from(comparisonRuns)
+    .where(eq(comparisonRuns.status, "completed"))
+    .orderBy(desc(comparisonRuns.finishedAt), desc(comparisonRuns.id))
+    .limit(1);
+  if (!run) return null;
+
+  const [sinyaProducts, listedMatches] = await Promise.all([
+    db.select({
+      externalId: comparisonProducts.externalId,
+      name: comparisonProducts.name,
+      category: comparisonProducts.category,
+      price: comparisonProducts.price,
+      url: comparisonProducts.url,
+      image: comparisonProducts.image,
+    }).from(comparisonProducts).where(and(
+      eq(comparisonProducts.lastSeenRunId, run.id),
+      eq(comparisonProducts.platform, "sinya"),
+    )),
+    db.select({ sinyaName: comparisonMatches.sinyaName }).from(comparisonMatches).where(and(
+      eq(comparisonMatches.runId, run.id),
+      isNotNull(comparisonMatches.coolpcName),
+      sql`${comparisonMatches.coolpcName} <> ''`,
+    )),
+  ]);
+
+  return {
+    run,
+    sinyaProducts,
+    coolpcListedNames: new Set(listedMatches.map(match => match.sinyaName)),
+  };
+}
+
+/** Reports only names with an accepted CoolPC match, preserving the conservative no-false-positive policy. */
+export async function getCoolpcCoverageSummary() {
+  const source = await getLatestCoolpcCoverageSource();
+  if (!source) return null;
+  return {
+    run: source.run,
+    ...deriveCoolpcCoverage(source.sinyaProducts, source.coolpcListedNames),
+  };
+}
+
+export async function listCoolpcUnlistedSinyaProducts(input: { category?: string; page?: number; pageSize?: number }) {
+  const source = await getLatestCoolpcCoverageSource();
+  if (!source) return null;
+  const category = input.category?.trim();
+  const items = source.sinyaProducts
+    .filter(product => !source.coolpcListedNames.has(product.name))
+    .filter(product => !category || (product.category?.trim() || "未分類") === category)
+    .sort((left, right) => (left.category ?? "未分類").localeCompare(right.category ?? "未分類", "zh-TW") || left.name.localeCompare(right.name, "zh-TW"));
+  const page = Math.max(1, input.page ?? 1);
+  const pageSize = Math.min(100, Math.max(10, input.pageSize ?? 25));
+  return {
+    run: source.run,
+    total: items.length,
+    page,
+    pageSize,
+    totalPages: Math.max(1, Math.ceil(items.length / pageSize)),
+    items: items.slice((page - 1) * pageSize, page * pageSize).map(product => ({
+      externalId: product.externalId,
+      name: product.name,
+      category: product.category?.trim() || "未分類",
+      price: product.price,
+      url: product.url ?? "",
+      image: product.image ?? "",
+    })),
+  };
+}
+
+export function deriveSinyaCoverage(products: PlatformCoverageProduct[], sinyaListedNames: Set<string>) {
+  const grouped = new Map<string, { coolpcTotal: number; sinyaListed: number }>();
+  for (const product of products) {
+    const category = product.category?.trim() || "未分類";
+    const current = grouped.get(category) ?? { coolpcTotal: 0, sinyaListed: 0 };
+    current.coolpcTotal += 1;
+    if (sinyaListedNames.has(product.name)) current.sinyaListed += 1;
+    grouped.set(category, current);
+  }
+  const categories: SinyaCoverageCategory[] = Array.from(grouped.entries()).map(([category, totals]) => ({
+    category,
+    coolpcTotal: totals.coolpcTotal,
+    sinyaListed: totals.sinyaListed,
+    sinyaUnlisted: totals.coolpcTotal - totals.sinyaListed,
+    coverageRate: totals.coolpcTotal ? totals.sinyaListed / totals.coolpcTotal : 0,
+  })).sort((left, right) => right.coolpcTotal - left.coolpcTotal || left.category.localeCompare(right.category, "zh-TW"));
+  const coolpcTotal = products.length;
+  const sinyaListed = categories.reduce((sum, category) => sum + category.sinyaListed, 0);
+  return {
+    coolpcTotal,
+    sinyaListed,
+    sinyaUnlisted: coolpcTotal - sinyaListed,
+    coverageRate: coolpcTotal ? sinyaListed / coolpcTotal : 0,
+    categories,
+  };
+}
+
+async function getLatestSinyaCoverageSource() {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const [run] = await db.select({ id: comparisonRuns.id, finishedAt: comparisonRuns.finishedAt })
+    .from(comparisonRuns)
+    .where(eq(comparisonRuns.status, "completed"))
+    .orderBy(desc(comparisonRuns.finishedAt), desc(comparisonRuns.id))
+    .limit(1);
+  if (!run) return null;
+  const [coolpcProducts, listedMatches] = await Promise.all([
+    db.select({
+      externalId: comparisonProducts.externalId,
+      name: comparisonProducts.name,
+      category: comparisonProducts.category,
+      price: comparisonProducts.price,
+      url: comparisonProducts.url,
+      image: comparisonProducts.image,
+    }).from(comparisonProducts).where(and(
+      eq(comparisonProducts.lastSeenRunId, run.id),
+      eq(comparisonProducts.platform, "coolpc"),
+    )),
+    db.select({ coolpcName: comparisonMatches.coolpcName }).from(comparisonMatches).where(and(
+      eq(comparisonMatches.runId, run.id),
+      isNotNull(comparisonMatches.sinyaName),
+      sql`${comparisonMatches.sinyaName} <> ''`,
+    )),
+  ]);
+  return { run, coolpcProducts, sinyaListedNames: new Set(listedMatches.map(match => match.coolpcName).filter((name): name is string => Boolean(name))) };
+}
+
+/** Reverse conservative coverage: CoolPC products without an accepted Sinya match. */
+export async function getSinyaCoverageSummary() {
+  const source = await getLatestSinyaCoverageSource();
+  if (!source) return null;
+  return { run: source.run, ...deriveSinyaCoverage(source.coolpcProducts, source.sinyaListedNames) };
+}
+
+export async function listSinyaUnlistedCoolpcProducts(input: { category?: string; page?: number; pageSize?: number }) {
+  const source = await getLatestSinyaCoverageSource();
+  if (!source) return null;
+  const category = input.category?.trim();
+  const items = source.coolpcProducts
+    .filter(product => !source.sinyaListedNames.has(product.name))
+    .filter(product => !category || (product.category?.trim() || "未分類") === category)
+    .sort((left, right) => (left.category ?? "未分類").localeCompare(right.category ?? "未分類", "zh-TW") || left.name.localeCompare(right.name, "zh-TW"));
+  const page = Math.max(1, input.page ?? 1);
+  const pageSize = Math.min(100, Math.max(10, input.pageSize ?? 25));
+  return {
+    run: source.run,
+    total: items.length,
+    page,
+    pageSize,
+    totalPages: Math.max(1, Math.ceil(items.length / pageSize)),
+    items: items.slice((page - 1) * pageSize, page * pageSize).map(product => ({
+      externalId: product.externalId,
+      name: product.name,
+      category: product.category?.trim() || "未分類",
+      price: product.price,
+      url: product.url ?? "",
+      image: product.image ?? "",
+    })),
+  };
+}
+
+export async function exportSinyaUnlistedCoolpcProducts(category?: string) {
+  const source = await getLatestSinyaCoverageSource();
+  if (!source) return null;
+  const normalizedCategory = category?.trim();
+  return {
+    run: source.run,
+    items: source.coolpcProducts
+      .filter(product => !source.sinyaListedNames.has(product.name))
+      .filter(product => !normalizedCategory || (product.category?.trim() || "未分類") === normalizedCategory)
+      .sort((left, right) => (left.category ?? "未分類").localeCompare(right.category ?? "未分類", "zh-TW") || left.name.localeCompare(right.name, "zh-TW"))
+      .map(product => ({
+        externalId: product.externalId,
+        name: product.name,
+        category: product.category?.trim() || "未分類",
+        price: product.price,
+        url: product.url ?? "",
+      })),
+  };
+}
+
+export function normalizeRecrawlPresetCategoryNames(categoryNames: string[]) {
+  return Array.from(new Set(categoryNames.map(name => name.trim()).filter(Boolean))).slice(0, 12);
+}
+
+export function parseRecrawlPresetCategoryNames(value: string) {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed) || !parsed.every(item => typeof item === "string")) return [];
+    return normalizeRecrawlPresetCategoryNames(parsed);
+  } catch {
+    return [];
+  }
+}
+
+export function parseRecrawlPresetJobIds(value: string | null) {
+  try {
+    const parsed: unknown = value ? JSON.parse(value) : [];
+    if (!Array.isArray(parsed)) return [];
+    return Array.from(new Set(parsed.filter(item => Number.isInteger(item) && Number(item) > 0).map(Number)));
+  } catch {
+    return [];
+  }
+}
+
+export function normalizeRecrawlPresetOrder(ids: number[]) {
+  return Array.from(new Set(ids.filter(id => Number.isInteger(id) && id > 0)));
+}
+
+export const RECRAWL_PRESET_BACKUP_VERSION = 1;
+export type RecrawlPresetBackupItem = {
+  name: string;
+  categoryNames: string[];
+  pinned: boolean;
+  sortOrder: number;
+};
+
+export type RecrawlPresetBackup = {
+  version: typeof RECRAWL_PRESET_BACKUP_VERSION;
+  exportedAt: string;
+  presets: RecrawlPresetBackupItem[];
+};
+
+export type RecrawlPresetConflictStrategy = "overwrite" | "skip" | "copy";
+export type RecrawlPresetImportDiffKind = "new" | "unchanged" | "conflict";
+export type RecrawlPresetHistoryStatusFilter = "all" | "success" | "failed" | "running";
+export type RecrawlPresetTemplateCollaborationMode = "read_only" | "collaborative";
+
+type ExistingRecrawlPresetForImport = {
+  id: number;
+  name: string;
+  categoryNames: string[];
+  pinned: boolean;
+  sortOrder: number;
+};
+
+export function buildRecrawlPresetImportPreview(backupInput: unknown, existing: ExistingRecrawlPresetForImport[]) {
+  const backup = parseRecrawlPresetBackup(backupInput);
+  if (!backup) throw new Error("備份格式不正確或版本不支援");
+  const existingByName = new Map(existing.map(preset => [preset.name, preset]));
+  const sameCategories = (left: string[], right: string[]) => left.length === right.length && left.every((name, index) => name === right[index]);
+  const items = backup.presets.map(preset => {
+    const current = existingByName.get(preset.name);
+    const kind: RecrawlPresetImportDiffKind = !current
+      ? "new"
+      : sameCategories(preset.categoryNames, current.categoryNames) && preset.pinned === current.pinned && preset.sortOrder === current.sortOrder
+        ? "unchanged"
+        : "conflict";
+    return {
+      name: preset.name,
+      categoryNames: preset.categoryNames,
+      pinned: preset.pinned,
+      sortOrder: preset.sortOrder,
+      kind,
+      existing: current ? { categoryNames: current.categoryNames, pinned: current.pinned, sortOrder: current.sortOrder } : null,
+    };
+  });
+  return {
+    version: backup.version,
+    exportedAt: backup.exportedAt,
+    items,
+    counts: {
+      new: items.filter(item => item.kind === "new").length,
+      unchanged: items.filter(item => item.kind === "unchanged").length,
+      conflict: items.filter(item => item.kind === "conflict").length,
+    },
+  } as const;
+}
+
+export function getRecrawlPresetHistoryStatus(entry: { execution: { total: number; completedCount: number; failedCount: number; pendingCount: number } }): RecrawlPresetHistoryStatusFilter {
+  if (!entry.execution.total) return "all";
+  if (entry.execution.failedCount > 0) return "failed";
+  if (entry.execution.pendingCount > 0) return "running";
+  return entry.execution.completedCount === entry.execution.total ? "success" : "all";
+}
+
+/** Accepts only the small, versioned data envelope emitted by the export endpoint. */
+export function parseRecrawlPresetBackup(value: unknown): RecrawlPresetBackup | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const candidate = value as { version?: unknown; exportedAt?: unknown; presets?: unknown };
+  if (candidate.version !== RECRAWL_PRESET_BACKUP_VERSION || typeof candidate.exportedAt !== "string" || !Array.isArray(candidate.presets)) return null;
+  const seenNames = new Set<string>();
+  const presets: RecrawlPresetBackupItem[] = [];
+  candidate.presets.slice(0, 50).forEach((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return;
+    const input = item as { name?: unknown; categoryNames?: unknown; pinned?: unknown; sortOrder?: unknown };
+    if (typeof input.name !== "string" || !Array.isArray(input.categoryNames) || !input.categoryNames.every(category => typeof category === "string")) return;
+    const name = input.name.trim().slice(0, 64);
+    const categoryNames = normalizeRecrawlPresetCategoryNames(input.categoryNames);
+    if (!name || !categoryNames.length || seenNames.has(name)) return;
+    seenNames.add(name);
+    presets.push({
+      name,
+      categoryNames,
+      pinned: input.pinned === true,
+      sortOrder: typeof input.sortOrder === "number" && Number.isInteger(input.sortOrder) && input.sortOrder >= 0 ? input.sortOrder : index + 1,
+    });
+  });
+  return { version: RECRAWL_PRESET_BACKUP_VERSION, exportedAt: candidate.exportedAt, presets };
+}
+
+export type RecrawlPresetExecutionJob = {
+  id: number;
+  categoryName: string | null;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  startedAt: Date | string | null;
+  finishedAt: Date | string | null;
+  errorMessage: string | null;
+  summary: string | null;
+};
+
+export function deriveRecrawlPresetExecutionSummary(jobs: RecrawlPresetExecutionJob[]) {
+  const completed = jobs.filter(job => job.status === "completed");
+  const failed = jobs.filter(job => job.status === "failed");
+  const terminalCount = completed.length + failed.length;
+  const timestamps = jobs.flatMap(job => [job.startedAt, job.finishedAt]
+    .filter((value): value is Date | string => Boolean(value))
+    .map(value => new Date(value).getTime())
+    .filter(Number.isFinite));
+  const durationMs = timestamps.length >= 2 ? Math.max(...timestamps) - Math.min(...timestamps) : null;
+  const failures = failed.slice(0, 2).map(job => ({
+    categoryName: job.categoryName ?? "未分類",
+    message: job.errorMessage?.trim() || job.summary?.trim() || "未提供錯誤摘要",
+  }));
+  return {
+    total: jobs.length,
+    completedCount: completed.length,
+    failedCount: failed.length,
+    pendingCount: jobs.length - terminalCount,
+    completionRate: terminalCount ? completed.length / terminalCount : null,
+    durationMs: durationMs !== null && durationMs >= 0 ? durationMs : null,
+    failures,
+  };
+}
+
+/** Lists only the signed-in administrator's own reusable category selections. */
+export async function listCoolpcCategoryRecrawlPresets(userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const [rows, estimates] = await Promise.all([
+    db.select().from(coolpcCategoryRecrawlPresets)
+      .where(eq(coolpcCategoryRecrawlPresets.userId, userId))
+      .orderBy(desc(coolpcCategoryRecrawlPresets.pinned), asc(coolpcCategoryRecrawlPresets.sortOrder), desc(coolpcCategoryRecrawlPresets.updatedAt), desc(coolpcCategoryRecrawlPresets.id)),
+    getCrawlerRefreshEstimates(),
+  ]);
+  return rows.map(row => ({
+    id: row.id,
+    name: row.name,
+    categoryNames: parseRecrawlPresetCategoryNames(row.categoryNames),
+    pinned: row.pinned,
+    sortOrder: row.sortOrder,
+    estimateMs: estimates.category.estimateMs ? estimates.category.estimateMs * parseRecrawlPresetCategoryNames(row.categoryNames).length : null,
+    estimateSampleSize: estimates.category.sampleSize,
+    updatedAt: row.updatedAt,
+  }));
+}
+
+/** Exports only user-owned, portable fields; database ids, ownership and runtime history never leave the account. */
+export async function exportCoolpcCategoryRecrawlPresets(userId: number): Promise<RecrawlPresetBackup> {
+  const presets = await listCoolpcCategoryRecrawlPresets(userId);
+  return {
+    version: RECRAWL_PRESET_BACKUP_VERSION,
+    exportedAt: new Date().toISOString(),
+    presets: presets.map(preset => ({
+      name: preset.name,
+      categoryNames: preset.categoryNames,
+      pinned: preset.pinned,
+      sortOrder: preset.sortOrder,
+    })),
+  };
+}
+
+/** Shows the signed-in user's import differences without persisting any change. */
+export async function previewCoolpcCategoryRecrawlPresetImport(userId: number, backupInput: unknown) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const rows = await db.select({
+    id: coolpcCategoryRecrawlPresets.id,
+    name: coolpcCategoryRecrawlPresets.name,
+    categoryNames: coolpcCategoryRecrawlPresets.categoryNames,
+    pinned: coolpcCategoryRecrawlPresets.pinned,
+    sortOrder: coolpcCategoryRecrawlPresets.sortOrder,
+  }).from(coolpcCategoryRecrawlPresets).where(eq(coolpcCategoryRecrawlPresets.userId, userId));
+  return buildRecrawlPresetImportPreview(backupInput, rows.map(row => ({ ...row, categoryNames: parseRecrawlPresetCategoryNames(row.categoryNames) })));
+}
+
+function nextImportedPresetName(baseName: string, existingNames: Set<string>) {
+  const suffix = "（匯入）";
+  const stem = baseName.slice(0, Math.max(1, 64 - suffix.length));
+  let candidate = `${stem}${suffix}`;
+  let index = 2;
+  while (existingNames.has(candidate)) {
+    const numberedSuffix = `（匯入 ${index}）`;
+    candidate = `${baseName.slice(0, Math.max(1, 64 - numberedSuffix.length))}${numberedSuffix}`;
+    index += 1;
+  }
+  return candidate;
+}
+
+/** Imports by name into the caller's account only, with an explicit strategy for each same-name conflict. */
+export async function importCoolpcCategoryRecrawlPresets(userId: number, backupInput: unknown, conflictStrategies: Record<string, RecrawlPresetConflictStrategy> = {}) {
+  const backup = parseRecrawlPresetBackup(backupInput);
+  if (!backup) throw new Error("備份格式不正確或版本不支援");
+  if (!backup.presets.length) throw new Error("備份中沒有可匯入的常用清單");
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const existing = await db.select({
+    id: coolpcCategoryRecrawlPresets.id,
+    name: coolpcCategoryRecrawlPresets.name,
+    sortOrder: coolpcCategoryRecrawlPresets.sortOrder,
+  }).from(coolpcCategoryRecrawlPresets).where(eq(coolpcCategoryRecrawlPresets.userId, userId));
+  const existingByName = new Map(existing.map(preset => [preset.name, preset]));
+  let nextSortOrder = Math.max(0, ...existing.map(preset => preset.sortOrder)) + 1;
+  const existingNames = new Set(existing.map(preset => preset.name));
+  let created = 0;
+  let updated = 0;
+  let skipped = 0;
+  const now = new Date();
+  const orderedPresets = [...backup.presets].sort((left, right) => Number(right.pinned) - Number(left.pinned) || left.sortOrder - right.sortOrder || left.name.localeCompare(right.name, "zh-TW"));
+  for (const preset of orderedPresets) {
+    const current = existingByName.get(preset.name);
+    if (current) {
+      const strategy = conflictStrategies[preset.name] ?? "overwrite";
+      if (strategy === "skip") {
+        skipped += 1;
+        continue;
+      }
+      if (strategy === "copy") {
+        const name = nextImportedPresetName(preset.name, existingNames);
+        await db.insert(coolpcCategoryRecrawlPresets).values({
+          userId,
+          name,
+          categoryNames: JSON.stringify(preset.categoryNames),
+          pinned: preset.pinned,
+          sortOrder: nextSortOrder++,
+          updatedAt: now,
+        });
+        existingNames.add(name);
+        created += 1;
+        continue;
+      }
+      await db.update(coolpcCategoryRecrawlPresets).set({
+        categoryNames: JSON.stringify(preset.categoryNames),
+        pinned: preset.pinned,
+        updatedAt: now,
+      }).where(and(eq(coolpcCategoryRecrawlPresets.id, current.id), eq(coolpcCategoryRecrawlPresets.userId, userId)));
+      updated += 1;
+    } else {
+      await db.insert(coolpcCategoryRecrawlPresets).values({
+        userId,
+        name: preset.name,
+        categoryNames: JSON.stringify(preset.categoryNames),
+        pinned: preset.pinned,
+        sortOrder: nextSortOrder++,
+        updatedAt: now,
+      });
+      existingNames.add(preset.name);
+      created += 1;
+    }
+  }
+  return { created, updated, skipped, total: backup.presets.length } as const;
+}
+
+/** Saving the same name updates that personal preset instead of producing ambiguous duplicates. */
+export async function saveCoolpcCategoryRecrawlPreset(input: CoolpcCategoryRecrawlPresetInput) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const name = input.name.trim();
+  const categoryNames = normalizeRecrawlPresetCategoryNames(input.categoryNames);
+  if (!name) throw new Error("請輸入清單名稱");
+  if (!categoryNames.length) throw new Error("請至少選擇一個分類");
+  const now = new Date();
+  const categoryNamesJson = JSON.stringify(categoryNames);
+  const [lastPreset] = await db.select({ sortOrder: coolpcCategoryRecrawlPresets.sortOrder })
+    .from(coolpcCategoryRecrawlPresets)
+    .where(eq(coolpcCategoryRecrawlPresets.userId, input.userId))
+    .orderBy(desc(coolpcCategoryRecrawlPresets.sortOrder))
+    .limit(1);
+  await db.insert(coolpcCategoryRecrawlPresets).values({
+    userId: input.userId,
+    name,
+    categoryNames: categoryNamesJson,
+    sortOrder: (lastPreset?.sortOrder ?? 0) + 1,
+    updatedAt: now,
+  }).onDuplicateKeyUpdate({
+    set: { categoryNames: categoryNamesJson, updatedAt: now },
+  });
+  return { success: true, name, categoryNames } as const;
+}
+
+/** The user id condition prevents a preset identifier alone from deleting another account's data. */
+export async function deleteCoolpcCategoryRecrawlPreset(userId: number, id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  await db.delete(coolpcCategoryRecrawlPresets).where(and(
+    eq(coolpcCategoryRecrawlPresets.id, id),
+    eq(coolpcCategoryRecrawlPresets.userId, userId),
+  ));
+  return { success: true } as const;
+}
+
+export async function getCoolpcCategoryRecrawlPresetForUser(userId: number, id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const [preset] = await db.select().from(coolpcCategoryRecrawlPresets).where(and(
+    eq(coolpcCategoryRecrawlPresets.id, id),
+    eq(coolpcCategoryRecrawlPresets.userId, userId),
+  )).limit(1);
+  return preset ?? null;
+}
+
+export async function setCoolpcCategoryRecrawlPresetPinned(userId: number, id: number, pinned: boolean) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  await db.update(coolpcCategoryRecrawlPresets).set({ pinned }).where(and(
+    eq(coolpcCategoryRecrawlPresets.id, id),
+    eq(coolpcCategoryRecrawlPresets.userId, userId),
+  ));
+  return { success: true } as const;
+}
+
+export async function reorderCoolpcCategoryRecrawlPresets(userId: number, orderedIds: number[]) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const normalizedIds = normalizeRecrawlPresetOrder(orderedIds);
+  if (!normalizedIds.length) return { success: true } as const;
+  const owned = await db.select({ id: coolpcCategoryRecrawlPresets.id }).from(coolpcCategoryRecrawlPresets)
+    .where(and(eq(coolpcCategoryRecrawlPresets.userId, userId), inArray(coolpcCategoryRecrawlPresets.id, normalizedIds)));
+  if (owned.length !== normalizedIds.length) throw new Error("常用清單不存在或不屬於目前帳戶");
+  await Promise.all(normalizedIds.map((id, index) => db.update(coolpcCategoryRecrawlPresets).set({ sortOrder: index + 1 }).where(and(
+    eq(coolpcCategoryRecrawlPresets.id, id),
+    eq(coolpcCategoryRecrawlPresets.userId, userId),
+  ))));
+  return { success: true } as const;
+}
+
+export async function recordCoolpcCategoryRecrawlPresetHistory(input: CoolpcCategoryRecrawlPresetHistoryInput) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const categoryNames = normalizeRecrawlPresetCategoryNames(input.categoryNames);
+  if (!categoryNames.length) return null;
+  const jobIds = Array.from(new Set((input.jobIds ?? []).filter(id => Number.isInteger(id) && id > 0)));
+  await db.insert(coolpcCategoryRecrawlPresetHistory).values({
+    userId: input.userId,
+    presetId: input.presetId,
+    action: input.action,
+    categoryNames: JSON.stringify(categoryNames),
+    jobIds: jobIds.length ? JSON.stringify(jobIds) : null,
+  });
+  return { success: true } as const;
+}
+
+export async function listCoolpcCategoryRecrawlPresetHistory(userId: number, limit = 12, statusFilter: RecrawlPresetHistoryStatusFilter = "all") {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const rows = await db.select().from(coolpcCategoryRecrawlPresetHistory)
+    .where(eq(coolpcCategoryRecrawlPresetHistory.userId, userId))
+    .orderBy(desc(coolpcCategoryRecrawlPresetHistory.createdAt), desc(coolpcCategoryRecrawlPresetHistory.id))
+    .limit(30);
+  const presetIds = Array.from(new Set(rows.map(row => row.presetId).filter((id): id is number => typeof id === "number")));
+  const jobIds = Array.from(new Set(rows.flatMap(row => parseRecrawlPresetJobIds(row.jobIds))));
+  const [presets, jobs] = await Promise.all([
+    presetIds.length ? db.select({ id: coolpcCategoryRecrawlPresets.id, name: coolpcCategoryRecrawlPresets.name }).from(coolpcCategoryRecrawlPresets)
+      .where(and(eq(coolpcCategoryRecrawlPresets.userId, userId), inArray(coolpcCategoryRecrawlPresets.id, presetIds))) : Promise.resolve([]),
+    jobIds.length ? db.select({
+      id: crawlerJobs.id,
+      categoryName: crawlerJobs.categoryName,
+      status: crawlerJobs.status,
+      startedAt: crawlerJobs.startedAt,
+      finishedAt: crawlerJobs.finishedAt,
+      errorMessage: crawlerJobs.errorMessage,
+      summary: crawlerJobs.summary,
+    })
+      .from(crawlerJobs).where(inArray(crawlerJobs.id, jobIds)) : Promise.resolve([]),
+  ]);
+  const presetNames = new Map(presets.map(preset => [preset.id, preset.name]));
+  const jobsById = new Map(jobs.map(job => [job.id, job]));
+  const entries = rows.map(row => ({
+    id: row.id,
+    presetId: row.presetId,
+    presetName: row.presetId ? presetNames.get(row.presetId) ?? "已刪除清單" : "手動選取",
+    action: row.action,
+    categoryNames: parseRecrawlPresetCategoryNames(row.categoryNames),
+    createdAt: row.createdAt,
+    jobs: parseRecrawlPresetJobIds(row.jobIds).flatMap(id => {
+      const job = jobsById.get(id);
+      return job ? [{
+        id: job.id,
+        categoryName: job.categoryName,
+        status: job.status,
+        startedAt: job.startedAt,
+        finishedAt: job.finishedAt,
+        errorMessage: job.errorMessage,
+        summary: job.summary,
+      }] : [];
+    }),
+  })).map(entry => ({ ...entry, execution: deriveRecrawlPresetExecutionSummary(entry.jobs) }));
+  return entries.filter(entry => statusFilter === "all" || getRecrawlPresetHistoryStatus(entry) === statusFilter)
+    .slice(0, Math.min(30, Math.max(1, limit)));
+}
+
+function createRecrawlPresetShareToken() {
+  return randomBytes(24).toString("base64url");
+}
+
+async function getRecrawlPresetTemplateSource(token: string) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const [template] = await db.select().from(coolpcCategoryRecrawlPresetTemplates)
+    .where(and(eq(coolpcCategoryRecrawlPresetTemplates.shareToken, token), eq(coolpcCategoryRecrawlPresetTemplates.active, true)))
+    .limit(1);
+  if (!template) return null;
+  const [preset] = await db.select().from(coolpcCategoryRecrawlPresets)
+    .where(and(eq(coolpcCategoryRecrawlPresets.id, template.presetId), eq(coolpcCategoryRecrawlPresets.userId, template.userId)))
+    .limit(1);
+  return preset ? { template, preset } : null;
+}
+
+async function getRecrawlPresetTemplateForOwner(userId: number, templateId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const [template] = await db.select().from(coolpcCategoryRecrawlPresetTemplates).where(and(
+    eq(coolpcCategoryRecrawlPresetTemplates.id, templateId),
+    eq(coolpcCategoryRecrawlPresetTemplates.userId, userId),
+  )).limit(1);
+  if (!template) throw new Error("找不到可管理的團隊範本");
+  return template;
+}
+
+export function canMaintainRecrawlPresetTemplate(
+  collaborationMode: RecrawlPresetTemplateCollaborationMode,
+  isOwner: boolean,
+  isCollaborator: boolean,
+) {
+  return isOwner || (collaborationMode === "collaborative" && isCollaborator);
+}
+
+export function canManageRecrawlPresetTemplateCollaborators(isOwner: boolean) {
+  return isOwner;
+}
+
+export function deriveRecrawlPresetTemplateEstimate(categoryCount: number, categoryEstimateMs: number | null, estimateSampleSize: number) {
+  return {
+    estimateMs: categoryEstimateMs && categoryCount > 0 ? categoryEstimateMs * categoryCount : null,
+    estimateSampleSize,
+  };
+}
+
+async function getRecrawlPresetTemplateEstimate(categoryNames: string[]) {
+  const estimates = await getCrawlerRefreshEstimates();
+  return deriveRecrawlPresetTemplateEstimate(categoryNames.length, estimates.category.estimateMs, estimates.category.sampleSize);
+}
+
+/** Lists safely shareable template metadata, plus owner information needed for collaboration. */
+export async function listCoolpcCategoryRecrawlPresetTemplates(userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const templates = await db.select().from(coolpcCategoryRecrawlPresetTemplates)
+    .where(eq(coolpcCategoryRecrawlPresetTemplates.active, true))
+    .orderBy(desc(coolpcCategoryRecrawlPresetTemplates.updatedAt), desc(coolpcCategoryRecrawlPresetTemplates.id));
+  const sourcePresetIds = Array.from(new Set(templates.map(template => template.presetId)));
+  const ownerIds = Array.from(new Set(templates.map(template => template.userId)));
+  const [presets, owners, collaborators, estimates] = await Promise.all([
+    sourcePresetIds.length ? db.select().from(coolpcCategoryRecrawlPresets)
+      .where(inArray(coolpcCategoryRecrawlPresets.id, sourcePresetIds)) : Promise.resolve([]),
+    ownerIds.length ? db.select({ id: users.id, name: users.name, email: users.email }).from(users)
+      .where(inArray(users.id, ownerIds)) : Promise.resolve([]),
+    templates.length ? db.select({ templateId: coolpcCategoryRecrawlPresetTemplateCollaborators.templateId, userId: coolpcCategoryRecrawlPresetTemplateCollaborators.userId, name: users.name, email: users.email })
+      .from(coolpcCategoryRecrawlPresetTemplateCollaborators)
+      .innerJoin(users, eq(coolpcCategoryRecrawlPresetTemplateCollaborators.userId, users.id))
+      .where(inArray(coolpcCategoryRecrawlPresetTemplateCollaborators.templateId, templates.map(template => template.id))) : Promise.resolve([]),
+    getCrawlerRefreshEstimates(),
+  ]);
+  const presetById = new Map(presets.map(preset => [preset.id, preset]));
+  const ownerById = new Map(owners.map(owner => [owner.id, owner]));
+  const collaboratorsByTemplate = new Map<number, Array<{ userId: number; name: string | null; email: string | null }>>();
+  collaborators.forEach(collaborator => {
+    const current = collaboratorsByTemplate.get(collaborator.templateId) ?? [];
+    current.push(collaborator);
+    collaboratorsByTemplate.set(collaborator.templateId, current);
+  });
+  return templates.flatMap(template => {
+    const preset = presetById.get(template.presetId);
+    if (!preset) return [];
+    const categoryNames = parseRecrawlPresetCategoryNames(preset.categoryNames);
+    const owner = ownerById.get(template.userId);
+    const templateCollaborators = collaboratorsByTemplate.get(template.id) ?? [];
+    const updatedAt = new Date(template.updatedAt).getTime() >= new Date(preset.updatedAt).getTime() ? template.updatedAt : preset.updatedAt;
+    return [{
+      id: template.id,
+      token: template.shareToken,
+      sourcePresetId: template.presetId,
+      canRevoke: template.userId === userId,
+      isOwner: template.userId === userId,
+      canCollaborate: template.collaborationMode === "collaborative" && templateCollaborators.some(collaborator => collaborator.userId === userId),
+      name: preset.name,
+      categoryNames,
+      pinned: preset.pinned,
+      ownerName: owner?.name?.trim() || owner?.email || "未知擁有者",
+      collaborationMode: template.collaborationMode,
+      collaborators: template.userId === userId ? templateCollaborators : [],
+      ...deriveRecrawlPresetTemplateEstimate(categoryNames.length, estimates.category.estimateMs, estimates.category.sampleSize),
+      updatedAt,
+    }];
+  });
+}
+
+/** Reuses one template per source preset and rotates a revoked link when publishing it again. */
+export async function publishCoolpcCategoryRecrawlPresetTemplate(userId: number, presetId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const preset = await getCoolpcCategoryRecrawlPresetForUser(userId, presetId);
+  if (!preset) throw new Error("找不到可分享的常用清單");
+  const [existing] = await db.select().from(coolpcCategoryRecrawlPresetTemplates)
+    .where(eq(coolpcCategoryRecrawlPresetTemplates.presetId, presetId)).limit(1);
+  if (existing?.active) return { token: existing.shareToken, presetName: preset.name, created: false } as const;
+  const token = createRecrawlPresetShareToken();
+  if (existing) {
+    await db.update(coolpcCategoryRecrawlPresetTemplates).set({ shareToken: token, active: true, updatedAt: new Date() })
+      .where(and(eq(coolpcCategoryRecrawlPresetTemplates.id, existing.id), eq(coolpcCategoryRecrawlPresetTemplates.userId, userId)));
+  } else {
+    await db.insert(coolpcCategoryRecrawlPresetTemplates).values({ userId, presetId, shareToken: token, active: true });
+  }
+  return { token, presetName: preset.name, created: true } as const;
+}
+
+export async function revokeCoolpcCategoryRecrawlPresetTemplate(userId: number, templateId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  await db.update(coolpcCategoryRecrawlPresetTemplates).set({ active: false, updatedAt: new Date() })
+    .where(and(eq(coolpcCategoryRecrawlPresetTemplates.id, templateId), eq(coolpcCategoryRecrawlPresetTemplates.userId, userId)));
+  return { success: true } as const;
+}
+
+export async function setCoolpcCategoryRecrawlPresetTemplateCollaborationMode(
+  userId: number,
+  templateId: number,
+  collaborationMode: RecrawlPresetTemplateCollaborationMode,
+) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const template = await getRecrawlPresetTemplateForOwner(userId, templateId);
+  if (!canManageRecrawlPresetTemplateCollaborators(template.userId === userId)) throw new Error("只有範本擁有者可以變更協作模式");
+  await db.update(coolpcCategoryRecrawlPresetTemplates).set({ collaborationMode, updatedAt: new Date() }).where(and(
+    eq(coolpcCategoryRecrawlPresetTemplates.id, templateId),
+    eq(coolpcCategoryRecrawlPresetTemplates.userId, userId),
+  ));
+  return { success: true, collaborationMode } as const;
+}
+
+export async function addCoolpcCategoryRecrawlPresetTemplateCollaborator(userId: number, templateId: number, email: string) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const template = await getRecrawlPresetTemplateForOwner(userId, templateId);
+  if (!canManageRecrawlPresetTemplateCollaborators(template.userId === userId)) throw new Error("只有範本擁有者可以管理協作者");
+  const normalizedEmail = email.trim().toLowerCase();
+  const [collaborator] = await db.select({ id: users.id, name: users.name, email: users.email }).from(users)
+    .where(eq(users.email, normalizedEmail)).limit(1);
+  if (!collaborator) throw new Error("找不到此電子郵件對應的已註冊使用者");
+  if (collaborator.id === template.userId) throw new Error("範本擁有者不需要重複加入協作者");
+  await db.insert(coolpcCategoryRecrawlPresetTemplateCollaborators).values({ templateId, userId: collaborator.id }).onDuplicateKeyUpdate({
+    set: { templateId },
+  });
+  return { id: collaborator.id, name: collaborator.name, email: collaborator.email } as const;
+}
+
+export async function removeCoolpcCategoryRecrawlPresetTemplateCollaborator(userId: number, templateId: number, collaboratorUserId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const template = await getRecrawlPresetTemplateForOwner(userId, templateId);
+  if (!canManageRecrawlPresetTemplateCollaborators(template.userId === userId)) throw new Error("只有範本擁有者可以管理協作者");
+  await db.delete(coolpcCategoryRecrawlPresetTemplateCollaborators).where(and(
+    eq(coolpcCategoryRecrawlPresetTemplateCollaborators.templateId, templateId),
+    eq(coolpcCategoryRecrawlPresetTemplateCollaborators.userId, collaboratorUserId),
+  ));
+  return { success: true } as const;
+}
+
+export async function updateCoolpcCategoryRecrawlPresetTemplateCategories(userId: number, templateId: number, categoryNamesInput: string[]) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const categoryNames = normalizeRecrawlPresetCategoryNames(categoryNamesInput);
+  if (!categoryNames.length) throw new Error("請至少選擇一個分類");
+  const [template] = await db.select().from(coolpcCategoryRecrawlPresetTemplates).where(and(
+    eq(coolpcCategoryRecrawlPresetTemplates.id, templateId),
+    eq(coolpcCategoryRecrawlPresetTemplates.active, true),
+  )).limit(1);
+  if (!template) throw new Error("找不到有效的團隊範本");
+  const isOwner = template.userId === userId;
+  const [collaboration] = isOwner ? [null] : await db.select({ id: coolpcCategoryRecrawlPresetTemplateCollaborators.id }).from(coolpcCategoryRecrawlPresetTemplateCollaborators)
+    .where(and(
+      eq(coolpcCategoryRecrawlPresetTemplateCollaborators.templateId, templateId),
+      eq(coolpcCategoryRecrawlPresetTemplateCollaborators.userId, userId),
+    )).limit(1);
+  if (!canMaintainRecrawlPresetTemplate(template.collaborationMode, isOwner, Boolean(collaboration))) throw new Error("此團隊範本為只讀，或你沒有共同維護權限");
+  await db.update(coolpcCategoryRecrawlPresets).set({ categoryNames: JSON.stringify(categoryNames), updatedAt: new Date() }).where(and(
+    eq(coolpcCategoryRecrawlPresets.id, template.presetId),
+    eq(coolpcCategoryRecrawlPresets.userId, template.userId),
+  ));
+  await db.update(coolpcCategoryRecrawlPresetTemplates).set({ updatedAt: new Date() }).where(eq(coolpcCategoryRecrawlPresetTemplates.id, templateId));
+  return { success: true, categoryNames } as const;
+}
+
+export async function getCoolpcCategoryRecrawlPresetTemplateByToken(token: string) {
+  const source = await getRecrawlPresetTemplateSource(token);
+  if (!source) return null;
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const categoryNames = parseRecrawlPresetCategoryNames(source.preset.categoryNames);
+  const [[owner], estimate] = await Promise.all([
+    db.select({ name: users.name, email: users.email }).from(users).where(eq(users.id, source.template.userId)).limit(1),
+    getRecrawlPresetTemplateEstimate(categoryNames),
+  ]);
+  const updatedAt = new Date(source.template.updatedAt).getTime() >= new Date(source.preset.updatedAt).getTime()
+    ? source.template.updatedAt
+    : source.preset.updatedAt;
+  return {
+    name: source.preset.name,
+    categoryNames,
+    pinned: source.preset.pinned,
+    ownerName: owner?.name?.trim() || owner?.email || "未知擁有者",
+    collaborationMode: source.template.collaborationMode,
+    estimateMs: estimate.estimateMs,
+    estimateSampleSize: estimate.estimateSampleSize,
+    updatedAt,
+  };
+}
+
+/** Copies an active team template into the caller's account without linking later edits or history. */
+export async function copyCoolpcCategoryRecrawlPresetTemplate(userId: number, token: string) {
+  const source = await getRecrawlPresetTemplateSource(token);
+  if (!source) throw new Error("分享連結已撤銷、失效或不存在");
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const existing = await db.select({ name: coolpcCategoryRecrawlPresets.name, sortOrder: coolpcCategoryRecrawlPresets.sortOrder })
+    .from(coolpcCategoryRecrawlPresets).where(eq(coolpcCategoryRecrawlPresets.userId, userId));
+  const name = nextImportedPresetName(source.preset.name, new Set(existing.map(preset => preset.name)));
+  const sortOrder = Math.max(0, ...existing.map(preset => preset.sortOrder)) + 1;
+  await db.insert(coolpcCategoryRecrawlPresets).values({
+    userId,
+    name,
+    categoryNames: source.preset.categoryNames,
+    pinned: false,
+    sortOrder,
+  });
+  return { name, categoryNames: parseRecrawlPresetCategoryNames(source.preset.categoryNames) } as const;
+}
+
+export async function applyCoolpcCategoryRecrawlPreset(userId: number, id: number) {
+  const preset = await getCoolpcCategoryRecrawlPresetForUser(userId, id);
+  if (!preset) throw new Error("找不到可套用的常用清單");
+  const categoryNames = parseRecrawlPresetCategoryNames(preset.categoryNames);
+  await recordCoolpcCategoryRecrawlPresetHistory({ userId, presetId: preset.id, action: "applied", categoryNames });
+  return { id: preset.id, name: preset.name, categoryNames };
+}
+
+export async function listCoolpcCategoryRecrawlReminders(userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const [reminders, summary, estimates, recentCategoryJobs] = await Promise.all([
+    db.select().from(coolpcCategoryRecrawlReminders).where(and(
+      eq(coolpcCategoryRecrawlReminders.userId, userId),
+      eq(coolpcCategoryRecrawlReminders.active, true),
+    )).orderBy(desc(coolpcCategoryRecrawlReminders.updatedAt)),
+    getSinyaCoverageSummary(),
+    getCrawlerRefreshEstimates(),
+    db.select({
+      categoryName: crawlerJobs.categoryName,
+      status: crawlerJobs.status,
+      startedAt: crawlerJobs.startedAt,
+      finishedAt: crawlerJobs.finishedAt,
+    }).from(crawlerJobs).where(and(
+      eq(crawlerJobs.scope, "category"),
+      isNotNull(crawlerJobs.categoryName),
+    )).orderBy(desc(crawlerJobs.requestedAt), desc(crawlerJobs.id)).limit(200),
+  ]);
+  const categories = new Map(summary?.categories.map(category => [category.category, category]) ?? []);
+  const latestJobs = new Map<string, typeof recentCategoryJobs[number]>();
+  recentCategoryJobs.forEach(job => {
+    if (job.categoryName && !latestJobs.has(job.categoryName)) latestJobs.set(job.categoryName, job);
+  });
+  return reminders.map(reminder => {
+    const current = categories.get(reminder.categoryName);
+    const currentRunId = summary?.run.id ?? null;
+    const hasGap = (current?.sinyaUnlisted ?? 0) > 0;
+    const latestJob = latestJobs.get(reminder.categoryName) ?? null;
+    const durationMs = latestJob?.startedAt && latestJob.finishedAt
+      ? Math.max(0, new Date(latestJob.finishedAt).getTime() - new Date(latestJob.startedAt).getTime())
+      : null;
+    return {
+      id: reminder.id,
+      categoryName: reminder.categoryName,
+      lastNotifiedRunId: reminder.lastNotifiedRunId,
+      currentRunId,
+      sinyaUnlisted: current?.sinyaUnlisted ?? 0,
+      isDue: Boolean(hasGap && currentRunId && (!reminder.lastNotifiedRunId || currentRunId > reminder.lastNotifiedRunId)),
+      estimateMs: estimates.category.estimateMs,
+      estimateSampleSize: estimates.category.sampleSize,
+      latestJob: latestJob ? {
+        status: latestJob.status,
+        startedAt: latestJob.startedAt,
+        finishedAt: latestJob.finishedAt,
+        durationMs,
+      } : null,
+      updatedAt: reminder.updatedAt,
+    };
+  });
+}
+
+export async function saveCoolpcCategoryRecrawlReminder(input: CoolpcRecrawlReminderInput) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const summary = await getSinyaCoverageSummary();
+  await db.insert(coolpcCategoryRecrawlReminders).values({
+    userId: input.userId,
+    categoryName: input.categoryName,
+    active: true,
+    lastNotifiedRunId: summary?.run.id ?? null,
+  }).onDuplicateKeyUpdate({ set: {
+    active: true,
+    lastNotifiedRunId: summary?.run.id ?? null,
+  } });
+  return { success: true } as const;
+}
+
+export async function setCoolpcCategoryRecrawlReminderActive(userId: number, id: number, active: boolean) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  await db.update(coolpcCategoryRecrawlReminders).set({ active }).where(and(
+    eq(coolpcCategoryRecrawlReminders.id, id),
+    eq(coolpcCategoryRecrawlReminders.userId, userId),
+  ));
+  return { success: true } as const;
+}
+
+export async function acknowledgeCoolpcCategoryRecrawlReminder(userId: number, id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const summary = await getSinyaCoverageSummary();
+  await db.update(coolpcCategoryRecrawlReminders).set({ lastNotifiedRunId: summary?.run.id ?? null }).where(and(
+    eq(coolpcCategoryRecrawlReminders.id, id),
+    eq(coolpcCategoryRecrawlReminders.userId, userId),
+  ));
+  return { success: true } as const;
+}
+
+/** Queue a crawler task for the persistent cloud worker without stacking full refreshes. */
+export async function enqueueCrawlerJob(input: CrawlerJobInput): Promise<EnqueueCrawlerJobResult> {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+
+  // A full four-platform job is costly and can take a while to complete. The
+  // homepage update control may be clicked repeatedly, so reuse an in-flight
+  // full refresh instead of accumulating identical work in the worker queue.
+  if (input.scope === "full") {
+    const [activeJob] = await db.select({ id: crawlerJobs.id, status: crawlerJobs.status })
+      .from(crawlerJobs)
+      .where(and(
+        eq(crawlerJobs.scope, "full"),
+        inArray(crawlerJobs.status, ["queued", "running"]),
+      ))
+      .orderBy(desc(crawlerJobs.requestedAt), desc(crawlerJobs.id))
+      .limit(1);
+
+    if (activeJob) {
+      return { id: activeJob.id, created: false, status: activeJob.status };
+    }
+  }
+
   const result = await db.insert(crawlerJobs).values({
     scope: input.scope,
     trigger: input.trigger,
@@ -564,16 +1731,139 @@ export async function enqueueCrawlerJob(input: CrawlerJobInput) {
     categoryName: input.categoryName ?? null,
     requestedByOpenId: input.requestedByOpenId ?? null,
   });
-  return Number(result[0]?.insertId ?? 0);
+  return { id: Number(result[0]?.insertId ?? 0), created: true, status: "queued" };
+}
+
+export function partitionCategoryRecrawlNames(categoryNames: string[], activeCategoryNames: ReadonlySet<string>) {
+  const requestedCategoryNames = Array.from(new Set(categoryNames.map(name => name.trim()).filter(Boolean))).slice(0, 12);
+  return {
+    requestedCategoryNames,
+    createdCategoryNames: requestedCategoryNames.filter(name => !activeCategoryNames.has(name)),
+    existingCategoryNames: requestedCategoryNames.filter(name => activeCategoryNames.has(name)),
+  };
+}
+
+export function createCategoryRecrawlJobValues(categoryNames: string[], requestedByOpenId?: string | null) {
+  return categoryNames.map(categoryName => ({
+    scope: "category" as const,
+    trigger: "manual" as const,
+    status: "queued" as const,
+    categoryName,
+    requestedByOpenId: requestedByOpenId ?? null,
+  }));
+}
+
+export function collectExistingCategoryJobIds(
+  activeJobs: Array<{ id: number | string; categoryName: string | null }>,
+  requestedCategoryNames: string[],
+) {
+  const requested = new Set(requestedCategoryNames);
+  return activeJobs
+    .filter(job => job.categoryName !== null && requested.has(job.categoryName))
+    .map(job => Number(job.id))
+    .filter(id => Number.isInteger(id) && id > 0);
+}
+
+/** Queue several distinct category refreshes without letting identical active jobs pile up. */
+export async function enqueueCrawlerCategoryJobs(input: { categoryNames: string[]; requestedByOpenId?: string | null }): Promise<EnqueueCrawlerCategoryJobsResult> {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const normalized = partitionCategoryRecrawlNames(input.categoryNames, new Set());
+  if (!normalized.requestedCategoryNames.length) throw new Error("請至少選擇一個分類");
+
+  const activeJobs = await db.select({ id: crawlerJobs.id, categoryName: crawlerJobs.categoryName }).from(crawlerJobs)
+    .where(and(
+      eq(crawlerJobs.scope, "category"),
+      inArray(crawlerJobs.status, ["queued", "running"]),
+      inArray(crawlerJobs.categoryName, normalized.requestedCategoryNames),
+    ));
+  const activeNames = new Set(activeJobs.map(job => job.categoryName).filter((name): name is string => Boolean(name)));
+  const existingJobIds = collectExistingCategoryJobIds(activeJobs, normalized.requestedCategoryNames);
+  const partitioned = partitionCategoryRecrawlNames(normalized.requestedCategoryNames, activeNames);
+  const { createdCategoryNames } = partitioned;
+  let createdJobIds: number[] = [];
+  if (createdCategoryNames.length) {
+    const insertResults = await Promise.all(createCategoryRecrawlJobValues(createdCategoryNames, input.requestedByOpenId)
+      .map(values => db.insert(crawlerJobs).values(values)));
+    createdJobIds = insertResults.map(result => Number(result[0]?.insertId ?? 0)).filter(id => id > 0);
+  }
+  return {
+    requestedCount: partitioned.requestedCategoryNames.length,
+    createdCategoryNames,
+    existingCategoryNames: partitioned.existingCategoryNames,
+    createdJobIds,
+    existingJobIds,
+  };
+}
+
+/** Derives a compact trend series from terminal category jobs, with a rolling five-job success rate. */
+export function deriveCategoryRecrawlAnalytics(rows: CategoryRecrawlMetricInput[]): CategoryRecrawlAnalytics {
+  const terminalRows = rows.filter(row => (row.status === "completed" || row.status === "failed") && row.categoryName && row.startedAt && row.finishedAt)
+    .map(row => ({ ...row, startedMs: new Date(row.startedAt as Date | string).getTime(), finishedMs: new Date(row.finishedAt as Date | string).getTime() }))
+    .filter(row => Number.isFinite(row.startedMs) && Number.isFinite(row.finishedMs) && row.finishedMs >= row.startedMs)
+    .sort((left, right) => left.finishedMs - right.finishedMs)
+    .slice(-24);
+  const completedCount = terminalRows.filter(row => row.status === "completed").length;
+  const failedCount = terminalRows.length - completedCount;
+  const averageDurationMs = terminalRows.length
+    ? Math.round(terminalRows.reduce((total, row) => total + row.finishedMs - row.startedMs, 0) / terminalRows.length)
+    : null;
+
+  return {
+    sampleSize: terminalRows.length,
+    completedCount,
+    failedCount,
+    successRate: terminalRows.length ? completedCount / terminalRows.length : null,
+    averageDurationMs,
+    points: terminalRows.map((row, index) => {
+      const window = terminalRows.slice(Math.max(0, index - 4), index + 1);
+      const windowCompleted = window.filter(entry => entry.status === "completed").length;
+      return {
+        id: row.id,
+        categoryName: row.categoryName ?? "未分類",
+        finishedAt: row.finishedAt as Date | string,
+        durationMinutes: Math.round(((row.finishedMs - row.startedMs) / 60_000) * 10) / 10,
+        rollingSuccessRate: Math.round((windowCompleted / window.length) * 1000) / 10,
+        succeeded: row.status === "completed",
+      };
+    }),
+  };
+}
+
+/** Category-only metrics stay separate from full catalog timing, preventing skewed manual-recrawl reports. */
+export async function getCategoryRecrawlAnalytics(limit = 24) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const rows = await db.select({
+    id: crawlerJobs.id,
+    categoryName: crawlerJobs.categoryName,
+    status: crawlerJobs.status,
+    startedAt: crawlerJobs.startedAt,
+    finishedAt: crawlerJobs.finishedAt,
+  }).from(crawlerJobs).where(and(
+    eq(crawlerJobs.scope, "category"),
+    inArray(crawlerJobs.status, ["completed", "failed"]),
+  )).orderBy(desc(crawlerJobs.finishedAt), desc(crawlerJobs.id)).limit(Math.min(48, Math.max(1, limit)));
+  return deriveCategoryRecrawlAnalytics(rows);
 }
 
 /** Recent crawler work is intentionally limited to keep the monitor page fast. */
 export async function listCrawlerJobs(limit = 50) {
   const db = await getDb();
   if (!db) throw new Error("資料庫目前無法使用");
-  return db.select().from(crawlerJobs)
+  const jobs = await db.select().from(crawlerJobs)
     .orderBy(desc(crawlerJobs.requestedAt), desc(crawlerJobs.id))
     .limit(Math.min(100, Math.max(1, limit)));
+  if (!jobs.length) return [];
+  const reports = await db.select({
+    jobId: crawlerIssueReports.jobId,
+    severity: crawlerIssueReports.severity,
+    issueLabel: crawlerIssueReports.issueLabel,
+    issueDraftUrl: crawlerIssueReports.issueDraftUrl,
+    updatedAt: crawlerIssueReports.updatedAt,
+  }).from(crawlerIssueReports).where(inArray(crawlerIssueReports.jobId, jobs.map(job => job.id)));
+  const reportsByJob = new Map(reports.map(report => [report.jobId, report]));
+  return jobs.map(job => ({ ...job, issueReport: reportsByJob.get(job.id) ?? null }));
 }
 
 /** Monitoring events include normal completions plus warning and error alerts. */
@@ -583,6 +1873,51 @@ export async function listCrawlerEvents(limit = 100) {
   return db.select().from(crawlerEvents)
     .orderBy(desc(crawlerEvents.createdAt), desc(crawlerEvents.id))
     .limit(Math.min(200, Math.max(1, limit)));
+}
+
+/** Supplies the latest actionable worker errors for a failed-job Issue draft. */
+export async function getCrawlerIssueContext(jobId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const [job] = await db.select().from(crawlerJobs).where(eq(crawlerJobs.id, jobId)).limit(1);
+  if (!job) return null;
+  const events = await db.select({
+    title: crawlerEvents.title,
+    message: crawlerEvents.message,
+    level: crawlerEvents.level,
+    createdAt: crawlerEvents.createdAt,
+  }).from(crawlerEvents)
+    .where(and(
+      eq(crawlerEvents.jobId, jobId),
+      inArray(crawlerEvents.level, ["error", "warning"]),
+    ))
+    .orderBy(desc(crawlerEvents.createdAt), desc(crawlerEvents.id))
+    .limit(5);
+  return { job, events };
+}
+
+export async function upsertCrawlerIssueReport(input: CrawlerIssueReportInput) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  await db.insert(crawlerIssueReports).values({
+    jobId: input.jobId,
+    severity: input.severity,
+    issueLabel: input.issueLabel,
+    issueDraftUrl: input.issueDraftUrl,
+    errorSummary: input.errorSummary ?? null,
+    createdByOpenId: input.createdByOpenId,
+  }).onDuplicateKeyUpdate({
+    set: {
+      severity: input.severity,
+      issueLabel: input.issueLabel,
+      issueDraftUrl: input.issueDraftUrl,
+      errorSummary: input.errorSummary ?? null,
+      createdByOpenId: input.createdByOpenId,
+    },
+  });
+  const [report] = await db.select().from(crawlerIssueReports)
+    .where(eq(crawlerIssueReports.jobId, input.jobId)).limit(1);
+  return report ?? null;
 }
 
 export async function markCrawlerEventsRead(ids: number[]) {

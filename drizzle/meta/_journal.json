@@ -36,6 +36,55 @@
       "when": 1786907487780,
       "tag": "0004_petite_amphibian",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "5",
+      "when": 1787114082481,
+      "tag": "0005_natural_trish_tilby",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1787128223417,
+      "tag": "0006_tiny_iron_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "5",
+      "when": 1787128296729,
+      "tag": "0007_wide_yellowjacket",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "5",
+      "when": 1787222545118,
+      "tag": "0008_clever_blade",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "5",
+      "when": 1787223790276,
+      "tag": "0009_curvy_firelord",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "5",
+      "when": 1787295720587,
+      "tag": "0010_exotic_ultimates",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "5",
+      "when": 1787299006102,
+      "tag": "0011_messy_ultimatum",
+      "breakpoints": true
     }
   ]
 }

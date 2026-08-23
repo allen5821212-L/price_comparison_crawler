@@ -215,6 +215,117 @@ export const crawlerEvents = mysqlTable(
   }),
 );
 
+/** 管理員從失敗工作開啟的 GitHub Issue 草稿，供監控頁追蹤回報脈絡。 */
+export const crawlerIssueReports = mysqlTable(
+  "crawler_issue_reports",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    jobId: int("job_id").notNull(),
+    severity: mysqlEnum("severity", ["low", "medium", "high", "critical"]).default("medium").notNull(),
+    issueLabel: mysqlEnum("issue_label", ["crawler", "data", "source"]).default("crawler").notNull(),
+    issueDraftUrl: text("issue_draft_url").notNull(),
+    errorSummary: text("error_summary"),
+    createdByOpenId: varchar("created_by_open_id", { length: 64 }).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    uniqueJobReport: uniqueIndex("crawler_issue_reports_job_unique").on(table.jobId),
+    createdIdx: index("crawler_issue_reports_created_idx").on(table.createdAt),
+  }),
+);
+
+/** 管理員關注的原價屋分類缺口；每次既有更新完成後，前台依最新缺口提示手動補抓。 */
+export const coolpcCategoryRecrawlReminders = mysqlTable(
+  "coolpc_category_recrawl_reminders",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    userId: int("user_id").notNull(),
+    categoryName: varchar("category_name", { length: 512 }).notNull(),
+    active: boolean("active").default(true).notNull(),
+    lastNotifiedRunId: int("last_notified_run_id"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    uniqueUserCategory: uniqueIndex("coolpc_recrawl_reminders_user_category_unique").on(table.userId, table.categoryName),
+    userActiveIdx: index("coolpc_recrawl_reminders_user_active_idx").on(table.userId, table.active),
+  }),
+);
+
+/** 管理員可重用的原價屋分類補抓清單；分類以 JSON 字串保存，並嚴格歸屬建立者帳戶。 */
+export const coolpcCategoryRecrawlPresets = mysqlTable(
+  "coolpc_category_recrawl_presets",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    userId: int("user_id").notNull(),
+    name: varchar("name", { length: 64 }).notNull(),
+    categoryNames: text("category_names").notNull(),
+    pinned: boolean("pinned").default(false).notNull(),
+    sortOrder: int("sort_order").default(0).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    uniqueUserName: uniqueIndex("coolpc_recrawl_presets_user_name_unique").on(table.userId, table.name),
+    userUpdatedIdx: index("coolpc_recrawl_presets_user_updated_idx").on(table.userId, table.updatedAt),
+    userPinnedOrderIdx: index("coolpc_recrawl_presets_user_pinned_order_idx").on(table.userId, table.pinned, table.sortOrder),
+  }),
+);
+
+/** 管理員對常用補抓清單的套用與實際分類工作排入歷程，用於回溯執行狀態。 */
+export const coolpcCategoryRecrawlPresetHistory = mysqlTable(
+  "coolpc_category_recrawl_preset_history",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    userId: int("user_id").notNull(),
+    presetId: int("preset_id"),
+    action: mysqlEnum("action", ["applied", "jobs_enqueued"]).notNull(),
+    categoryNames: text("category_names").notNull(),
+    jobIds: text("job_ids"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  table => ({
+    userCreatedIdx: index("coolpc_recrawl_preset_history_user_created_idx").on(table.userId, table.createdAt),
+    presetCreatedIdx: index("coolpc_recrawl_preset_history_preset_created_idx").on(table.presetId, table.createdAt),
+  }),
+);
+
+/** 管理員可將自己的常用補抓清單發佈為可複製的團隊範本；權杖可隨時撤銷。 */
+export const coolpcCategoryRecrawlPresetTemplates = mysqlTable(
+  "coolpc_category_recrawl_preset_templates",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    userId: int("user_id").notNull(),
+    presetId: int("preset_id").notNull(),
+    shareToken: varchar("share_token", { length: 64 }).notNull(),
+    active: boolean("active").default(true).notNull(),
+    collaborationMode: mysqlEnum("collaboration_mode", ["read_only", "collaborative"]).default("read_only").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    uniquePreset: uniqueIndex("coolpc_recrawl_preset_templates_preset_unique").on(table.presetId),
+    uniqueToken: uniqueIndex("coolpc_recrawl_preset_templates_token_unique").on(table.shareToken),
+    userActiveIdx: index("coolpc_recrawl_preset_templates_user_active_idx").on(table.userId, table.active),
+  }),
+);
+
+/** 共同維護範本的具名協作者；只有範本擁有者可以增刪授權。 */
+export const coolpcCategoryRecrawlPresetTemplateCollaborators = mysqlTable(
+  "coolpc_category_recrawl_preset_template_collaborators",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    templateId: int("template_id").notNull(),
+    userId: int("user_id").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  table => ({
+    uniqueTemplateUser: uniqueIndex("coolpc_recrawl_template_collaborators_unique").on(table.templateId, table.userId),
+    userTemplateIdx: index("coolpc_recrawl_template_collaborators_user_idx").on(table.userId, table.templateId),
+  }),
+);
+
 /** 使用者收藏的欣亞來源商品，可選擇指定可接受價格。 */
 export const productFavorites = mysqlTable(
   "product_favorites",
@@ -261,5 +372,10 @@ export type ComparisonMatch = typeof comparisonMatches.$inferSelect;
 export type ComparisonPriceHistory = typeof comparisonPriceHistory.$inferSelect;
 export type CrawlerJob = typeof crawlerJobs.$inferSelect;
 export type CrawlerEvent = typeof crawlerEvents.$inferSelect;
+export type CrawlerIssueReport = typeof crawlerIssueReports.$inferSelect;
+export type CoolpcCategoryRecrawlPreset = typeof coolpcCategoryRecrawlPresets.$inferSelect;
+export type CoolpcCategoryRecrawlPresetHistory = typeof coolpcCategoryRecrawlPresetHistory.$inferSelect;
+export type CoolpcCategoryRecrawlPresetTemplate = typeof coolpcCategoryRecrawlPresetTemplates.$inferSelect;
+export type CoolpcCategoryRecrawlPresetTemplateCollaborator = typeof coolpcCategoryRecrawlPresetTemplateCollaborators.$inferSelect;
 export type ProductFavorite = typeof productFavorites.$inferSelect;
 export type PriceNotification = typeof priceNotifications.$inferSelect;

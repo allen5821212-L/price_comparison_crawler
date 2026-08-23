@@ -5,7 +5,7 @@
  * 支援搜尋商品名稱，顯示欣亞與原價屋兩條價格線。
  */
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import {
   Dialog,
   DialogContent,
@@ -32,13 +32,22 @@ interface HistoryDay {
 interface PriceHistoryDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  initialProduct?: string | null;
+  onSetTargetPrice?: (sinyaName: string, targetPrice: number) => void;
 }
 
-export function PriceHistoryDialog({ open, onOpenChange }: PriceHistoryDialogProps) {
+export function PriceHistoryDialog({ open, onOpenChange, initialProduct, onSetTargetPrice }: PriceHistoryDialogProps) {
   const historyQuery = trpc.comparison.history.useQuery(undefined, { enabled: open });
   const history = (historyQuery.data ?? []) as HistoryDay[];
   const [search, setSearch] = useState("");
   const [selectedProduct, setSelectedProduct] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open && initialProduct) {
+      setSearch(initialProduct);
+      setSelectedProduct(initialProduct);
+    }
+  }, [initialProduct, open]);
 
   // Build product list from latest snapshot
   const productList = useMemo(() => {
@@ -115,6 +124,12 @@ export function PriceHistoryDialog({ open, onOpenChange }: PriceHistoryDialogPro
 
   const sinyaPath = buildPath(trendData.map((d) => d.sinya_price));
   const coolpcPath = buildPath(trendData.map((d) => d.coolpc_price));
+  const historicLow = trendData.length
+    ? Math.min(...trendData.flatMap((point) => [point.sinya_price, point.coolpc_price]))
+    : null;
+  const historicLowY = historicLow === null
+    ? null
+    : padding.top + plotH - (historicLow - minY) * yScale;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -175,6 +190,12 @@ export function PriceHistoryDialog({ open, onOpenChange }: PriceHistoryDialogPro
                     <span className="inline-block w-3 h-0.5 bg-orange-500" />
                     原價屋
                   </span>
+                  {historicLow !== null ? (
+                    <span className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400">
+                      <span className="inline-block w-3 border-t border-dashed border-emerald-500" />
+                      歷史最低 NT${historicLow.toLocaleString()}
+                    </span>
+                  ) : null}
                 </div>
                 <svg viewBox={`0 0 ${chartW} ${chartH}`} className="w-full h-auto">
                   {/* Grid lines */}
@@ -218,6 +239,14 @@ export function PriceHistoryDialog({ open, onOpenChange }: PriceHistoryDialogPro
                       </text>
                     );
                   })}
+                  {historicLowY !== null && historicLow !== null ? (
+                    <g>
+                      <line x1={padding.left} y1={historicLowY} x2={padding.left + plotW} y2={historicLowY} stroke="#22c55e" strokeWidth={1.5} strokeDasharray="5 4" />
+                      <text x={padding.left + plotW} y={historicLowY - 6} textAnchor="end" className="fill-emerald-500 text-[10px]">
+                        最低 NT${historicLow.toLocaleString()}
+                      </text>
+                    </g>
+                  ) : null}
                   {/* Sinya price line */}
                   <path d={sinyaPath} fill="none" stroke="#3b82f6" strokeWidth={2} />
                   {trendData.map((d, i) => {
@@ -234,9 +263,10 @@ export function PriceHistoryDialog({ open, onOpenChange }: PriceHistoryDialogPro
                   })}
                 </svg>
                 <div className="mt-2 text-xs text-muted-foreground">
-                  {trendData.length} 筆記錄 | 最新價差: NT$
+                  {trendData.length} 筆記錄 | 歷史最低: NT${historicLow?.toLocaleString() ?? "—"} | 最新價差: NT$
                   {trendData[trendData.length - 1].sinya_price - trendData[trendData.length - 1].coolpc_price}
                 </div>
+                {historicLow !== null && onSetTargetPrice ? <button type="button" className="mt-3 inline-flex w-fit items-center rounded-md border border-emerald-500/35 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-700 transition-colors hover:bg-emerald-500/20 dark:text-emerald-400" onClick={() => onSetTargetPrice(selectedProduct, historicLow)}>將 NT${historicLow.toLocaleString()} 設為目標價通知</button> : null}
               </>
             ) : (
               <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">

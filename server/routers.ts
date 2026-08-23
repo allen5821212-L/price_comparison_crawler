@@ -4,12 +4,42 @@ import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { adminProcedure, protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import {
+  enqueueCrawlerCategoryJobs,
+  addCoolpcCategoryRecrawlPresetTemplateCollaborator,
+  exportCoolpcCategoryRecrawlPresets,
+  deleteCoolpcCategoryRecrawlPreset,
+  applyCoolpcCategoryRecrawlPreset,
+  copyCoolpcCategoryRecrawlPresetTemplate,
+  getCoolpcCategoryRecrawlPresetForUser,
+  getCoolpcCategoryRecrawlPresetTemplateByToken,
+  importCoolpcCategoryRecrawlPresets,
+  listCoolpcCategoryRecrawlPresetHistory,
+  listCoolpcCategoryRecrawlPresetTemplates,
+  previewCoolpcCategoryRecrawlPresetImport,
+  publishCoolpcCategoryRecrawlPresetTemplate,
+  recordCoolpcCategoryRecrawlPresetHistory,
+  reorderCoolpcCategoryRecrawlPresets,
+  removeCoolpcCategoryRecrawlPresetTemplateCollaborator,
+  revokeCoolpcCategoryRecrawlPresetTemplate,
+  setCoolpcCategoryRecrawlPresetTemplateCollaborationMode,
+  setCoolpcCategoryRecrawlPresetPinned,
+  updateCoolpcCategoryRecrawlPresetTemplateCategories,
   enqueueCrawlerJob,
+  getCategoryRecrawlAnalytics,
+  getCrawlerRefreshEstimates,
   getDynamicPriceHistory,
   getLatestListingAvailability,
   getFavoriteForUser,
   getLatestCrawlerStatus,
   getLatestDynamicComparison,
+  getCoolpcCoverageSummary,
+  getSinyaCoverageSummary,
+  exportSinyaUnlistedCoolpcProducts,
+  getCrawlerIssueContext,
+  listCoolpcUnlistedSinyaProducts,
+  listSinyaUnlistedCoolpcProducts,
+  listCoolpcCategoryRecrawlReminders,
+  listCoolpcCategoryRecrawlPresets,
   listCrawlerEvents,
   listCrawlerJobs,
   listFavoritesForUser,
@@ -18,11 +48,16 @@ import {
   listActiveMatchingFeedback,
   listMatchingFeedbackForAdmin,
   markCrawlerEventsRead,
+  upsertCrawlerIssueReport,
   markPriceNotificationsReadForUser,
   setMatchingFeedbackActive,
   setFavoriteActiveForUser,
   upsertMatchingFeedback,
   upsertFavoriteForUser,
+  saveCoolpcCategoryRecrawlReminder,
+  saveCoolpcCategoryRecrawlPreset,
+  setCoolpcCategoryRecrawlReminderActive,
+  acknowledgeCoolpcCategoryRecrawlReminder,
 } from "./db";
 
 function deriveModelAlias(name: string): string | null {
@@ -107,6 +142,24 @@ export const appRouter = router({
     history: publicProcedure.query(async () => getDynamicPriceHistory()),
     /** Lightweight polling endpoint for crawler status and recent completion time. */
     status: publicProcedure.query(async () => getLatestCrawlerStatus()),
+    /** Historical successful-job timing keeps refresh ETAs grounded in actual worker runs. */
+    refreshEstimates: publicProcedure.query(async () => getCrawlerRefreshEstimates()),
+    /** Conservative coverage: only accepted Sinya-to-CoolPC matches count as listed. */
+    coolpcCoverage: publicProcedure.query(async () => getCoolpcCoverageSummary()),
+    coolpcUnlisted: publicProcedure.input(z.object({
+      category: z.string().min(1).max(512).optional(),
+      page: z.number().int().positive().default(1),
+      pageSize: z.number().int().min(10).max(100).default(25),
+    }).optional()).query(async ({ input }) => listCoolpcUnlistedSinyaProducts(input ?? { page: 1, pageSize: 25 })),
+    /** Reverse conservative coverage: CoolPC products without an accepted Sinya match. */
+    sinyaCoverage: publicProcedure.query(async () => getSinyaCoverageSummary()),
+    sinyaUnlisted: publicProcedure.input(z.object({
+      category: z.string().min(1).max(512).optional(),
+      page: z.number().int().positive().default(1),
+      pageSize: z.number().int().min(10).max(100).default(25),
+    }).optional()).query(async ({ input }) => listSinyaUnlistedCoolpcProducts(input ?? { page: 1, pageSize: 25 })),
+    sinyaUnlistedExport: adminProcedure.input(z.object({ category: z.string().min(1).max(512).optional() }).optional())
+      .query(async ({ input }) => exportSinyaUnlistedCoolpcProducts(input?.category)),
   }),
   crawler: router({
     /** Recent worker jobs and monitoring events are restricted to administrators. */
@@ -114,6 +167,20 @@ export const appRouter = router({
       .query(async ({ input }) => listCrawlerJobs(input?.limit ?? 50)),
     events: adminProcedure.input(z.object({ limit: z.number().int().min(1).max(200).default(100) }).optional())
       .query(async ({ input }) => listCrawlerEvents(input?.limit ?? 100)),
+    issueContext: adminProcedure.input(z.object({ jobId: z.number().int().positive() }))
+      .query(async ({ input }) => getCrawlerIssueContext(input.jobId)),
+    recordIssueDraft: adminProcedure.input(z.object({
+      jobId: z.number().int().positive(),
+      severity: z.enum(["low", "medium", "high", "critical"]),
+      issueLabel: z.enum(["crawler", "data", "source"]),
+      issueDraftUrl: z.string().url().max(8_000).refine(url => url.startsWith("https://github.com/allen5821212-L/price-comparison-crawler-issues/issues/new?"), "Issue 草稿網址不正確"),
+      errorSummary: z.string().max(8_000).optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const context = await getCrawlerIssueContext(input.jobId);
+      if (!context) throw new Error("找不到爬蟲工作");
+      if (context.job.status !== "failed") throw new Error("僅能回報失敗的爬蟲工作");
+      return upsertCrawlerIssueReport({ ...input, createdByOpenId: ctx.user.openId });
+    }),
     markEventsRead: adminProcedure.input(z.object({ ids: z.array(z.number().int().positive()).max(200) }))
       .mutation(async ({ input }) => {
         await markCrawlerEventsRead(input.ids);
@@ -129,15 +196,98 @@ export const appRouter = router({
         ctx.addIssue({ code: "custom", message: "指定分類重跑需要分類名稱", path: ["categoryName"] });
       }
     })).mutation(async ({ ctx, input }) => {
-      const id = await enqueueCrawlerJob({
+      return enqueueCrawlerJob({
         scope: input.scope,
         trigger: "manual",
         categoryId: input.categoryId,
         categoryName: input.categoryName,
         requestedByOpenId: ctx.user.openId,
       });
-      return { id } as const;
     }),
+    enqueueCategories: adminProcedure.input(z.object({
+      categoryNames: z.array(z.string().min(1).max(512)).min(1).max(12),
+    }).refine(value => new Set(value.categoryNames.map(name => name.trim())).size === value.categoryNames.length, "分類不可重複"))
+      .mutation(async ({ ctx, input }) => enqueueCrawlerCategoryJobs({
+        categoryNames: input.categoryNames,
+        requestedByOpenId: ctx.user.openId,
+      })),
+    categoryRecrawlAnalytics: adminProcedure.input(z.object({ limit: z.number().int().min(1).max(48).default(24) }).optional())
+      .query(async ({ input }) => getCategoryRecrawlAnalytics(input?.limit ?? 24)),
+    coolpcRecrawlPresets: adminProcedure.query(async ({ ctx }) => listCoolpcCategoryRecrawlPresets(ctx.user.id)),
+    coolpcRecrawlPresetHistory: adminProcedure.input(z.object({
+      limit: z.number().int().min(1).max(30).default(12),
+      status: z.enum(["all", "success", "failed", "running"]).default("all"),
+    }).optional()).query(async ({ ctx, input }) => listCoolpcCategoryRecrawlPresetHistory(ctx.user.id, input?.limit ?? 12, input?.status ?? "all")),
+    exportCoolpcRecrawlPresets: adminProcedure.query(async ({ ctx }) => exportCoolpcCategoryRecrawlPresets(ctx.user.id)),
+    previewCoolpcRecrawlPresetImport: adminProcedure.input(z.object({ backup: z.unknown() }))
+      .mutation(async ({ ctx, input }) => previewCoolpcCategoryRecrawlPresetImport(ctx.user.id, input.backup)),
+    importCoolpcRecrawlPresets: adminProcedure.input(z.object({
+      backup: z.unknown(),
+      conflictStrategies: z.record(z.string(), z.enum(["overwrite", "skip", "copy"])).optional(),
+    })).mutation(async ({ ctx, input }) => importCoolpcCategoryRecrawlPresets(ctx.user.id, input.backup, input.conflictStrategies)),
+    saveCoolpcRecrawlPreset: adminProcedure.input(z.object({
+      name: z.string().min(1).max(64),
+      categoryNames: z.array(z.string().min(1).max(512)).min(1).max(12),
+    }).refine(value => new Set(value.categoryNames.map(name => name.trim())).size === value.categoryNames.length, "分類不可重複"))
+      .mutation(async ({ ctx, input }) => saveCoolpcCategoryRecrawlPreset({ userId: ctx.user.id, ...input })),
+    applyCoolpcRecrawlPreset: adminProcedure.input(z.object({ id: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => applyCoolpcCategoryRecrawlPreset(ctx.user.id, input.id)),
+    setCoolpcRecrawlPresetPinned: adminProcedure.input(z.object({ id: z.number().int().positive(), pinned: z.boolean() }))
+      .mutation(async ({ ctx, input }) => setCoolpcCategoryRecrawlPresetPinned(ctx.user.id, input.id, input.pinned)),
+    reorderCoolpcRecrawlPresets: adminProcedure.input(z.object({ ids: z.array(z.number().int().positive()).min(1).max(100) })
+      .refine(value => new Set(value.ids).size === value.ids.length, "常用清單不可重複"))
+      .mutation(async ({ ctx, input }) => reorderCoolpcCategoryRecrawlPresets(ctx.user.id, input.ids)),
+    enqueueCoolpcRecrawlPreset: adminProcedure.input(z.object({ id: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        const preset = await getCoolpcCategoryRecrawlPresetForUser(ctx.user.id, input.id);
+        if (!preset) throw new Error("找不到可排入的常用清單");
+        const categoryNames = JSON.parse(preset.categoryNames) as unknown;
+        if (!Array.isArray(categoryNames) || !categoryNames.every(item => typeof item === "string")) throw new Error("常用清單資料格式不正確");
+        const result = await enqueueCrawlerCategoryJobs({ categoryNames, requestedByOpenId: ctx.user.openId });
+        await recordCoolpcCategoryRecrawlPresetHistory({
+          userId: ctx.user.id,
+          presetId: preset.id,
+          action: "jobs_enqueued",
+          categoryNames,
+          jobIds: [...result.createdJobIds, ...result.existingJobIds],
+        });
+        return { ...result, presetName: preset.name };
+      }),
+    coolpcRecrawlPresetTemplates: adminProcedure.query(async ({ ctx }) => listCoolpcCategoryRecrawlPresetTemplates(ctx.user.id)),
+    publishCoolpcRecrawlPresetTemplate: adminProcedure.input(z.object({ id: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => publishCoolpcCategoryRecrawlPresetTemplate(ctx.user.id, input.id)),
+    revokeCoolpcRecrawlPresetTemplate: adminProcedure.input(z.object({ id: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => revokeCoolpcCategoryRecrawlPresetTemplate(ctx.user.id, input.id)),
+    setCoolpcRecrawlPresetTemplateMode: adminProcedure.input(z.object({
+      id: z.number().int().positive(),
+      collaborationMode: z.enum(["read_only", "collaborative"]),
+    })).mutation(async ({ ctx, input }) => setCoolpcCategoryRecrawlPresetTemplateCollaborationMode(ctx.user.id, input.id, input.collaborationMode)),
+    addCoolpcRecrawlPresetTemplateCollaborator: adminProcedure.input(z.object({
+      id: z.number().int().positive(),
+      email: z.string().email().max(320),
+    })).mutation(async ({ ctx, input }) => addCoolpcCategoryRecrawlPresetTemplateCollaborator(ctx.user.id, input.id, input.email)),
+    removeCoolpcRecrawlPresetTemplateCollaborator: adminProcedure.input(z.object({
+      id: z.number().int().positive(),
+      collaboratorUserId: z.number().int().positive(),
+    })).mutation(async ({ ctx, input }) => removeCoolpcCategoryRecrawlPresetTemplateCollaborator(ctx.user.id, input.id, input.collaboratorUserId)),
+    updateCoolpcRecrawlPresetTemplateCategories: adminProcedure.input(z.object({
+      id: z.number().int().positive(),
+      categoryNames: z.array(z.string().min(1).max(512)).min(1).max(12),
+    }).refine(value => new Set(value.categoryNames.map(name => name.trim())).size === value.categoryNames.length, "分類不可重複"))
+      .mutation(async ({ ctx, input }) => updateCoolpcCategoryRecrawlPresetTemplateCategories(ctx.user.id, input.id, input.categoryNames)),
+    coolpcRecrawlPresetTemplateByToken: adminProcedure.input(z.object({ token: z.string().min(16).max(64) }))
+      .query(async ({ input }) => getCoolpcCategoryRecrawlPresetTemplateByToken(input.token)),
+    copyCoolpcRecrawlPresetTemplate: adminProcedure.input(z.object({ token: z.string().min(16).max(64) }))
+      .mutation(async ({ ctx, input }) => copyCoolpcCategoryRecrawlPresetTemplate(ctx.user.id, input.token)),
+    deleteCoolpcRecrawlPreset: adminProcedure.input(z.object({ id: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => deleteCoolpcCategoryRecrawlPreset(ctx.user.id, input.id)),
+    coolpcRecrawlReminders: adminProcedure.query(async ({ ctx }) => listCoolpcCategoryRecrawlReminders(ctx.user.id)),
+    saveCoolpcRecrawlReminder: adminProcedure.input(z.object({ categoryName: z.string().min(1).max(512) }))
+      .mutation(async ({ ctx, input }) => saveCoolpcCategoryRecrawlReminder({ userId: ctx.user.id, categoryName: input.categoryName })),
+    setCoolpcRecrawlReminderActive: adminProcedure.input(z.object({ id: z.number().int().positive(), active: z.boolean() }))
+      .mutation(async ({ ctx, input }) => setCoolpcCategoryRecrawlReminderActive(ctx.user.id, input.id, input.active)),
+    acknowledgeCoolpcRecrawlReminder: adminProcedure.input(z.object({ id: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => acknowledgeCoolpcCategoryRecrawlReminder(ctx.user.id, input.id)),
   }),
   favorites: router({
     list: protectedProcedure.query(async ({ ctx }) => listFavoritesForUser(ctx.user.id)),

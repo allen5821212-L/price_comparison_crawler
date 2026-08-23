@@ -5,6 +5,8 @@ URL: https://www.momoshop.com.tw/search/searchShop.jsp?keyword={kw}&searchType=1
 
 import re
 import time
+import threading
+from multiprocessing import Pipe, Process
 import urllib.request
 import urllib.parse
 
@@ -16,6 +18,8 @@ USER_AGENT = (
 
 MOMO_SEARCH_URL = "https://www.momoshop.com.tw/search/searchShop.jsp"
 MOMO_GOODS_URL = "https://www.momoshop.com.tw/goods/GoodsDetail.jsp?i_code="
+MOMO_PAGE_HARD_TIMEOUT_SECONDS = 25
+MOMO_PARSE_HARD_TIMEOUT_SECONDS = 25
 
 # 3C 零件搜尋關鍵字 — 使用更精確的品牌+品類關鍵字提升商品覆蓋率
 MOMO_KEYWORDS = [
@@ -101,26 +105,41 @@ MOMO_KEYWORDS = [
 ]
 
 
-def fetch_url(url, retries=3):
-    """Fetch URL and return HTML content."""
+def fetch_url(url, retries=2):
+    """Fetch one momo page with a hard wall-clock guard so a stuck read cannot block the full crawl."""
     headers = {
         "User-Agent": USER_AGENT,
         "Accept": "text/html,application/xhtml+xml",
         "Accept-Language": "zh-TW,zh;q=0.9",
     }
     for attempt in range(retries):
-        try:
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                return resp.read().decode("utf-8", errors="replace")
-        except Exception as e:
-            if attempt < retries - 1:
-                wait = (attempt + 1) * 3
-                print(f"  [momo RETRY {attempt+1}/{retries}] {e}, waiting {wait}s...")
-                time.sleep(wait)
-            else:
-                print(f"  [momo ERROR] {e}")
-                return ""
+        outcome = {"html": "", "error": None}
+
+        def request_page():
+            try:
+                req = urllib.request.Request(url, headers=headers)
+                with urllib.request.urlopen(req, timeout=MOMO_PAGE_HARD_TIMEOUT_SECONDS - 5) as resp:
+                    outcome["html"] = resp.read().decode("utf-8", errors="replace")
+            except Exception as error:
+                outcome["error"] = error
+
+        worker = threading.Thread(target=request_page, daemon=True)
+        worker.start()
+        worker.join(MOMO_PAGE_HARD_TIMEOUT_SECONDS)
+
+        if not worker.is_alive() and outcome["html"]:
+            return outcome["html"]
+
+        error = outcome["error"] or f"頁面超過 {MOMO_PAGE_HARD_TIMEOUT_SECONDS} 秒未完成"
+        if attempt < retries - 1:
+            wait = (attempt + 1) * 3
+            print(f"  [momo RETRY {attempt+1}/{retries}] {error}, waiting {wait}s...")
+            time.sleep(wait)
+        else:
+            print(f"  [momo ERROR] {error}; 跳過此頁避免阻塞完整更新")
+            return ""
+
+    return ""
 
 
 def parse_momo_products(html):
@@ -194,6 +213,42 @@ def parse_momo_products(html):
     return products
 
 
+def _parse_momo_payload_worker(html, connection):
+    """Parse in an isolated process so a pathological regex cannot block the parent GIL."""
+    try:
+        connection.send(("ok", parse_momo_products(html)))
+    except Exception as error:
+        connection.send(("error", str(error)))
+    finally:
+        connection.close()
+
+
+def parse_momo_products_with_timeout(html):
+    """Return parsed products or safely skip a payload that exceeds the wall-clock limit."""
+    receive_connection, send_connection = Pipe(duplex=False)
+    worker = Process(target=_parse_momo_payload_worker, args=(html, send_connection), daemon=True)
+    worker.start()
+    send_connection.close()
+    try:
+        if not receive_connection.poll(MOMO_PARSE_HARD_TIMEOUT_SECONDS):
+            worker.terminate()
+            worker.join(timeout=3)
+            print(f"  [momo ERROR] 搜尋結果解析超過 {MOMO_PARSE_HARD_TIMEOUT_SECONDS} 秒；跳過此頁避免阻塞完整更新")
+            return []
+
+        status, payload = receive_connection.recv()
+        worker.join(timeout=3)
+        if status == "error":
+            print(f"  [momo ERROR] 搜尋結果解析失敗：{payload}; 跳過此頁")
+            return []
+        return payload
+    finally:
+        receive_connection.close()
+        if worker.is_alive():
+            worker.terminate()
+            worker.join(timeout=3)
+
+
 def crawl_momo(max_keywords=None, max_pages_per_keyword=5):
     """
     Crawl momo shopping by search keywords.
@@ -217,7 +272,7 @@ def crawl_momo(max_keywords=None, max_pages_per_keyword=5):
             if not html:
                 break
 
-            page_products = parse_momo_products(html)
+            page_products = parse_momo_products_with_timeout(html)
             if not page_products:
                 break
 

@@ -1,0 +1,1 @@
+ALTER TABLE `coolpc_category_recrawl_reminders` ADD `last_notified_run_id` int;

@@ -3,6 +3,7 @@ import type { TrpcContext } from "./_core/context";
 
 const dbMocks = vi.hoisted(() => ({
   getDynamicPriceHistory: vi.fn(),
+  getCrawlerRefreshEstimates: vi.fn(),
   getFavoriteForUser: vi.fn(),
   getLatestCrawlerStatus: vi.fn(),
   getLatestDynamicComparison: vi.fn(),
@@ -121,17 +122,38 @@ describe("matchRules router", () => {
     await expect(caller.comparison.status()).resolves.toEqual(status);
   });
 
+  it("serves refresh timing estimates derived by the persistence layer", async () => {
+    const estimates = {
+      full: { estimateMs: 4_800_000, sampleSize: 4, source: "scope_history" },
+      category: { estimateMs: 1_200_000, sampleSize: 4, source: "full_history_ratio" },
+    };
+    dbMocks.getCrawlerRefreshEstimates.mockResolvedValue(estimates);
+    const caller = appRouter.createCaller(createAdminContext());
+
+    await expect(caller.comparison.refreshEstimates()).resolves.toEqual(estimates);
+  });
+
   it("lists monitoring data and queues a requested category for the persistent worker", async () => {
     dbMocks.listCrawlerJobs.mockResolvedValue([{ id: 21, status: "queued", scope: "category" }]);
     dbMocks.listCrawlerEvents.mockResolvedValue([{ id: 9, level: "error", title: "來源逾時" }]);
-    dbMocks.enqueueCrawlerJob.mockResolvedValue(22);
+    dbMocks.enqueueCrawlerJob.mockResolvedValue({ id: 22, created: true, status: "queued" });
     const caller = appRouter.createCaller(createAdminContext());
 
     await expect(caller.crawler.jobs()).resolves.toEqual([{ id: 21, status: "queued", scope: "category" }]);
     await expect(caller.crawler.events()).resolves.toEqual([{ id: 9, level: "error", title: "來源逾時" }]);
-    await expect(caller.crawler.enqueue({ scope: "category", categoryName: "CPU 中央處理器" })).resolves.toEqual({ id: 22 });
+    await expect(caller.crawler.enqueue({ scope: "category", categoryName: "CPU 中央處理器" })).resolves.toEqual({ id: 22, created: true, status: "queued" });
     expect(dbMocks.enqueueCrawlerJob).toHaveBeenCalledWith({
       scope: "category", trigger: "manual", categoryId: undefined, categoryName: "CPU 中央處理器", requestedByOpenId: "owner-open-id",
+    });
+  });
+
+  it("returns a reused full refresh job instead of requiring the client to queue a duplicate", async () => {
+    dbMocks.enqueueCrawlerJob.mockResolvedValue({ id: 91, created: false, status: "running" });
+    const caller = appRouter.createCaller(createAdminContext());
+
+    await expect(caller.crawler.enqueue({ scope: "full" })).resolves.toEqual({ id: 91, created: false, status: "running" });
+    expect(dbMocks.enqueueCrawlerJob).toHaveBeenCalledWith({
+      scope: "full", trigger: "manual", categoryId: undefined, categoryName: undefined, requestedByOpenId: "owner-open-id",
     });
   });
 

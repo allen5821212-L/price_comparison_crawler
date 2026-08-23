@@ -9,6 +9,8 @@ import Home from "./pages/Home";
 import RulesManagement from "./pages/RulesManagement";
 import CrawlerMonitor from "./pages/CrawlerMonitor";
 import FavoritesPage from "./pages/FavoritesPage";
+import CoolpcCoveragePage from "./pages/CoolpcCoveragePage";
+import CoolpcOnlyPage from "./pages/CoolpcOnlyPage";
 
 function Router() {
   // make sure to consider if you need authentication for certain routes
@@ -18,6 +20,8 @@ function Router() {
       <Route path={"/rules"} component={RulesManagement} />
       <Route path={"/crawler"} component={CrawlerMonitor} />
       <Route path={"/favorites"} component={FavoritesPage} />
+      <Route path={"/coverage"} component={CoolpcCoveragePage} />
+      <Route path={"/coolpc-only"} component={CoolpcOnlyPage} />
       <Route path={"/404"} component={NotFound} />
       {/* Final fallback route */}
       <Route component={NotFound} />
