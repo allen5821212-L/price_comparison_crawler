@@ -15,7 +15,7 @@ const dbMocks = vi.hoisted(() => ({
   listMatchingFeedbackForAdmin: vi.fn(),
   listPriceNotificationsForUser: vi.fn(),
   markCrawlerEventsRead: vi.fn(),
-  markPriceNotificationsReadForUser: vi.fn(),
+  searchDynamicProducts: vi.fn(),
   setMatchingFeedbackActive: vi.fn(),
   setFavoriteActiveForUser: vi.fn(),
   upsertMatchingFeedback: vi.fn(),
@@ -109,6 +109,23 @@ describe("matchRules router", () => {
     const caller = appRouter.createCaller(createAdminContext());
 
     await expect(caller.comparison.latest()).resolves.toEqual(comparison);
+  });
+
+  it("allows precision matching to search the Sinya source catalog", async () => {
+    const products = [{ source: "sinya", id: "227519", name: "微星 B850M GAMING PLUS WIFI6E", price: 5990 }];
+    dbMocks.searchDynamicProducts.mockResolvedValue(products);
+    const caller = appRouter.createCaller(createAdminContext());
+
+    await expect(caller.comparison.searchProducts({
+      platform: "sinya",
+      query: "B850M",
+      limit: 10,
+    })).resolves.toEqual(products);
+    expect(dbMocks.searchDynamicProducts).toHaveBeenCalledWith({
+      platform: "sinya",
+      query: "B850M",
+      limit: 10,
+    });
   });
 
   it("serves database-backed price history and crawler status through public queries", async () => {
