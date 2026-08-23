@@ -216,6 +216,12 @@ function formatEstimate(milliseconds: number | null | undefined): string {
   return milliseconds ? `約 ${formatDuration(milliseconds)}` : "等待歷史資料";
 }
 
+export function getCompletedRunIdToRefresh(observedRunId: number | null, run: { id: number; status: string } | null | undefined) {
+  if (!run || run.status !== "completed") return null;
+  if (observedRunId === null || observedRunId === run.id) return null;
+  return run.id;
+}
+
 function formatPrice(price: number): string {
   return `NT$${price.toLocaleString()}`;
 }
@@ -356,6 +362,13 @@ export default function Home() {
     toast.success(`已儲存「${name}」`);
   };
   const utils = trpc.useUtils();
+  const comparisonStatusQuery = trpc.comparison.status.useQuery(undefined, {
+    refetchInterval: 10_000,
+    refetchOnWindowFocus: true,
+  });
+  const observedCompletedComparisonRunId = useRef<number | null>(null);
+  const [isLatestDataSyncing, setIsLatestDataSyncing] = useState(false);
+  const [lastAutoSyncedRunId, setLastAutoSyncedRunId] = useState<number | null>(null);
   const [requestedRefreshJobId, setRequestedRefreshJobId] = useState<number | null>(null);
   const observedCrawlerJobStatuses = useRef(new Map<number, string>());
   const hasObservedCrawlerJobs = useRef(false);
@@ -428,6 +441,27 @@ export default function Home() {
     const timer = window.setInterval(() => setNow(Date.now()), 30_000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    const completedRun = comparisonStatusQuery.data;
+    if (!completedRun || completedRun.status !== "completed") return;
+
+    const nextRunId = getCompletedRunIdToRefresh(observedCompletedComparisonRunId.current, completedRun);
+    if (observedCompletedComparisonRunId.current === null) {
+      observedCompletedComparisonRunId.current = completedRun.id;
+      return;
+    }
+    if (nextRunId === null) return;
+
+    observedCompletedComparisonRunId.current = nextRunId;
+    setIsLatestDataSyncing(true);
+    void comparisonQuery.refetch().then(result => {
+      if (!result.error) {
+        setLastAutoSyncedRunId(nextRunId);
+        toast.success("偵測到更新完成，已同步最新品名、價格與配對資料");
+      }
+    }).finally(() => setIsLatestDataSyncing(false));
+  }, [comparisonQuery, comparisonStatusQuery.data]);
 
   useEffect(() => {
     if (!requestedRefreshJobId || !activeRefreshJob || activeRefreshJob.id !== requestedRefreshJobId) return;
@@ -1361,6 +1395,7 @@ export default function Home() {
                 <div className="flex flex-wrap items-center gap-2">
                   <p>最近成功更新：<span className="font-medium text-foreground">{formatRelativeTime(data.run?.finishedAt ?? data.run?.startedAt, now)}</span></p>
                   <span className="text-xs">（{data.stats.update_time}）</span>
+                  {isLatestDataSyncing ? <Badge variant="outline" className="gap-1 border-primary/30 bg-primary/10 text-primary"><RefreshCw className="size-3 animate-spin" />正在同步最新品名與價格</Badge> : <Badge variant="outline" className="gap-1 border-emerald-500/30 bg-emerald-500/10 text-emerald-600"><Check className="size-3" />品名與價格已同步{lastAutoSyncedRunId ? ` · 批次 #${lastAutoSyncedRunId}` : ""}</Badge>}
                 </div>
                 {activeRefreshJob ? <div className="max-w-xl rounded-lg border border-primary/20 bg-primary/5 p-3">
                   <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
