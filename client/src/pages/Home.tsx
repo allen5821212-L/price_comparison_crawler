@@ -127,6 +127,7 @@ export default function Home() {
   const data = availabilityQuery.data;
   const platforms = data?.platforms ?? [];
   const loading = availabilityQuery.isLoading;
+  const latestCompletedRun = comparisonStatusQuery.data?.latestCompletedRun;
 
   useEffect(() => {
     const completedRun = comparisonStatusQuery.data?.latestCompletedRun;
@@ -151,6 +152,12 @@ export default function Home() {
     });
   }, [data?.categories, searchQuery, sortMode]);
 
+  const syncStatusLabel = availabilityQuery.isFetching
+    ? "正在同步最新資料"
+    : latestCompletedRun?.id
+      ? `已同步完成批次 #${latestCompletedRun.id}`
+      : "等待可用資料";
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       <header className="sticky top-0 z-50 border-b border-border bg-card/85 backdrop-blur-xl">
@@ -162,7 +169,10 @@ export default function Home() {
               <p className="truncate text-xs text-muted-foreground">四平台品項覆蓋率</p>
             </div>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-2">
+            <Badge variant={availabilityQuery.isFetching ? "secondary" : "outline"} className="hidden gap-1.5 lg:inline-flex">
+              <RefreshCw className={`size-3 ${availabilityQuery.isFetching ? "animate-spin" : ""}`} />{syncStatusLabel}
+            </Badge>
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button variant="ghost" size="icon" asChild>
@@ -227,6 +237,11 @@ export default function Home() {
             <p className="mt-4 text-base leading-7 text-muted-foreground md:text-lg">
               以欣亞數位商品清單為共同基準，統計原價屋、PChome 24h 與 momo 購物網可辨識的同型號上架品數與上架率；不再以價格差異作為首頁比較核心。
             </p>
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              <Badge variant={availabilityQuery.isFetching ? "secondary" : "outline"} className="gap-1.5">
+                <RefreshCw className={`size-3 ${availabilityQuery.isFetching ? "animate-spin" : ""}`} />{syncStatusLabel}
+              </Badge>
+            </div>
             {data && <p className="mt-4 text-sm text-muted-foreground">最後更新：<span className="font-mono font-medium text-foreground">{data.updateTime}</span></p>}
           </div>
         </div>
