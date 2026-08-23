@@ -16,6 +16,7 @@ from dynamic_store import _database_connection
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 CRAWLER_PATH = PROJECT_DIR / "crawler" / "crawl.py"
 POLL_SECONDS = int(os.environ.get("CRAWLER_WORKER_POLL_SECONDS", "20"))
+CRAWLER_JOB_TIMEOUT_SECONDS = int(os.environ.get("CRAWLER_JOB_TIMEOUT_SECONDS", str(8 * 60 * 60)))
 OWNER_NOTIFICATION_ENDPOINT = "webdevtoken.v1.WebDevService/SendNotification"
 
 
@@ -161,7 +162,28 @@ def execute(job: dict[str, Any]) -> None:
         command.extend(["--priority-category", str(job["category_name"])])
         category_note = f"（優先分類：{job['category_name']}；之後安全重建完整索引）"
     print(f"[JOB {job['id']}] starting {' '.join(command)} {category_note}", flush=True)
-    result = subprocess.run(command, cwd=str(PROJECT_DIR), text=True, capture_output=True, env=os.environ.copy())
+    try:
+        result = subprocess.run(
+            command,
+            cwd=str(PROJECT_DIR),
+            text=True,
+            capture_output=True,
+            env=os.environ.copy(),
+            timeout=CRAWLER_JOB_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as error:
+        stdout = error.stdout or ""
+        stderr = error.stderr or ""
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode("utf-8", errors="replace")
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        combined = "\n".join(part for part in (stdout, stderr) if part).strip()
+        tail = combined[-12000:] if combined else "爬蟲逾時前未產生日誌"
+        summary = f"工作超過 {CRAWLER_JOB_TIMEOUT_SECONDS // 3600} 小時總時限，已安全終止以避免阻塞後續更新。\n{category_note}\n{tail}"
+        finish_job(job, False, summary)
+        notify_owner("價格比對爬蟲逾時", f"工作 #{job['id']} 超過 {CRAWLER_JOB_TIMEOUT_SECONDS // 3600} 小時總時限，已標記失敗並釋放後續更新佇列。")
+        return
     combined = "\n".join(part for part in (result.stdout, result.stderr) if part).strip()
     tail = combined[-12000:] if combined else "爬蟲未產生日誌"
     if result.returncode == 0:
