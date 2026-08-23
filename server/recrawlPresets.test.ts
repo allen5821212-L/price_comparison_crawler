@@ -86,6 +86,19 @@ describe("常用分類補抓清單資料", () => {
     expect(canMaintainRecrawlPresetTemplate("collaborative", false, false)).toBe(false);
   });
 
+  it("協作者名單的加入與移除均沿用擁有者專屬管理權限，避免共同維護者管理其他協作者", () => {
+    const ownerCanAdd = canManageRecrawlPresetTemplateCollaborators(true);
+    const ownerCanRemove = canManageRecrawlPresetTemplateCollaborators(true);
+    const collaboratorCanAdd = canManageRecrawlPresetTemplateCollaborators(false);
+    const collaboratorCanRemove = canManageRecrawlPresetTemplateCollaborators(false);
+    expect({ ownerCanAdd, ownerCanRemove, collaboratorCanAdd, collaboratorCanRemove }).toEqual({
+      ownerCanAdd: true,
+      ownerCanRemove: true,
+      collaboratorCanAdd: false,
+      collaboratorCanRemove: false,
+    });
+  });
+
   it("以真實分類工作樣本推導範本總耗時，且缺少樣本時不臆測", () => {
     expect(deriveRecrawlPresetTemplateEstimate(3, 12 * 60_000, 8)).toEqual({ estimateMs: 36 * 60_000, estimateSampleSize: 8 });
     expect(deriveRecrawlPresetTemplateEstimate(3, null, 0)).toEqual({ estimateMs: null, estimateSampleSize: 0 });

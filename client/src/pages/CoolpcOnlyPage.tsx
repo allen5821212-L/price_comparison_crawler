@@ -108,6 +108,24 @@ const presetEstimateLabel = (estimateMs: number | null, sampleSize: number) => e
 const templateModeLabel = (mode: "read_only" | "collaborative") => mode === "collaborative" ? "共同維護" : "只讀";
 const templateUpdatedLabel = (value: Date | string) => `更新於 ${new Date(value).toLocaleString("zh-TW", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}`;
 
+export type TeamTemplateCollaborationMode = "read_only" | "collaborative";
+
+export function createTeamTemplateModeInput(id: number, collaborationMode: TeamTemplateCollaborationMode) {
+  return { id, collaborationMode };
+}
+
+export function createTeamTemplateCollaboratorInput(id: number, email: string) {
+  return { id, email: email.trim().toLowerCase() };
+}
+
+export function createTeamTemplateCollaboratorRemovalInput(id: number, collaboratorUserId: number) {
+  return { id, collaboratorUserId };
+}
+
+export function createTeamTemplateCategoryUpdateInput(id: number, selectedCategories: ReadonlySet<string>) {
+  return { id, categoryNames: Array.from(selectedCategories) };
+}
+
 const jobStatusLabel = (status: RecrawlReminderJob["status"]) => ({ queued: "排隊中", running: "執行中", completed: "已完成", failed: "失敗", cancelled: "已取消" }[status]);
 export function formatRecrawlExecutionProgress(total: number, completedCount: number, failedCount: number) {
   if (!total) return "尚未連結分類工作";

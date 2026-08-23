@@ -1,7 +1,7 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { createBatchCategoryRequest, createRecrawlPresetImportInput, createRecrawlPresetInput, createRecrawlPresetReorderInput, filterRecrawlPresetHistoryEntries, formatRecrawlExecutionProgress, formatRecrawlExecutionSuccessRate, moveRecrawlPresetId, nextSelectedCategories, readRecrawlPresetDragPayload, RecrawlReminderSummary, RECRAWL_PRESET_DRAG_MIME, reorderRecrawlPresetIds, shouldShowRecrawlPresetManager, writeRecrawlPresetDragPayload } from "./CoolpcOnlyPage";
+import { createBatchCategoryRequest, createRecrawlPresetImportInput, createRecrawlPresetInput, createRecrawlPresetReorderInput, createTeamTemplateCategoryUpdateInput, createTeamTemplateCollaboratorInput, createTeamTemplateCollaboratorRemovalInput, createTeamTemplateModeInput, filterRecrawlPresetHistoryEntries, formatRecrawlExecutionProgress, formatRecrawlExecutionSuccessRate, moveRecrawlPresetId, nextSelectedCategories, readRecrawlPresetDragPayload, RecrawlReminderSummary, RECRAWL_PRESET_DRAG_MIME, reorderRecrawlPresetIds, shouldShowRecrawlPresetManager, writeRecrawlPresetDragPayload } from "./CoolpcOnlyPage";
 
 describe("CoolpcOnlyPage recrawl reminder summary", () => {
   it("顯示由歷史分類工作推導的 ETA 與最近成功結果", () => {
@@ -103,5 +103,12 @@ describe("CoolpcOnlyPage category selection", () => {
     expect(filterRecrawlPresetHistoryEntries(entries, "success").map(entry => entry.id)).toEqual([1]);
     expect(filterRecrawlPresetHistoryEntries(entries, "failed").map(entry => entry.id)).toEqual([2]);
     expect(filterRecrawlPresetHistoryEntries(entries, "running").map(entry => entry.id)).toEqual([3]);
+  });
+
+  it("團隊範本協作操作會傳遞受控模式、正規化協作者電子郵件及指定範本識別值", () => {
+    expect(createTeamTemplateModeInput(7, "collaborative")).toEqual({ id: 7, collaborationMode: "collaborative" });
+    expect(createTeamTemplateCollaboratorInput(7, "  CoWorker@Example.com ")).toEqual({ id: 7, email: "coworker@example.com" });
+    expect(createTeamTemplateCollaboratorRemovalInput(7, 42)).toEqual({ id: 7, collaboratorUserId: 42 });
+    expect(createTeamTemplateCategoryUpdateInput(7, new Set(["鍵盤", "筆電"]))).toEqual({ id: 7, categoryNames: ["鍵盤", "筆電"] });
   });
 });
