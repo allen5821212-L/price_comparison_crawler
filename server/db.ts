@@ -583,9 +583,15 @@ export async function getDynamicPriceHistory() {
 export async function getLatestCrawlerStatus() {
   const db = await getDb();
   if (!db) throw new Error("資料庫目前無法使用");
-  const [run] = await db.select().from(comparisonRuns)
+  const [latestRun] = await db.select().from(comparisonRuns)
     .orderBy(desc(comparisonRuns.id)).limit(1);
-  return run ?? null;
+  const [latestCompletedRun] = await db.select().from(comparisonRuns)
+    .where(eq(comparisonRuns.status, "completed"))
+    .orderBy(desc(comparisonRuns.id)).limit(1);
+  return {
+    latestRun: latestRun ?? null,
+    latestCompletedRun: latestCompletedRun ?? null,
+  };
 }
 
 /**

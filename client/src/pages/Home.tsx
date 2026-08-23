@@ -443,7 +443,7 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    const completedRun = comparisonStatusQuery.data;
+    const completedRun = comparisonStatusQuery.data?.latestCompletedRun;
     if (!completedRun || completedRun.status !== "completed") return;
 
     const nextRunId = getCompletedRunIdToRefresh(observedCompletedComparisonRunId.current, completedRun);
