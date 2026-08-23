@@ -9,6 +9,7 @@ import time
 import urllib.request
 import urllib.parse
 from datetime import datetime
+from multiprocessing import Pipe, Process
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -19,6 +20,7 @@ USER_AGENT = (
 PCHOME_SEARCH_API = "https://ecshweb.pchome.com.tw/search/v3.3/all/results"
 PCHOME_PROD_URL = "https://24h.pchome.com.tw/prod/"
 PCHOME_IMG_BASE = "https://cs-d.ecshopcdn.com.tw"
+PCHOME_PAGE_HARD_TIMEOUT_SECONDS = 35
 
 # 3C 零件搜尋關鍵字 — 使用更精確的品牌+品類關鍵字提升商品覆蓋率
 PCHOME_KEYWORDS = [
@@ -112,27 +114,62 @@ PCHOME_KEYWORDS = [
 ]
 
 
+def _fetch_pchome_page_worker(url, headers, connection):
+    """Fetch and decode one response outside the parent process's failure domain."""
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=PCHOME_PAGE_HARD_TIMEOUT_SECONDS - 5) as resp:
+            raw = resp.read()
+        connection.send(("ok", json.loads(raw.decode("utf-8", errors="replace"))))
+    except Exception as error:
+        connection.send(("error", str(error)))
+    finally:
+        connection.close()
+
+
 def fetch_url(url, retries=3):
-    """Fetch URL and return JSON data."""
+    """Fetch one PCHOME page with a killable wall-clock guard for stalled streams."""
     headers = {
         "User-Agent": USER_AGENT,
         "Accept": "application/json, text/html, */*",
         "Accept-Language": "zh-TW,zh;q=0.9",
     }
     for attempt in range(retries):
+        receive_connection, send_connection = Pipe(duplex=False)
+        worker = Process(
+            target=_fetch_pchome_page_worker,
+            args=(url, headers, send_connection),
+            daemon=True,
+        )
+        worker.start()
+        send_connection.close()
         try:
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                raw = resp.read()
-                return json.loads(raw.decode("utf-8", errors="replace"))
-        except Exception as e:
+            if receive_connection.poll(PCHOME_PAGE_HARD_TIMEOUT_SECONDS):
+                status, payload = receive_connection.recv()
+                worker.join(timeout=3)
+                if status == "ok":
+                    return payload
+                error = payload
+            else:
+                worker.terminate()
+                worker.join(timeout=3)
+                error = f"頁面超過 {PCHOME_PAGE_HARD_TIMEOUT_SECONDS} 秒未完成"
+        finally:
+            receive_connection.close()
+            if worker.is_alive():
+                worker.terminate()
+                worker.join(timeout=3)
+
+        if error:
             if attempt < retries - 1:
                 wait = (attempt + 1) * 3
-                print(f"  [PCHOME RETRY {attempt+1}/{retries}] {e}, waiting {wait}s...")
+                print(f"  [PCHOME RETRY {attempt+1}/{retries}] {error}, waiting {wait}s...")
                 time.sleep(wait)
             else:
-                print(f"  [PCHOME ERROR] {e}")
+                print(f"  [PCHOME ERROR] {error}; 跳過此頁避免阻塞完整更新")
                 return None
+
+    return None
 
 
 def crawl_pchome(max_keywords=None, max_pages_per_keyword=10):
