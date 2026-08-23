@@ -5,6 +5,7 @@ URL: https://www.momoshop.com.tw/search/searchShop.jsp?keyword={kw}&searchType=1
 
 import re
 import time
+import threading
 import urllib.request
 import urllib.parse
 
@@ -16,6 +17,7 @@ USER_AGENT = (
 
 MOMO_SEARCH_URL = "https://www.momoshop.com.tw/search/searchShop.jsp"
 MOMO_GOODS_URL = "https://www.momoshop.com.tw/goods/GoodsDetail.jsp?i_code="
+MOMO_PAGE_HARD_TIMEOUT_SECONDS = 25
 
 # 3C 零件搜尋關鍵字 — 使用更精確的品牌+品類關鍵字提升商品覆蓋率
 MOMO_KEYWORDS = [
@@ -101,26 +103,41 @@ MOMO_KEYWORDS = [
 ]
 
 
-def fetch_url(url, retries=3):
-    """Fetch URL and return HTML content."""
+def fetch_url(url, retries=2):
+    """Fetch one momo page with a hard wall-clock guard so a stuck read cannot block the full crawl."""
     headers = {
         "User-Agent": USER_AGENT,
         "Accept": "text/html,application/xhtml+xml",
         "Accept-Language": "zh-TW,zh;q=0.9",
     }
     for attempt in range(retries):
-        try:
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                return resp.read().decode("utf-8", errors="replace")
-        except Exception as e:
-            if attempt < retries - 1:
-                wait = (attempt + 1) * 3
-                print(f"  [momo RETRY {attempt+1}/{retries}] {e}, waiting {wait}s...")
-                time.sleep(wait)
-            else:
-                print(f"  [momo ERROR] {e}")
-                return ""
+        outcome = {"html": "", "error": None}
+
+        def request_page():
+            try:
+                req = urllib.request.Request(url, headers=headers)
+                with urllib.request.urlopen(req, timeout=MOMO_PAGE_HARD_TIMEOUT_SECONDS - 5) as resp:
+                    outcome["html"] = resp.read().decode("utf-8", errors="replace")
+            except Exception as error:
+                outcome["error"] = error
+
+        worker = threading.Thread(target=request_page, daemon=True)
+        worker.start()
+        worker.join(MOMO_PAGE_HARD_TIMEOUT_SECONDS)
+
+        if not worker.is_alive() and outcome["html"]:
+            return outcome["html"]
+
+        error = outcome["error"] or f"頁面超過 {MOMO_PAGE_HARD_TIMEOUT_SECONDS} 秒未完成"
+        if attempt < retries - 1:
+            wait = (attempt + 1) * 3
+            print(f"  [momo RETRY {attempt+1}/{retries}] {error}, waiting {wait}s...")
+            time.sleep(wait)
+        else:
+            print(f"  [momo ERROR] {error}; 跳過此頁避免阻塞完整更新")
+            return ""
+
+    return ""
 
 
 def parse_momo_products(html):
