@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildRecrawlPresetImportPreview, canMaintainRecrawlPresetTemplate, deriveRecrawlPresetExecutionSummary, deriveRecrawlPresetTemplateEstimate, getRecrawlPresetHistoryStatus, normalizeRecrawlPresetCategoryNames, normalizeRecrawlPresetOrder, parseRecrawlPresetBackup, parseRecrawlPresetCategoryNames, parseRecrawlPresetJobIds, RECRAWL_PRESET_BACKUP_VERSION } from "./db";
+import { buildRecrawlPresetImportPreview, canManageRecrawlPresetTemplateCollaborators, canMaintainRecrawlPresetTemplate, deriveRecrawlPresetExecutionSummary, deriveRecrawlPresetTemplateEstimate, getRecrawlPresetHistoryStatus, normalizeRecrawlPresetCategoryNames, normalizeRecrawlPresetOrder, parseRecrawlPresetBackup, parseRecrawlPresetCategoryNames, parseRecrawlPresetJobIds, RECRAWL_PRESET_BACKUP_VERSION } from "./db";
 
 describe("常用分類補抓清單資料", () => {
   it("正規化分類、排除重複與空白，並限制最多十二個分類", () => {
@@ -73,6 +73,14 @@ describe("常用分類補抓清單資料", () => {
 
   it("只允許擁有者或共同維護模式下的具名協作者更新團隊範本", () => {
     expect(canMaintainRecrawlPresetTemplate("read_only", true, false)).toBe(true);
+    expect(canMaintainRecrawlPresetTemplate("read_only", false, true)).toBe(false);
+    expect(canMaintainRecrawlPresetTemplate("collaborative", false, true)).toBe(true);
+    expect(canMaintainRecrawlPresetTemplate("collaborative", false, false)).toBe(false);
+  });
+
+  it("僅範本擁有者可切換模式或加入與移除協作者，且未授權者無法管理名單", () => {
+    expect(canManageRecrawlPresetTemplateCollaborators(true)).toBe(true);
+    expect(canManageRecrawlPresetTemplateCollaborators(false)).toBe(false);
     expect(canMaintainRecrawlPresetTemplate("read_only", false, true)).toBe(false);
     expect(canMaintainRecrawlPresetTemplate("collaborative", false, true)).toBe(true);
     expect(canMaintainRecrawlPresetTemplate("collaborative", false, false)).toBe(false);

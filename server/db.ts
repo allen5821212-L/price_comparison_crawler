@@ -1312,6 +1312,10 @@ export function canMaintainRecrawlPresetTemplate(
   return isOwner || (collaborationMode === "collaborative" && isCollaborator);
 }
 
+export function canManageRecrawlPresetTemplateCollaborators(isOwner: boolean) {
+  return isOwner;
+}
+
 export function deriveRecrawlPresetTemplateEstimate(categoryCount: number, categoryEstimateMs: number | null, estimateSampleSize: number) {
   return {
     estimateMs: categoryEstimateMs && categoryCount > 0 ? categoryEstimateMs * categoryCount : null,
@@ -1412,7 +1416,8 @@ export async function setCoolpcCategoryRecrawlPresetTemplateCollaborationMode(
 ) {
   const db = await getDb();
   if (!db) throw new Error("資料庫目前無法使用");
-  await getRecrawlPresetTemplateForOwner(userId, templateId);
+  const template = await getRecrawlPresetTemplateForOwner(userId, templateId);
+  if (!canManageRecrawlPresetTemplateCollaborators(template.userId === userId)) throw new Error("只有範本擁有者可以變更協作模式");
   await db.update(coolpcCategoryRecrawlPresetTemplates).set({ collaborationMode, updatedAt: new Date() }).where(and(
     eq(coolpcCategoryRecrawlPresetTemplates.id, templateId),
     eq(coolpcCategoryRecrawlPresetTemplates.userId, userId),
@@ -1424,6 +1429,7 @@ export async function addCoolpcCategoryRecrawlPresetTemplateCollaborator(userId:
   const db = await getDb();
   if (!db) throw new Error("資料庫目前無法使用");
   const template = await getRecrawlPresetTemplateForOwner(userId, templateId);
+  if (!canManageRecrawlPresetTemplateCollaborators(template.userId === userId)) throw new Error("只有範本擁有者可以管理協作者");
   const normalizedEmail = email.trim().toLowerCase();
   const [collaborator] = await db.select({ id: users.id, name: users.name, email: users.email }).from(users)
     .where(eq(users.email, normalizedEmail)).limit(1);
@@ -1438,7 +1444,8 @@ export async function addCoolpcCategoryRecrawlPresetTemplateCollaborator(userId:
 export async function removeCoolpcCategoryRecrawlPresetTemplateCollaborator(userId: number, templateId: number, collaboratorUserId: number) {
   const db = await getDb();
   if (!db) throw new Error("資料庫目前無法使用");
-  await getRecrawlPresetTemplateForOwner(userId, templateId);
+  const template = await getRecrawlPresetTemplateForOwner(userId, templateId);
+  if (!canManageRecrawlPresetTemplateCollaborators(template.userId === userId)) throw new Error("只有範本擁有者可以管理協作者");
   await db.delete(coolpcCategoryRecrawlPresetTemplateCollaborators).where(and(
     eq(coolpcCategoryRecrawlPresetTemplateCollaborators.templateId, templateId),
     eq(coolpcCategoryRecrawlPresetTemplateCollaborators.userId, collaboratorUserId),
