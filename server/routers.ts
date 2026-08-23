@@ -6,6 +6,7 @@ import { adminProcedure, protectedProcedure, publicProcedure, router } from "./_
 import {
   enqueueCrawlerJob,
   getDynamicPriceHistory,
+  getLatestListingAvailability,
   getFavoriteForUser,
   getLatestCrawlerStatus,
   getLatestDynamicComparison,
@@ -81,6 +82,8 @@ export const appRouter = router({
     }),
   }),
   comparison: router({
+    /** Small availability payload for the public listing-rate dashboard. */
+    availability: publicProcedure.query(async () => getLatestListingAvailability()),
     /** Public dynamic payload with server-side filtering, sorting, and page boundaries. */
     latest: publicProcedure.input(z.object({
       page: z.number().int().positive().default(1),

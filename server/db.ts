@@ -14,6 +14,7 @@ import {
   users,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
+import { buildListingAvailability, buildListingCategories } from "./listingAvailability";
 
 export type FeedbackPlatform = "coolpc" | "pchome" | "momo";
 
@@ -378,6 +379,78 @@ export async function getLatestDynamicComparison(query: DynamicComparisonQuery =
       total: Number(countRows[0]?.total ?? 0),
       totalPages: Math.max(1, Math.ceil(Number(countRows[0]?.total ?? 0) / pageSize)),
     },
+    run: {
+      id: run.id,
+      startedAt: run.startedAt,
+      finishedAt: run.finishedAt,
+      status: run.status,
+    },
+  };
+}
+
+/**
+ * Availability-first summary. A platform is counted as listed when a Sinya reference
+ * item has a resolved current-run counterpart on that platform.
+ */
+export async function getLatestListingAvailability() {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+
+  const [run] = await db.select().from(comparisonRuns)
+    .where(eq(comparisonRuns.status, "completed"))
+    .orderBy(desc(comparisonRuns.finishedAt), desc(comparisonRuns.id))
+    .limit(1);
+  if (!run) return null;
+
+  const [listingRows, sourceCategoryRows, matchedCategoryRows] = await Promise.all([
+    db.select({
+      coolpcCount: sql<number>`SUM(CASE WHEN ${comparisonMatches.coolpcName} IS NOT NULL THEN 1 ELSE 0 END)`,
+      pchomeCount: sql<number>`SUM(CASE WHEN ${comparisonMatches.pchomeName} IS NOT NULL THEN 1 ELSE 0 END)`,
+      momoCount: sql<number>`SUM(CASE WHEN ${comparisonMatches.momoName} IS NOT NULL THEN 1 ELSE 0 END)`,
+      allPlatformsCount: sql<number>`SUM(CASE WHEN ${comparisonMatches.coolpcName} IS NOT NULL AND ${comparisonMatches.pchomeName} IS NOT NULL AND ${comparisonMatches.momoName} IS NOT NULL THEN 1 ELSE 0 END)`,
+    }).from(comparisonMatches).where(eq(comparisonMatches.runId, run.id)),
+    db.select({
+      category: comparisonProducts.category,
+      sourceCount: sql<number>`COUNT(*)`,
+    }).from(comparisonProducts)
+      .where(and(
+        eq(comparisonProducts.lastSeenRunId, run.id),
+        eq(comparisonProducts.platform, "sinya"),
+      ))
+      .groupBy(comparisonProducts.category)
+      .orderBy(asc(comparisonProducts.category)),
+    db.select({
+      category: comparisonMatches.category,
+      coolpcCount: sql<number>`SUM(CASE WHEN ${comparisonMatches.coolpcName} IS NOT NULL THEN 1 ELSE 0 END)`,
+      pchomeCount: sql<number>`SUM(CASE WHEN ${comparisonMatches.pchomeName} IS NOT NULL THEN 1 ELSE 0 END)`,
+      momoCount: sql<number>`SUM(CASE WHEN ${comparisonMatches.momoName} IS NOT NULL THEN 1 ELSE 0 END)`,
+    }).from(comparisonMatches)
+      .where(eq(comparisonMatches.runId, run.id))
+      .groupBy(comparisonMatches.category),
+  ]);
+
+  const listingCounts = listingRows[0] ?? { coolpcCount: 0, pchomeCount: 0, momoCount: 0, allPlatformsCount: 0 };
+  const summary = buildListingAvailability({
+    sourceTotal: run.sinyaTotal,
+    catalogTotals: {
+      sinya: run.sinyaTotal,
+      coolpc: run.coolpcTotal,
+      pchome: run.pchomeTotal,
+      momo: run.momoTotal,
+    },
+    listedCounts: {
+      sinya: run.sinyaTotal,
+      coolpc: Number(listingCounts.coolpcCount ?? 0),
+      pchome: Number(listingCounts.pchomeCount ?? 0),
+      momo: Number(listingCounts.momoCount ?? 0),
+    },
+    allPlatformsListedCount: Number(listingCounts.allPlatformsCount ?? 0),
+  });
+
+  return {
+    ...summary,
+    categories: buildListingCategories(sourceCategoryRows, matchedCategoryRows),
+    updateTime: (run.finishedAt ?? run.startedAt).toLocaleString("sv-SE", { hour12: false }),
     run: {
       id: run.id,
       startedAt: run.startedAt,
