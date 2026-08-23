@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Activity, BarChart3, Moon, Package, RefreshCw, SlidersHorizontal, Sun } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { trpc } from "@/lib/trpc";
@@ -40,6 +40,16 @@ type CategoryAvailability = {
   pchome: { listedCount: number; listingRate: number };
   momo: { listedCount: number; listingRate: number };
 };
+
+/** Returns a completed batch ID only when it is newer than the one already rendered. */
+export function getCompletedRunIdToRefresh(
+  observedRunId: number | null,
+  run: { id: number; status: string } | null | undefined,
+) {
+  if (!run || run.status !== "completed") return null;
+  if (observedRunId === null || observedRunId === run.id) return null;
+  return run.id;
+}
 
 const platformTone: Record<PlatformKey, { text: string; track: string; fill: string }> = {
   sinya: { text: "text-primary", track: "bg-primary/15", fill: "bg-primary" },
@@ -118,9 +128,28 @@ export default function Home() {
     refetchInterval: 60_000,
     refetchOnWindowFocus: true,
   });
+  const comparisonStatusQuery = trpc.comparison.status.useQuery(undefined, {
+    refetchInterval: 10_000,
+    refetchOnWindowFocus: true,
+  });
+  const observedCompletedRunId = useRef<number | null>(null);
   const data = availabilityQuery.data;
   const platforms = data?.platforms ?? [];
   const loading = availabilityQuery.isLoading;
+
+  useEffect(() => {
+    const completedRun = comparisonStatusQuery.data?.latestCompletedRun;
+    const nextRunId = getCompletedRunIdToRefresh(observedCompletedRunId.current, completedRun);
+
+    if (observedCompletedRunId.current === null) {
+      observedCompletedRunId.current = completedRun?.status === "completed" ? completedRun.id : null;
+      return;
+    }
+    if (nextRunId === null) return;
+
+    observedCompletedRunId.current = nextRunId;
+    void availabilityQuery.refetch();
+  }, [availabilityQuery, comparisonStatusQuery.data?.latestCompletedRun]);
 
   const categories = useMemo(() => {
     const rows = [...(data?.categories ?? [])].filter(row => row.category.toLowerCase().includes(searchQuery.trim().toLowerCase()));
