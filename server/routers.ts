@@ -30,6 +30,7 @@ import {
   getDynamicPriceHistory,
   getLatestListingAvailability,
   getLatestMatchReviewQueue,
+  getLatestMatchReviewSummary,
   saveMatchReviewSkip,
   getFavoriteForUser,
   getLatestCrawlerStatus,
@@ -148,6 +149,8 @@ export const appRouter = router({
       platform: z.enum(["coolpc", "pchome", "momo"]).optional(),
       search: z.string().max(200).optional(),
     }).optional()).query(async ({ input }) => getLatestMatchReviewQueue(input ?? { page: 1, pageSize: 25 })),
+    /** Compact pollable count for navigation badges and high-risk alerts. */
+    reviewSummary: adminProcedure.query(async () => getLatestMatchReviewSummary()),
     /** Saves a team-wide deferral for this exact set of candidate names. */
     skipReview: adminProcedure.input(z.object({
       sourceKey: z.string().min(1).max(128),

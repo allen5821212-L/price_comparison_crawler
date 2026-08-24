@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/sidebar";
 import { startLogin } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
+import { trpc } from "@/lib/trpc";
 import { Bell, ClipboardCheck, LayoutDashboard, LogOut, PanelLeft, RadioTower, SlidersHorizontal } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
@@ -115,6 +116,13 @@ function DashboardLayoutContent({
   const sidebarRef = useRef<HTMLDivElement>(null);
   const activeMenuItem = menuItems.find(item => item.path === location);
   const isMobile = useIsMobile();
+  const reviewSummary = trpc.comparison.reviewSummary.useQuery(undefined, {
+    enabled: user?.role === "admin",
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
+  });
+  const reviewCount = reviewSummary.data?.total ?? 0;
+  const highRiskCount = reviewSummary.data?.highRiskTotal ?? 0;
 
   useEffect(() => {
     if (isCollapsed) {
@@ -195,6 +203,11 @@ function DashboardLayoutContent({
                         className={`h-4 w-4 ${isActive ? "text-primary" : ""}`}
                       />
                       <span>{item.label}</span>
+                      {item.path === "/review-queue" && reviewCount > 0 && (
+                        <span className={`ml-auto min-w-5 rounded-full px-1.5 py-0.5 text-center text-[10px] font-bold tabular-nums ${highRiskCount > 0 ? "bg-destructive/15 text-destructive" : "bg-primary/15 text-primary"}`}>
+                          {highRiskCount > 0 ? highRiskCount : reviewCount}
+                        </span>
+                      )}
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 );

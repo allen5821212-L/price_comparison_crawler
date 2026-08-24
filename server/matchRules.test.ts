@@ -15,6 +15,7 @@ const dbMocks = vi.hoisted(() => ({
   listMatchingFeedbackForAdmin: vi.fn(),
   listPriceNotificationsForUser: vi.fn(),
   getLatestMatchReviewQueue: vi.fn(),
+  getLatestMatchReviewSummary: vi.fn(),
   saveMatchReviewSkip: vi.fn(),
   markCrawlerEventsRead: vi.fn(),
   searchDynamicProducts: vi.fn(),
@@ -120,6 +121,14 @@ describe("matchRules router", () => {
 
     await expect(caller.comparison.reviewQueue({ page: 1, pageSize: 25 })).resolves.toEqual(queue);
     expect(dbMocks.getLatestMatchReviewQueue).toHaveBeenCalledWith({ page: 1, pageSize: 25 });
+  });
+
+  it("returns the compact high-risk review summary through the administrator procedure", async () => {
+    const summary = { run: { id: 21 }, total: 7, mediumTotal: 3, highTotal: 2, criticalTotal: 2, highRiskTotal: 4 };
+    dbMocks.getLatestMatchReviewSummary.mockResolvedValue(summary);
+    const caller = appRouter.createCaller(createAdminContext());
+
+    await expect(caller.comparison.reviewSummary()).resolves.toEqual(summary);
   });
 
   it("persists an administrator's deferred-review decision for the exact candidate fingerprint", async () => {

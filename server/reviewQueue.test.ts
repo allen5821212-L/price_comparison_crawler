@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildMatchReviewItem, calculatePriceSpread, createReviewFingerprint, filterAndSortReviewItems } from "./reviewQueue";
+import { buildMatchReviewItem, calculatePriceSpread, createReviewFingerprint, filterAndSortReviewItems, summarizeReviewItems } from "./reviewQueue";
 
 describe("待審核配對佇列", () => {
   it("calculates the relative spread from usable platform prices", () => {
@@ -37,5 +37,13 @@ describe("待審核配對佇列", () => {
 
     expect(filterAndSortReviewItems([source], { skippedFingerprints: new Set([skipped]) })).toEqual([]);
     expect(filterAndSortReviewItems([{ ...source, coolpcName: "GPU B" }], { skippedFingerprints: new Set([skipped]) })).toHaveLength(1);
+  });
+
+  it("summarizes all pending items while separating high-risk work", () => {
+    const critical = buildMatchReviewItem({ id: 1, sourceKey: "a", sinyaName: "Spec diff", category: null, sinyaPrice: 1000, coolpcName: "Different spec", coolpcPrice: 1000, pchomeName: null, pchomePrice: null, momoName: null, momoPrice: null, score: 0.95, hasSpecDiff: true });
+    const high = buildMatchReviewItem({ id: 2, sourceKey: "b", sinyaName: "Low confidence", category: null, sinyaPrice: 1000, coolpcName: "Candidate", coolpcPrice: 1000, pchomeName: null, pchomePrice: null, momoName: null, momoPrice: null, score: 0.4, hasSpecDiff: false });
+    const medium = buildMatchReviewItem({ id: 3, sourceKey: "c", sinyaName: "Moderate confidence", category: null, sinyaPrice: 1000, coolpcName: "Candidate", coolpcPrice: 1000, pchomeName: null, pchomePrice: null, momoName: null, momoPrice: null, score: 0.7, hasSpecDiff: false });
+
+    expect(summarizeReviewItems([critical!, high!, medium!])).toEqual({ total: 3, mediumTotal: 1, highTotal: 1, criticalTotal: 1, highRiskTotal: 2 });
   });
 });

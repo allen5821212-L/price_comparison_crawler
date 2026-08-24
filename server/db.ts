@@ -23,7 +23,7 @@ import {
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { buildListingAvailability, buildListingCategories } from "./listingAvailability";
-import { filterAndSortReviewItems, type ReviewPlatform, type ReviewSeverity } from "./reviewQueue";
+import { filterAndSortReviewItems, summarizeReviewItems, type ReviewPlatform, type ReviewSeverity } from "./reviewQueue";
 
 export type FeedbackPlatform = "coolpc" | "pchome" | "momo";
 
@@ -634,7 +634,7 @@ export async function getLatestMatchReviewQueue(input: {
     .where(eq(comparisonRuns.status, "completed"))
     .orderBy(desc(comparisonRuns.finishedAt), desc(comparisonRuns.id))
     .limit(1);
-  if (!run) return { run: null, total: 0, page: input.page, pageSize: input.pageSize, totalPages: 0, items: [] };
+  if (!run) return { run: null, total: 0, page: input.page, pageSize: input.pageSize, totalPages: 0, summary: summarizeReviewItems([]), items: [] };
 
   const rows = await db.select({
     id: comparisonMatches.id,
@@ -668,8 +668,15 @@ export async function getLatestMatchReviewQueue(input: {
     page,
     pageSize,
     totalPages,
+    summary: summarizeReviewItems(candidates),
     items: candidates.slice((page - 1) * pageSize, page * pageSize),
   };
+}
+
+/** Small admin payload suitable for frequent UI polling and alert badges. */
+export async function getLatestMatchReviewSummary() {
+  const queue = await getLatestMatchReviewQueue({ page: 1, pageSize: 10 });
+  return { run: queue.run, ...queue.summary };
 }
 
 export async function saveMatchReviewSkip(input: MatchReviewSkipInput) {

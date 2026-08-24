@@ -41,6 +41,14 @@ export type MatchReviewItem = {
   targets: ReviewTarget[];
 };
 
+export type MatchReviewSummary = {
+  total: number;
+  mediumTotal: number;
+  highTotal: number;
+  criticalTotal: number;
+  highRiskTotal: number;
+};
+
 const LOW_CONFIDENCE_THRESHOLD = 0.86;
 const HIGH_PRICE_SPREAD = 0.5;
 
@@ -128,4 +136,17 @@ export function filterAndSortReviewItems(
     .filter(item => !needle || [item.sinyaName, item.category, ...item.targets.map(target => target.name)]
       .join(" ").toLowerCase().includes(needle))
     .sort((left, right) => right.riskScore - left.riskScore || left.score - right.score || left.sinyaName.localeCompare(right.sinyaName, "zh-Hant"));
+}
+
+export function summarizeReviewItems(items: MatchReviewItem[]): MatchReviewSummary {
+  const mediumTotal = items.filter(item => item.severity === "medium").length;
+  const highTotal = items.filter(item => item.severity === "high").length;
+  const criticalTotal = items.filter(item => item.severity === "critical").length;
+  return {
+    total: items.length,
+    mediumTotal,
+    highTotal,
+    criticalTotal,
+    highRiskTotal: highTotal + criticalTotal,
+  };
 }

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Activity, BarChart3, ClipboardCheck, Crosshair, List, Moon, Package, RefreshCw, SlidersHorizontal, Sun } from "lucide-react";
+import { Activity, AlertTriangle, BarChart3, ClipboardCheck, Crosshair, List, Moon, Package, RefreshCw, SlidersHorizontal, Sun } from "lucide-react";
+import { useAuth } from "@/_core/hooks/useAuth";
 import { useTheme } from "@/contexts/ThemeContext";
 import { trpc } from "@/lib/trpc";
 import { getCompletedRunIdToRefresh } from "@/lib/comparisonSync";
@@ -113,6 +114,7 @@ function PlatformMetricCard({ platform, loading }: { platform: PlatformAvailabil
 
 export default function Home() {
   const { theme, toggleTheme } = useTheme();
+  const { user } = useAuth();
   const [searchQuery, setSearchQuery] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("coverage");
   const availabilityQuery = trpc.comparison.availability.useQuery(undefined, {
@@ -123,11 +125,17 @@ export default function Home() {
     refetchInterval: 10_000,
     refetchOnWindowFocus: true,
   });
+  const reviewSummaryQuery = trpc.comparison.reviewSummary.useQuery(undefined, {
+    enabled: user?.role === "admin",
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
+  });
   const observedCompletedRunId = useRef<number | null>(null);
   const data = availabilityQuery.data;
   const platforms = data?.platforms ?? [];
   const loading = availabilityQuery.isLoading;
   const latestCompletedRun = comparisonStatusQuery.data?.latestCompletedRun;
+  const reviewSummary = reviewSummaryQuery.data;
 
   useEffect(() => {
     const completedRun = comparisonStatusQuery.data?.latestCompletedRun;
@@ -184,7 +192,7 @@ export default function Home() {
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button variant="ghost" size="icon" asChild>
-                  <a href="/review-queue" aria-label="待審核配對佇列"><ClipboardCheck className="size-4" /></a>
+                  <a href="/review-queue" aria-label="待審核配對佇列" className="relative"><ClipboardCheck className="size-4" />{reviewSummary && reviewSummary.total > 0 && <span className={`absolute -right-2 -top-2 min-w-4 rounded-full px-1 text-center text-[10px] font-bold leading-4 ${reviewSummary.highRiskTotal > 0 ? "bg-destructive text-destructive-foreground" : "bg-primary text-primary-foreground"}`}>{reviewSummary.highRiskTotal > 0 ? reviewSummary.highRiskTotal : reviewSummary.total}</span>}</a>
                 </Button>
               </TooltipTrigger>
               <TooltipContent>待審核配對佇列</TooltipContent>
@@ -250,6 +258,7 @@ export default function Home() {
                 <RefreshCw className={`size-3 ${availabilityQuery.isFetching ? "animate-spin" : ""}`} />{syncStatusLabel}
               </Badge>
             </div>
+            {user?.role === "admin" && reviewSummary && reviewSummary.total > 0 && <a href="/review-queue" className={`mt-5 flex max-w-2xl items-center justify-between gap-4 rounded-xl border p-4 transition-colors hover:bg-card/70 ${reviewSummary.highRiskTotal > 0 ? "border-destructive/40 bg-destructive/10" : "border-primary/35 bg-primary/10"}`}><div className="flex items-start gap-3"><AlertTriangle className={`mt-0.5 size-5 shrink-0 ${reviewSummary.highRiskTotal > 0 ? "text-destructive" : "text-primary"}`} /><div><p className="font-semibold">待審核配對 {reviewSummary.total.toLocaleString()} 件</p><p className="mt-1 text-sm text-muted-foreground">{reviewSummary.highRiskTotal > 0 ? `其中 ${reviewSummary.highRiskTotal.toLocaleString()} 件為高風險，請優先確認。` : "目前沒有高風險配對，仍可進入佇列處理。"}</p></div></div><Badge variant="outline" className="shrink-0">查看佇列</Badge></a>}
             {data && <p className="mt-4 text-sm text-muted-foreground">最後更新：<span className="font-mono font-medium text-foreground">{data.updateTime}</span></p>}
           </div>
         </div>

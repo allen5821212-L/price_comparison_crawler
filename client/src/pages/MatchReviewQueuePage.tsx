@@ -76,11 +76,17 @@ export default function MatchReviewQueuePage() {
     platform: platform === "all" ? undefined : platform,
     search: search.trim() || undefined,
   }, { enabled: user?.role === "admin", refetchOnWindowFocus: true });
+  const reviewSummaryQuery = trpc.comparison.reviewSummary.useQuery(undefined, {
+    enabled: user?.role === "admin",
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
+  });
   const saveMatch = trpc.matchRules.confirm.useMutation({
     onSuccess: (_result, input) => {
       toast.success(`已儲存 ${PLATFORM_LABELS[input.platform]} 的精準規則；下次爬蟲會優先套用。`);
       void utils.matchRules.listForAdmin.invalidate();
       void utils.comparison.reviewQueue.invalidate();
+      void utils.comparison.reviewSummary.invalidate();
       setDialogOpen(false);
     },
     onError: error => toast.error(error.message || "無法儲存修正，請稍後再試。"),
@@ -89,6 +95,7 @@ export default function MatchReviewQueuePage() {
     onSuccess: () => {
       toast.success("已略過此候選組合；若候選品名或規格訊號改變，系統會重新送審。");
       void utils.comparison.reviewQueue.invalidate();
+      void utils.comparison.reviewSummary.invalidate();
     },
     onError: error => toast.error(error.message || "無法略過此待審核項目。"),
   });
@@ -111,13 +118,14 @@ export default function MatchReviewQueuePage() {
               系統會從最新完成批次挑出規格差異、低信心或跨平台價格落差過大的配對。請開啟精準搜尋後選取正確候選，讓後續爬蟲優先採用已確認規則。
             </p>
           </div>
-          <Button variant="outline" onClick={() => queueQuery.refetch()} disabled={queueQuery.isFetching || user?.role !== "admin"}><RefreshCw className={`mr-2 size-4 ${queueQuery.isFetching ? "animate-spin" : ""}`} />重新檢查佇列</Button>
+          <Button variant="outline" onClick={() => { void queueQuery.refetch(); void reviewSummaryQuery.refetch(); }} disabled={queueQuery.isFetching || user?.role !== "admin"}><RefreshCw className={`mr-2 size-4 ${queueQuery.isFetching ? "animate-spin" : ""}`} />重新檢查佇列</Button>
         </section>
 
         {user?.role !== "admin" ? (
           <Card className="border-amber-500/30 bg-amber-500/5 p-6"><div className="flex gap-3"><ShieldAlert className="mt-0.5 size-5 shrink-0 text-amber-500" /><div><p className="font-semibold">此佇列限管理員審核</p><p className="mt-1 text-sm text-muted-foreground">請以管理員帳號登入後，確認或改配每個系統標記的可疑品項。</p></div></div></Card>
         ) : (
           <>
+            {reviewSummaryQuery.data && <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><Card className="p-4 shadow-sm"><p className="text-xs font-medium text-muted-foreground">待審核總數</p><p className="mt-1 text-2xl font-bold tabular-nums">{reviewSummaryQuery.data.total.toLocaleString()}</p></Card><Card className="border-destructive/35 bg-destructive/5 p-4 shadow-sm"><p className="text-xs font-medium text-destructive">需優先確認</p><p className="mt-1 text-2xl font-bold tabular-nums text-destructive">{reviewSummaryQuery.data.criticalTotal.toLocaleString()}</p><Button variant="ghost" size="sm" className="mt-2 h-auto px-0 text-xs text-destructive hover:bg-transparent hover:text-destructive" onClick={() => setSeverity("critical")}>只看緊急風險</Button></Card><Card className="p-4 shadow-sm"><p className="text-xs font-medium text-muted-foreground">高度風險</p><p className="mt-1 text-2xl font-bold tabular-nums">{reviewSummaryQuery.data.highTotal.toLocaleString()}</p></Card><Card className="p-4 shadow-sm"><p className="text-xs font-medium text-muted-foreground">中度風險</p><p className="mt-1 text-2xl font-bold tabular-nums">{reviewSummaryQuery.data.mediumTotal.toLocaleString()}</p></Card></section>}
             <Card className="p-4 shadow-sm">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
                 <div className="relative min-w-0 flex-1"><Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={event => setSearch(event.target.value)} className="pl-9" placeholder="搜尋欣亞品名、分類或候選商品…" /></div>

@@ -4,6 +4,7 @@ import NotFound from "@/pages/NotFound";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { PriceAlertListener } from "./components/PriceAlertListener";
+import { ReviewQueueAlertListener } from "./components/ReviewQueueAlertListener";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
 import RulesManagement from "./pages/RulesManagement";
@@ -50,6 +51,7 @@ function App() {
         <TooltipProvider>
           <Toaster />
           <PriceAlertListener />
+          <ReviewQueueAlertListener />
           <Router />
         </TooltipProvider>
       </ThemeProvider>
