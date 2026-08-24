@@ -58,6 +58,27 @@ export const matchingFeedback = mysqlTable(
 export type MatchingFeedback = typeof matchingFeedback.$inferSelect;
 export type InsertMatchingFeedback = typeof matchingFeedback.$inferInsert;
 
+/** 管理員略過的可疑配對組合；候選品名改變時會產生新指紋並重新進入待審核佇列。 */
+export const matchReviewSkips = mysqlTable(
+  "match_review_skips",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    sourceKey: varchar("source_key", { length: 128 }).notNull(),
+    fingerprint: varchar("fingerprint", { length: 64 }).notNull(),
+    createdByOpenId: varchar("created_by_open_id", { length: 64 }).notNull(),
+    note: text("note"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    uniqueSourceFingerprint: uniqueIndex("match_review_skips_source_fingerprint_unique").on(table.sourceKey, table.fingerprint),
+    fingerprintIdx: index("match_review_skips_fingerprint_idx").on(table.fingerprint),
+  }),
+);
+
+export type MatchReviewSkip = typeof matchReviewSkips.$inferSelect;
+export type InsertMatchReviewSkip = typeof matchReviewSkips.$inferInsert;
+
 /**
  * 每次四平台爬蟲的執行生命週期與彙總數據。
  * 只有 completed 的最新一筆會提供給公開比價 API，避免失敗中的爬蟲覆蓋使用者目前看到的資料。

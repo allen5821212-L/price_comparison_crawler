@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Activity, BarChart3, Crosshair, List, Moon, Package, RefreshCw, SlidersHorizontal, Sun } from "lucide-react";
+import { Activity, BarChart3, ClipboardCheck, Crosshair, List, Moon, Package, RefreshCw, SlidersHorizontal, Sun } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { trpc } from "@/lib/trpc";
 import { getCompletedRunIdToRefresh } from "@/lib/comparisonSync";
@@ -180,6 +180,14 @@ export default function Home() {
                 </Button>
               </TooltipTrigger>
               <TooltipContent>精準比對與修正品項</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" asChild>
+                  <a href="/review-queue" aria-label="待審核配對佇列"><ClipboardCheck className="size-4" /></a>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>待審核配對佇列</TooltipContent>
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>

@@ -13,6 +13,7 @@ import CoolpcCoveragePage from "./pages/CoolpcCoveragePage";
 import CoolpcOnlyPage from "./pages/CoolpcOnlyPage";
 import PrecisionMatchingPage from "./pages/PrecisionMatchingPage";
 import ComparisonListPage from "./pages/ComparisonListPage";
+import MatchReviewQueuePage from "./pages/MatchReviewQueuePage";
 
 function Router() {
   // make sure to consider if you need authentication for certain routes
@@ -24,6 +25,7 @@ function Router() {
       <Route path={"/crawler"} component={CrawlerMonitor} />
       <Route path={"/favorites"} component={FavoritesPage} />
       <Route path={"/matching"} component={PrecisionMatchingPage} />
+      <Route path={"/review-queue"} component={MatchReviewQueuePage} />
       <Route path={"/coverage"} component={CoolpcCoveragePage} />
       <Route path={"/coolpc-only"} component={CoolpcOnlyPage} />
       <Route path={"/404"} component={NotFound} />

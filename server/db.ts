@@ -15,6 +15,7 @@ import {
   crawlerIssueReports,
   crawlerJobs,
   InsertUser,
+  matchReviewSkips,
   matchingFeedback,
   priceNotifications,
   productFavorites,
@@ -22,6 +23,7 @@ import {
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { buildListingAvailability, buildListingCategories } from "./listingAvailability";
+import { filterAndSortReviewItems, type ReviewPlatform, type ReviewSeverity } from "./reviewQueue";
 
 export type FeedbackPlatform = "coolpc" | "pchome" | "momo";
 
@@ -32,6 +34,13 @@ export interface MatchingFeedbackInput {
   sourceAlias?: string | null;
   targetAlias?: string | null;
   platform: FeedbackPlatform;
+  createdByOpenId: string;
+  note?: string | null;
+}
+
+export interface MatchReviewSkipInput {
+  sourceKey: string;
+  fingerprint: string;
   createdByOpenId: string;
   note?: string | null;
 }
@@ -608,6 +617,76 @@ export async function searchDynamicProducts(input: {
     .limit(Math.min(50, Math.max(1, input.limit ?? 50)));
 
   return rows.map(mapDynamicProduct);
+}
+
+export async function getLatestMatchReviewQueue(input: {
+  page: number;
+  pageSize: number;
+  severity?: ReviewSeverity;
+  platform?: ReviewPlatform;
+  search?: string;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+
+  const [run] = await db.select({ id: comparisonRuns.id, finishedAt: comparisonRuns.finishedAt, startedAt: comparisonRuns.startedAt })
+    .from(comparisonRuns)
+    .where(eq(comparisonRuns.status, "completed"))
+    .orderBy(desc(comparisonRuns.finishedAt), desc(comparisonRuns.id))
+    .limit(1);
+  if (!run) return { run: null, total: 0, page: input.page, pageSize: input.pageSize, totalPages: 0, items: [] };
+
+  const rows = await db.select({
+    id: comparisonMatches.id,
+    sourceKey: comparisonMatches.sourceKey,
+    sinyaName: comparisonMatches.sinyaName,
+    category: comparisonMatches.category,
+    sinyaPrice: comparisonMatches.sinyaPrice,
+    coolpcName: comparisonMatches.coolpcName,
+    coolpcPrice: comparisonMatches.coolpcPrice,
+    pchomeName: comparisonMatches.pchomeName,
+    pchomePrice: comparisonMatches.pchomePrice,
+    momoName: comparisonMatches.momoName,
+    momoPrice: comparisonMatches.momoPrice,
+    score: comparisonMatches.score,
+    hasSpecDiff: comparisonMatches.hasSpecDiff,
+  }).from(comparisonMatches)
+    .where(eq(comparisonMatches.runId, run.id));
+
+  const skippedRows = await db.select({ fingerprint: matchReviewSkips.fingerprint }).from(matchReviewSkips);
+  const candidates = filterAndSortReviewItems(rows, {
+    ...input,
+    skippedFingerprints: new Set(skippedRows.map(row => row.fingerprint)),
+  });
+  const total = candidates.length;
+  const pageSize = Math.min(100, Math.max(10, input.pageSize));
+  const totalPages = Math.ceil(total / pageSize);
+  const page = Math.min(Math.max(1, input.page), Math.max(1, totalPages));
+  return {
+    run: { id: run.id, finishedAt: run.finishedAt ?? run.startedAt },
+    total,
+    page,
+    pageSize,
+    totalPages,
+    items: candidates.slice((page - 1) * pageSize, page * pageSize),
+  };
+}
+
+export async function saveMatchReviewSkip(input: MatchReviewSkipInput) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+
+  await db.insert(matchReviewSkips).values({
+    sourceKey: input.sourceKey,
+    fingerprint: input.fingerprint,
+    createdByOpenId: input.createdByOpenId,
+    note: input.note ?? null,
+  }).onDuplicateKeyUpdate({
+    set: {
+      createdByOpenId: input.createdByOpenId,
+      note: input.note ?? null,
+    },
+  });
 }
 
 /** Dynamic four-platform history grouped into the current dialog's day-based response shape. */

@@ -14,6 +14,8 @@ const dbMocks = vi.hoisted(() => ({
   listFavoritesForUser: vi.fn(),
   listMatchingFeedbackForAdmin: vi.fn(),
   listPriceNotificationsForUser: vi.fn(),
+  getLatestMatchReviewQueue: vi.fn(),
+  saveMatchReviewSkip: vi.fn(),
   markCrawlerEventsRead: vi.fn(),
   searchDynamicProducts: vi.fn(),
   setMatchingFeedbackActive: vi.fn(),
@@ -109,6 +111,24 @@ describe("matchRules router", () => {
     const caller = appRouter.createCaller(createAdminContext());
 
     await expect(caller.comparison.latest()).resolves.toEqual(comparison);
+  });
+
+  it("returns the latest suspicious-match review queue only through the administrator procedure", async () => {
+    const queue = { run: { id: 21 }, total: 1, page: 1, pageSize: 25, totalPages: 1, items: [{ id: 4, severity: "high" }] };
+    dbMocks.getLatestMatchReviewQueue.mockResolvedValue(queue);
+    const caller = appRouter.createCaller(createAdminContext());
+
+    await expect(caller.comparison.reviewQueue({ page: 1, pageSize: 25 })).resolves.toEqual(queue);
+    expect(dbMocks.getLatestMatchReviewQueue).toHaveBeenCalledWith({ page: 1, pageSize: 25 });
+  });
+
+  it("persists an administrator's deferred-review decision for the exact candidate fingerprint", async () => {
+    dbMocks.saveMatchReviewSkip.mockResolvedValue(undefined);
+    const caller = appRouter.createCaller(createAdminContext());
+    const fingerprint = "a".repeat(64);
+
+    await expect(caller.comparison.skipReview({ sourceKey: "sinya_42", fingerprint })).resolves.toEqual({ success: true });
+    expect(dbMocks.saveMatchReviewSkip).toHaveBeenCalledWith({ sourceKey: "sinya_42", fingerprint, createdByOpenId: "owner-open-id" });
   });
 
   it("allows precision matching to search the Sinya source catalog", async () => {

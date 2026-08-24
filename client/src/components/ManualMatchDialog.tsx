@@ -53,6 +53,7 @@ interface ManualMatchDialogProps {
   onNoMatch: () => void;
   onManualSave?: (their_name: string, their_price?: number) => void;
   rejectedIds?: Set<string>;
+  initialPlatform?: Platform;
 }
 
 /** Extract model keywords from a product name for default search */
@@ -230,6 +231,7 @@ export function ManualMatchDialog({
   onNoMatch,
   onManualSave,
   rejectedIds = new Set(),
+  initialPlatform = "coolpc",
 }: ManualMatchDialogProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [activePlatform, setActivePlatform] = useState<Platform>("coolpc");
@@ -238,6 +240,10 @@ export function ManualMatchDialog({
   const [manualPrice, setManualPrice] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open) setActivePlatform(initialPlatform);
+  }, [initialPlatform, open]);
   const [showOnlySpecDiff, setShowOnlySpecDiff] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);

@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/sidebar";
 import { startLogin } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
-import { Bell, LayoutDashboard, LogOut, PanelLeft, RadioTower, SlidersHorizontal } from "lucide-react";
+import { Bell, ClipboardCheck, LayoutDashboard, LogOut, PanelLeft, RadioTower, SlidersHorizontal } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { DashboardLayoutSkeleton } from './DashboardLayoutSkeleton';
@@ -29,6 +29,7 @@ import { Button } from "./ui/button";
 
 const menuItems = [
   { icon: LayoutDashboard, label: "價格比對", path: "/" },
+  { icon: ClipboardCheck, label: "待審核配對", path: "/review-queue" },
   { icon: SlidersHorizontal, label: "同步規則", path: "/rules" },
   { icon: RadioTower, label: "爬蟲監控", path: "/crawler" },
   { icon: Bell, label: "收藏與通知", path: "/favorites" },

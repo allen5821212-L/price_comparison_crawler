@@ -29,6 +29,8 @@ import {
   getCrawlerRefreshEstimates,
   getDynamicPriceHistory,
   getLatestListingAvailability,
+  getLatestMatchReviewQueue,
+  saveMatchReviewSkip,
   getFavoriteForUser,
   getLatestCrawlerStatus,
   getLatestDynamicComparison,
@@ -138,6 +140,22 @@ export const appRouter = router({
       query: z.string().min(1).max(200),
       limit: z.number().int().min(1).max(50).optional(),
     })).query(async ({ input }) => searchDynamicProducts(input)),
+    /** Admin-only queue of signals that require a human to verify the product mapping. */
+    reviewQueue: adminProcedure.input(z.object({
+      page: z.number().int().positive().default(1),
+      pageSize: z.number().int().min(10).max(100).default(25),
+      severity: z.enum(["medium", "high", "critical"]).optional(),
+      platform: z.enum(["coolpc", "pchome", "momo"]).optional(),
+      search: z.string().max(200).optional(),
+    }).optional()).query(async ({ input }) => getLatestMatchReviewQueue(input ?? { page: 1, pageSize: 25 })),
+    /** Saves a team-wide deferral for this exact set of candidate names. */
+    skipReview: adminProcedure.input(z.object({
+      sourceKey: z.string().min(1).max(128),
+      fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+    })).mutation(async ({ ctx, input }) => {
+      await saveMatchReviewSkip({ ...input, createdByOpenId: ctx.user.openId });
+      return { success: true } as const;
+    }),
     /** Database-backed history replaces price_history.json. */
     history: publicProcedure.query(async () => getDynamicPriceHistory()),
     /** Lightweight polling endpoint for crawler status and recent completion time. */
