@@ -748,11 +748,26 @@ export async function upsertMatchReviewAssignment(input: MatchReviewAssignmentIn
   });
 }
 
-export async function resolveMatchReviewAssignment(sourceKey: string, fingerprint: string) {
+export async function resolveMatchReviewAssignment(input: {
+  sourceKey: string;
+  fingerprint: string;
+  assigneeUserId: number;
+  assignedByOpenId: string;
+}) {
   const db = await getDb();
   if (!db) throw new Error("資料庫目前無法使用");
-  await db.update(matchReviewAssignments).set({ status: "resolved", resolvedAt: new Date() })
-    .where(and(eq(matchReviewAssignments.sourceKey, sourceKey), eq(matchReviewAssignments.fingerprint, fingerprint)));
+  const now = new Date();
+  await db.insert(matchReviewAssignments).values({
+    sourceKey: input.sourceKey,
+    fingerprint: input.fingerprint,
+    assigneeUserId: input.assigneeUserId,
+    assignedByOpenId: input.assignedByOpenId,
+    dueAt: now,
+    status: "resolved",
+    resolvedAt: now,
+  }).onDuplicateKeyUpdate({
+    set: { status: "resolved", resolvedAt: now },
+  });
 }
 
 export async function getMatchReviewNotificationSettings(userId: number) {

@@ -171,8 +171,12 @@ export const appRouter = router({
     resolveReview: adminProcedure.input(z.object({
       sourceKey: z.string().min(1).max(128),
       fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
-    })).mutation(async ({ input }) => {
-      await resolveMatchReviewAssignment(input.sourceKey, input.fingerprint);
+    })).mutation(async ({ ctx, input }) => {
+      await resolveMatchReviewAssignment({
+        ...input,
+        assigneeUserId: ctx.user.id,
+        assignedByOpenId: ctx.user.openId,
+      });
       return { success: true } as const;
     }),
     reviewNotificationSettings: adminProcedure.query(async ({ ctx }) => getMatchReviewNotificationSettings(ctx.user.id)),
@@ -191,7 +195,11 @@ export const appRouter = router({
       fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
     })).mutation(async ({ ctx, input }) => {
       await saveMatchReviewSkip({ ...input, createdByOpenId: ctx.user.openId });
-      await resolveMatchReviewAssignment(input.sourceKey, input.fingerprint);
+      await resolveMatchReviewAssignment({
+        ...input,
+        assigneeUserId: ctx.user.id,
+        assignedByOpenId: ctx.user.openId,
+      });
       return { success: true } as const;
     }),
     /** Database-backed history replaces price_history.json. */

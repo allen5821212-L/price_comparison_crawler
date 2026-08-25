@@ -155,11 +155,22 @@ describe("matchRules router", () => {
 
   it("persists an administrator's deferred-review decision for the exact candidate fingerprint", async () => {
     dbMocks.saveMatchReviewSkip.mockResolvedValue(undefined);
+    dbMocks.resolveMatchReviewAssignment.mockResolvedValue(undefined);
     const caller = appRouter.createCaller(createAdminContext());
     const fingerprint = "a".repeat(64);
 
     await expect(caller.comparison.skipReview({ sourceKey: "sinya_42", fingerprint })).resolves.toEqual({ success: true });
     expect(dbMocks.saveMatchReviewSkip).toHaveBeenCalledWith({ sourceKey: "sinya_42", fingerprint, createdByOpenId: "owner-open-id" });
+    expect(dbMocks.resolveMatchReviewAssignment).toHaveBeenCalledWith({ sourceKey: "sinya_42", fingerprint, assigneeUserId: 1, assignedByOpenId: "owner-open-id" });
+  });
+
+  it("creates a resolved review record for an unassigned candidate after a pairing is adopted", async () => {
+    dbMocks.resolveMatchReviewAssignment.mockResolvedValue(undefined);
+    const caller = appRouter.createCaller(createAdminContext());
+    const fingerprint = "c".repeat(64);
+
+    await expect(caller.comparison.resolveReview({ sourceKey: "sinya_52", fingerprint })).resolves.toEqual({ success: true });
+    expect(dbMocks.resolveMatchReviewAssignment).toHaveBeenCalledWith({ sourceKey: "sinya_52", fingerprint, assigneeUserId: 1, assignedByOpenId: "owner-open-id" });
   });
 
   it("allows precision matching to search the Sinya source catalog", async () => {
