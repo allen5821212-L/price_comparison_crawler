@@ -31,16 +31,21 @@ import {
   getLatestListingAvailability,
   getLatestMatchReviewQueue,
   getLatestMatchReviewSummary,
+  getMatchReviewEscalationSettings,
   getMatchReviewNotificationSettings,
+  getMyOverdueMatchReviewEscalations,
   getWeeklyMatchQualityReport,
   addMatchReviewComment,
   bulkReassignOverdueMatchReviews,
   handoffMatchReview,
   listMatchReviewActivity,
+  listUnreadMatchReviewMentions,
   listReviewAssignees,
+  markMatchReviewMentionsRead,
   resolveMatchReviewAssignment,
   saveMatchReviewSkip,
   upsertMatchReviewAssignment,
+  upsertMatchReviewEscalationSettings,
   upsertMatchReviewNotificationSettings,
   getFavoriteForUser,
   getLatestCrawlerStatus,
@@ -191,8 +196,16 @@ export const appRouter = router({
       sourceKey: z.string().min(1).max(128),
       fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
       message: z.string().trim().min(1).max(2_000),
+      mentionedUserIds: z.array(z.number().int().positive()).max(20).optional(),
     })).mutation(async ({ ctx, input }) => {
       await addMatchReviewComment({ ...input, authorUserId: ctx.user.id });
+      return { success: true } as const;
+    }),
+    unreadReviewMentions: adminProcedure.query(async ({ ctx }) => listUnreadMatchReviewMentions(ctx.user.id)),
+    markReviewMentionsRead: adminProcedure.input(z.object({
+      mentionIds: z.array(z.number().int().positive()).min(1).max(20),
+    })).mutation(async ({ ctx, input }) => {
+      await markMatchReviewMentionsRead(ctx.user.id, input.mentionIds);
       return { success: true } as const;
     }),
     handoffReview: adminProcedure.input(z.object({
@@ -223,6 +236,17 @@ export const appRouter = router({
       await upsertMatchReviewNotificationSettings({ userId: ctx.user.id, ...input });
       return { success: true } as const;
     }),
+    reviewEscalationSettings: adminProcedure.query(async ({ ctx }) => getMatchReviewEscalationSettings(ctx.user.id)),
+    updateReviewEscalationSettings: adminProcedure.input(z.object({
+      active: z.boolean(),
+      escalationRecipientUserId: z.number().int().positive().nullable().optional(),
+      escalateAfterMinutes: z.number().int().min(5).max(10_080),
+      reminderIntervalMinutes: z.number().int().min(5).max(1_440),
+    })).mutation(async ({ ctx, input }) => {
+      await upsertMatchReviewEscalationSettings({ userId: ctx.user.id, ...input });
+      return { success: true } as const;
+    }),
+    myOverdueReviewEscalations: adminProcedure.query(async ({ ctx }) => getMyOverdueMatchReviewEscalations(ctx.user.id)),
     weeklyQualityReport: adminProcedure.query(async () => getWeeklyMatchQualityReport()),
     /** Saves a team-wide deferral for this exact set of candidate names. */
     skipReview: adminProcedure.input(z.object({

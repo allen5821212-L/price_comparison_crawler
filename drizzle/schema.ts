@@ -127,6 +127,47 @@ export const matchReviewActivityLogs = mysqlTable(
 export type MatchReviewActivityLog = typeof matchReviewActivityLogs.$inferSelect;
 export type InsertMatchReviewActivityLog = typeof matchReviewActivityLogs.$inferInsert;
 
+/** 指定管理員的評論提及紀錄；每位管理員可讀取並標示自己的未讀提及。 */
+export const matchReviewMentions = mysqlTable(
+  "match_review_mentions",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    activityLogId: int("activity_log_id").notNull(),
+    mentionedUserId: int("mentioned_user_id").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    readAt: timestamp("read_at"),
+  },
+  table => ({
+    uniqueActivityMentionedUser: uniqueIndex("match_review_mentions_activity_user_unique").on(table.activityLogId, table.mentionedUserId),
+    unreadByUserIdx: index("match_review_mentions_unread_user_idx").on(table.mentionedUserId, table.readAt, table.createdAt),
+  }),
+);
+
+export type MatchReviewMention = typeof matchReviewMentions.$inferSelect;
+export type InsertMatchReviewMention = typeof matchReviewMentions.$inferInsert;
+
+/** 個人化逾期升級規則；提醒會在管理員開啟系統期間按頻率輪詢與提示。 */
+export const matchReviewEscalationSettings = mysqlTable(
+  "match_review_escalation_settings",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    userId: int("user_id").notNull(),
+    escalationRecipientUserId: int("escalation_recipient_user_id"),
+    active: boolean("active").default(true).notNull(),
+    escalateAfterMinutes: int("escalate_after_minutes").default(60).notNull(),
+    reminderIntervalMinutes: int("reminder_interval_minutes").default(30).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    uniqueUser: uniqueIndex("match_review_escalation_settings_user_unique").on(table.userId),
+    recipientActiveIdx: index("match_review_escalation_settings_recipient_active_idx").on(table.escalationRecipientUserId, table.active),
+  }),
+);
+
+export type MatchReviewEscalationSettings = typeof matchReviewEscalationSettings.$inferSelect;
+export type InsertMatchReviewEscalationSettings = typeof matchReviewEscalationSettings.$inferInsert;
+
 /** 管理員個人化的待審核提醒門檻；0 表示該風險級別不發出提醒。 */
 export const matchReviewNotificationSettings = mysqlTable(
   "match_review_notification_settings",

@@ -16,18 +16,23 @@ const dbMocks = vi.hoisted(() => ({
   listPriceNotificationsForUser: vi.fn(),
   getLatestMatchReviewQueue: vi.fn(),
   getLatestMatchReviewSummary: vi.fn(),
+  getMatchReviewEscalationSettings: vi.fn(),
   getMatchReviewNotificationSettings: vi.fn(),
+  getMyOverdueMatchReviewEscalations: vi.fn(),
   getWeeklyMatchQualityReport: vi.fn(),
   addMatchReviewComment: vi.fn(),
   bulkReassignOverdueMatchReviews: vi.fn(),
   handoffMatchReview: vi.fn(),
   listMatchReviewActivity: vi.fn(),
+  listUnreadMatchReviewMentions: vi.fn(),
   listReviewAssignees: vi.fn(),
   resolveMatchReviewAssignment: vi.fn(),
   saveMatchReviewSkip: vi.fn(),
   upsertMatchReviewAssignment: vi.fn(),
+  upsertMatchReviewEscalationSettings: vi.fn(),
   upsertMatchReviewNotificationSettings: vi.fn(),
   markCrawlerEventsRead: vi.fn(),
+  markMatchReviewMentionsRead: vi.fn(),
   searchDynamicProducts: vi.fn(),
   setMatchingFeedbackActive: vi.fn(),
   setFavoriteActiveForUser: vi.fn(),
@@ -171,6 +176,25 @@ describe("matchRules router", () => {
     await expect(caller.comparison.reviewActivity({ sourceKey: "sinya_7", fingerprint })).resolves.toEqual([{ id: 1, type: "comment", message: "請確認容量規格" }]);
     await expect(caller.comparison.bulkReassignOverdueReviews({ assigneeUserId: 2, dueAt, message: "晚班接手" })).resolves.toEqual({ count: 3 });
     expect(dbMocks.bulkReassignOverdueMatchReviews).toHaveBeenCalledWith({ assigneeUserId: 2, dueAt, message: "晚班接手", authorUserId: 1, assignedByOpenId: "owner-open-id" });
+  });
+
+  it("stores explicit manager mentions and returns personal mention plus overdue escalation data", async () => {
+    const caller = appRouter.createCaller(createAdminContext());
+    const fingerprint = "e".repeat(64);
+    const escalationSettings = { userId: 1, escalationRecipientUserId: 2, active: true, escalateAfterMinutes: 60, reminderIntervalMinutes: 30 };
+    dbMocks.listUnreadMatchReviewMentions.mockResolvedValue([{ id: 5, sourceKey: "sinya_8", fingerprint, message: "請協助確認" }]);
+    dbMocks.getMatchReviewEscalationSettings.mockResolvedValue(escalationSettings);
+    dbMocks.getMyOverdueMatchReviewEscalations.mockResolvedValue({ active: true, reminderIntervalMinutes: 30, total: 2, items: [] });
+
+    await expect(caller.comparison.addReviewComment({ sourceKey: "sinya_8", fingerprint, message: "請協助確認", mentionedUserIds: [2] })).resolves.toEqual({ success: true });
+    expect(dbMocks.addMatchReviewComment).toHaveBeenCalledWith({ sourceKey: "sinya_8", fingerprint, message: "請協助確認", mentionedUserIds: [2], authorUserId: 1 });
+    await expect(caller.comparison.unreadReviewMentions()).resolves.toHaveLength(1);
+    await expect(caller.comparison.markReviewMentionsRead({ mentionIds: [5] })).resolves.toEqual({ success: true });
+    expect(dbMocks.markMatchReviewMentionsRead).toHaveBeenCalledWith(1, [5]);
+    await expect(caller.comparison.reviewEscalationSettings()).resolves.toEqual(escalationSettings);
+    await expect(caller.comparison.updateReviewEscalationSettings(escalationSettings)).resolves.toEqual({ success: true });
+    expect(dbMocks.upsertMatchReviewEscalationSettings).toHaveBeenCalledWith(escalationSettings);
+    await expect(caller.comparison.myOverdueReviewEscalations()).resolves.toMatchObject({ total: 2 });
   });
 
   it("persists an administrator's deferred-review decision for the exact candidate fingerprint", async () => {

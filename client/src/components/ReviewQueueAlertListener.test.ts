@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildReviewAlert } from "./ReviewQueueAlertListener";
+import { buildOverdueEscalationAlert, buildReviewAlert, shouldEmitOverdueEscalation } from "./ReviewQueueAlertListener";
 
 describe("高風險配對提醒", () => {
   it("prioritizes newly critical review items", () => {
@@ -15,5 +15,20 @@ describe("高風險配對提醒", () => {
       message: "目前共有 2 件高度風險配對，已達你設定的 2 件提醒門檻。",
     });
     expect(buildReviewAlert({ mediumTotal: 3, highTotal: 2, criticalTotal: 1 }, { mediumTotal: 2, highTotal: 2, criticalTotal: 1 }, { mediumThreshold: 1, highThreshold: 1, criticalThreshold: 1 })).toBeNull();
+  });
+
+  it("creates an overdue escalation alert only when a personal assignment is overdue", () => {
+    expect(buildOverdueEscalationAlert(2, 60)).toEqual({
+      title: "有逾期審核案件需要處理",
+      message: "你有 2 件審核工作已超過 60 分鐘的升級時限。",
+    });
+    expect(buildOverdueEscalationAlert(0, 60)).toBeNull();
+  });
+
+  it("honors the configured reminder frequency and never emits without overdue work", () => {
+    const now = 10_000_000;
+    expect(shouldEmitOverdueEscalation(now - 30 * 60_000, now, 1, true, 60)).toBe(false);
+    expect(shouldEmitOverdueEscalation(now - 60 * 60_000, now, 1, true, 60)).toBe(true);
+    expect(shouldEmitOverdueEscalation(now - 60 * 60_000, now, 0, true, 60)).toBe(false);
   });
 });

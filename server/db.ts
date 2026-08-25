@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { and, asc, desc, eq, gte, inArray, isNotNull, like, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, like, lt, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   comparisonMatches,
@@ -17,6 +17,8 @@ import {
   InsertUser,
   matchReviewActivityLogs,
   matchReviewAssignments,
+  matchReviewEscalationSettings,
+  matchReviewMentions,
   matchReviewNotificationSettings,
   matchReviewSkips,
   matchingFeedback,
@@ -28,6 +30,7 @@ import { ENV } from './_core/env';
 import { buildListingAvailability, buildListingCategories } from "./listingAvailability";
 import { filterAndSortReviewItems, summarizeReviewItems, type ReviewPlatform, type ReviewSeverity } from "./reviewQueue";
 import { buildReviewQualityDays, buildRiskSourceRanking, summarizeReviewQuality } from "./reviewQuality";
+import { selectEscalationRulesForRecipient } from "./reviewEscalations";
 
 export type FeedbackPlatform = "coolpc" | "pchome" | "momo";
 
@@ -75,6 +78,18 @@ export interface MatchReviewHandoffInput extends MatchReviewActivityInput {
   assigneeUserId: number;
   assignedByOpenId: string;
   dueAt: Date;
+}
+
+export interface MatchReviewMentionCommentInput extends MatchReviewActivityInput {
+  mentionedUserIds?: number[];
+}
+
+export interface MatchReviewEscalationSettingsInput {
+  userId: number;
+  escalationRecipientUserId?: number | null;
+  active: boolean;
+  escalateAfterMinutes: number;
+  reminderIntervalMinutes: number;
 }
 
 export interface CrawlerJobInput {
@@ -792,16 +807,50 @@ export async function listMatchReviewActivity(sourceKey: string, fingerprint: st
     .orderBy(desc(matchReviewActivityLogs.createdAt));
 }
 
-export async function addMatchReviewComment(input: MatchReviewActivityInput) {
+export async function addMatchReviewComment(input: MatchReviewMentionCommentInput) {
   const db = await getDb();
   if (!db) throw new Error("資料庫目前無法使用");
-  await db.insert(matchReviewActivityLogs).values({
+  const result = await db.insert(matchReviewActivityLogs).values({
     sourceKey: input.sourceKey,
     fingerprint: input.fingerprint,
     type: "comment",
     authorUserId: input.authorUserId,
     message: input.message,
   });
+  const activityLogId = Number((result as unknown as Array<{ insertId?: number }>)[0]?.insertId ?? 0);
+  const mentionedUserIds = Array.from(new Set(input.mentionedUserIds ?? []))
+    .filter(userId => Number.isInteger(userId) && userId > 0 && userId !== input.authorUserId);
+  if (activityLogId > 0 && mentionedUserIds.length > 0) {
+    await db.insert(matchReviewMentions).values(mentionedUserIds.map(mentionedUserId => ({ activityLogId, mentionedUserId })));
+  }
+  return { activityLogId, mentionedUserIds };
+}
+
+export async function listUnreadMatchReviewMentions(userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  return db.select({
+    id: matchReviewMentions.id,
+    activityLogId: matchReviewMentions.activityLogId,
+    sourceKey: matchReviewActivityLogs.sourceKey,
+    fingerprint: matchReviewActivityLogs.fingerprint,
+    message: matchReviewActivityLogs.message,
+    authorUserId: matchReviewActivityLogs.authorUserId,
+    createdAt: matchReviewMentions.createdAt,
+  }).from(matchReviewMentions)
+    .innerJoin(matchReviewActivityLogs, eq(matchReviewMentions.activityLogId, matchReviewActivityLogs.id))
+    .where(and(eq(matchReviewMentions.mentionedUserId, userId), isNull(matchReviewMentions.readAt)))
+    .orderBy(desc(matchReviewMentions.createdAt))
+    .limit(20);
+}
+
+export async function markMatchReviewMentionsRead(userId: number, mentionIds: number[]) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const ids = Array.from(new Set(mentionIds)).filter(id => Number.isInteger(id) && id > 0);
+  if (ids.length === 0) return;
+  await db.update(matchReviewMentions).set({ readAt: new Date() })
+    .where(and(eq(matchReviewMentions.mentionedUserId, userId), inArray(matchReviewMentions.id, ids)));
 }
 
 export async function handoffMatchReview(input: MatchReviewHandoffInput) {
@@ -877,6 +926,81 @@ export async function upsertMatchReviewNotificationSettings(input: MatchReviewNo
       criticalThreshold: input.criticalThreshold,
     },
   });
+}
+
+export async function getMatchReviewEscalationSettings(userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const [settings] = await db.select().from(matchReviewEscalationSettings)
+    .where(eq(matchReviewEscalationSettings.userId, userId)).limit(1);
+  return settings ?? { userId, escalationRecipientUserId: null, active: true, escalateAfterMinutes: 60, reminderIntervalMinutes: 30 };
+}
+
+export async function upsertMatchReviewEscalationSettings(input: MatchReviewEscalationSettingsInput) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  await db.insert(matchReviewEscalationSettings).values(input).onDuplicateKeyUpdate({
+    set: {
+      escalationRecipientUserId: input.escalationRecipientUserId ?? null,
+      active: input.active,
+      escalateAfterMinutes: input.escalateAfterMinutes,
+      reminderIntervalMinutes: input.reminderIntervalMinutes,
+    },
+  });
+}
+
+export type OverdueEscalationSetting = {
+  userId: number;
+  escalationRecipientUserId: number | null;
+  active: boolean;
+  escalateAfterMinutes: number;
+  reminderIntervalMinutes: number;
+};
+
+export type OverdueEscalationAssignment = {
+  sourceKey: string;
+  fingerprint: string;
+  dueAt: Date;
+};
+
+export type OverdueEscalationQueryStore = {
+  listActiveSettings: () => Promise<OverdueEscalationSetting[]>;
+  listOverdueAssignments: (assigneeUserId: number, cutoff: Date) => Promise<OverdueEscalationAssignment[]>;
+};
+
+/** Checks assignments monitored by this administrator, including work explicitly escalated to them. */
+export async function getMyOverdueMatchReviewEscalations(userId: number, testStore?: OverdueEscalationQueryStore) {
+  const db = testStore ? null : await getDb();
+  if (!testStore && !db) throw new Error("資料庫目前無法使用");
+  const store: OverdueEscalationQueryStore = testStore ?? {
+    listActiveSettings: async () => db!.select().from(matchReviewEscalationSettings).where(eq(matchReviewEscalationSettings.active, true)),
+    listOverdueAssignments: async (assigneeUserId, cutoff) => db!.select({
+      sourceKey: matchReviewAssignments.sourceKey,
+      fingerprint: matchReviewAssignments.fingerprint,
+      dueAt: matchReviewAssignments.dueAt,
+    }).from(matchReviewAssignments)
+      .where(and(
+        eq(matchReviewAssignments.assigneeUserId, assigneeUserId),
+        eq(matchReviewAssignments.status, "assigned"),
+        lt(matchReviewAssignments.dueAt, cutoff),
+      ))
+      .orderBy(asc(matchReviewAssignments.dueAt))
+      .limit(20),
+  };
+  const monitoredSettings = selectEscalationRulesForRecipient(await store.listActiveSettings(), userId);
+  if (monitoredSettings.length === 0) return { active: false, reminderIntervalMinutes: 30, total: 0, items: [] };
+  const batches = await Promise.all(monitoredSettings.map(async setting => {
+    const cutoff = new Date(Date.now() - setting.escalateAfterMinutes * 60 * 1000);
+    const items = await store.listOverdueAssignments(setting.userId, cutoff);
+    return items.map(item => ({ ...item, ownerUserId: setting.userId, escalateAfterMinutes: setting.escalateAfterMinutes }));
+  }));
+  const items = batches.flat().sort((left, right) => left.dueAt.getTime() - right.dueAt.getTime()).slice(0, 20);
+  return {
+    active: true,
+    reminderIntervalMinutes: Math.min(...monitoredSettings.map(setting => setting.reminderIntervalMinutes)),
+    total: items.length,
+    items,
+  };
 }
 
 /** Seven-day auto-match quality indicator. It is a transparent quality proxy, not a human-verified accuracy claim. */

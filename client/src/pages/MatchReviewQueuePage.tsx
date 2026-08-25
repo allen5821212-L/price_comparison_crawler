@@ -10,7 +10,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { downloadCsv, toCsv } from "@/lib/csvExport";
 import { buildWeeklyQualityCsvRows } from "@/lib/reviewQualityCsv";
 import { trpc } from "@/lib/trpc";
-import { AlertTriangle, BarChart3, ChevronLeft, ChevronRight, ClipboardCheck, Clock3, Download, RefreshCw, Search, ShieldAlert, SlidersHorizontal, UserRoundCheck, UsersRound } from "lucide-react";
+import { AlertTriangle, BarChart3, BellRing, ChevronLeft, ChevronRight, ClipboardCheck, Clock3, Download, RefreshCw, Search, ShieldAlert, SlidersHorizontal, UserRoundCheck, UsersRound } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -81,6 +81,7 @@ export default function MatchReviewQueuePage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [assignmentHours, setAssignmentHours] = useState<Record<number, number>>({});
   const [notificationThresholds, setNotificationThresholds] = useState({ mediumThreshold: 0, highThreshold: 1, criticalThreshold: 1 });
+  const [escalationSettings, setEscalationSettings] = useState({ active: true, escalationRecipientUserId: null as number | null, escalateAfterMinutes: 60, reminderIntervalMinutes: 30 });
   const [bulkAssigneeUserId, setBulkAssigneeUserId] = useState("");
   const [bulkHours, setBulkHours] = useState(24);
   const queueQuery = trpc.comparison.reviewQueue.useQuery({
@@ -97,6 +98,7 @@ export default function MatchReviewQueuePage() {
   });
   const assigneesQuery = trpc.comparison.reviewAssignees.useQuery(undefined, { enabled: user?.role === "admin" });
   const notificationSettingsQuery = trpc.comparison.reviewNotificationSettings.useQuery(undefined, { enabled: user?.role === "admin" });
+  const escalationSettingsQuery = trpc.comparison.reviewEscalationSettings.useQuery(undefined, { enabled: user?.role === "admin" });
   const qualityReportQuery = trpc.comparison.weeklyQualityReport.useQuery(undefined, { enabled: user?.role === "admin" });
   const assignReview = trpc.comparison.assignReview.useMutation({
     onSuccess: () => {
@@ -119,6 +121,13 @@ export default function MatchReviewQueuePage() {
       void utils.comparison.reviewNotificationSettings.invalidate();
     },
     onError: error => toast.error(error.message || "無法更新通知門檻。"),
+  });
+  const updateEscalationSettings = trpc.comparison.updateReviewEscalationSettings.useMutation({
+    onSuccess: () => {
+      toast.success("已更新逾期升級規則與提醒頻率。提醒會在你開啟系統期間生效。");
+      void utils.comparison.reviewEscalationSettings.invalidate();
+    },
+    onError: error => toast.error(error.message || "無法更新逾期升級規則。"),
   });
   const bulkReassign = trpc.comparison.bulkReassignOverdueReviews.useMutation({
     onSuccess: result => {
@@ -157,6 +166,16 @@ export default function MatchReviewQueuePage() {
       });
     }
   }, [notificationSettingsQuery.data]);
+  useEffect(() => {
+    if (escalationSettingsQuery.data) {
+      setEscalationSettings({
+        active: escalationSettingsQuery.data.active,
+        escalationRecipientUserId: escalationSettingsQuery.data.escalationRecipientUserId,
+        escalateAfterMinutes: escalationSettingsQuery.data.escalateAfterMinutes,
+        reminderIntervalMinutes: escalationSettingsQuery.data.reminderIntervalMinutes,
+      });
+    }
+  }, [escalationSettingsQuery.data]);
 
   const openManualReview = (name: string, price: number, targetPlatform: ReviewPlatform, sourceKey: string, fingerprint: string) => {
     setManualSource({ name, price, platform: targetPlatform, sourceKey, fingerprint });
@@ -210,6 +229,7 @@ export default function MatchReviewQueuePage() {
               <Card className="p-5 shadow-sm"><div className="flex items-center gap-2"><AlertTriangle className="size-4 text-destructive" /><div><p className="text-sm font-semibold">風險來源排行</p><p className="text-xs text-muted-foreground">依欣亞分類統計低信心或規格差異的配對數。</p></div></div><div className="mt-4 space-y-3">{qualityReportQuery.data.riskSources.length === 0 ? <p className="text-sm text-muted-foreground">近七日尚無可排行的風險來源。</p> : qualityReportQuery.data.riskSources.slice(0, 5).map(source => <div key={source.category}><div className="flex items-center justify-between gap-3 text-xs"><span className="truncate font-medium">{source.category}</span><span className="shrink-0 tabular-nums text-muted-foreground">{source.riskMatches} 件 · {source.riskRate}%</span></div><div className="mt-1 h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-destructive/75" style={{ width: `${Math.min(100, source.riskRate)}%` }} /></div></div>)}</div></Card>
             </section>}
             <Card className="border-amber-500/25 p-4 shadow-sm"><div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between"><div><div className="flex items-center gap-2"><UsersRound className="size-4 text-amber-500" /><p className="text-sm font-semibold">逾期案件批次重新指派</p></div><p className="mt-1 text-xs text-muted-foreground">將所有已逾期、尚未完成的審核工作交給指定管理員，並寫入交接紀錄。</p></div><div className="flex flex-wrap gap-2"><select value={bulkAssigneeUserId} onChange={event => setBulkAssigneeUserId(event.target.value)} className="h-9 rounded-md border border-input bg-background px-2 text-xs"><option value="">選擇接手人員</option>{assigneesQuery.data?.map(assignee => <option key={assignee.id} value={assignee.id}>{assignee.name || assignee.email || `管理員 #${assignee.id}`}</option>)}</select><select value={bulkHours} onChange={event => setBulkHours(Number(event.target.value))} className="h-9 rounded-md border border-input bg-background px-2 text-xs"><option value={4}>新期限 4 小時</option><option value={24}>新期限 24 小時</option><option value={72}>新期限 3 天</option></select><Button size="sm" onClick={bulkReassignOverdue} disabled={!bulkAssigneeUserId || bulkReassign.isPending}>批次重新指派</Button></div></div></Card>
+            <Card className="border-primary/25 p-4 shadow-sm"><div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"><div><div className="flex items-center gap-2"><BellRing className="size-4 text-primary" /><p className="text-sm font-semibold">逾期升級提醒</p></div><p className="mt-1 max-w-2xl text-xs text-muted-foreground">可指定由哪位管理員接收逾期提醒。提醒僅在接收者開啟系統時按設定頻率檢查，並顯示站內／已授權瀏覽器通知。</p></div><div className="flex flex-wrap items-end gap-2"><label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={escalationSettings.active} onChange={event => setEscalationSettings(current => ({ ...current, active: event.target.checked }))} />啟用</label><label className="text-xs text-muted-foreground">接收管理員<select value={escalationSettings.escalationRecipientUserId ?? ""} onChange={event => setEscalationSettings(current => ({ ...current, escalationRecipientUserId: event.target.value ? Number(event.target.value) : null }))} className="mt-1 h-9 w-36 rounded-md border border-input bg-background px-2 text-xs"><option value="">原處理人</option>{assigneesQuery.data?.map(assignee => <option key={assignee.id} value={assignee.id}>{assignee.name || assignee.email || `管理員 #${assignee.id}`}</option>)}</select></label><label className="text-xs text-muted-foreground">逾期後升級（分鐘）<Input type="number" min={5} max={10080} value={escalationSettings.escalateAfterMinutes} onChange={event => setEscalationSettings(current => ({ ...current, escalateAfterMinutes: Math.max(5, Number(event.target.value)) }))} className="mt-1 h-9 w-32" /></label><label className="text-xs text-muted-foreground">提醒頻率（分鐘）<Input type="number" min={5} max={1440} value={escalationSettings.reminderIntervalMinutes} onChange={event => setEscalationSettings(current => ({ ...current, reminderIntervalMinutes: Math.max(5, Number(event.target.value)) }))} className="mt-1 h-9 w-32" /></label><Button size="sm" onClick={() => updateEscalationSettings.mutate(escalationSettings)} disabled={updateEscalationSettings.isPending}>儲存升級規則</Button></div></div></Card>
             <Card className="p-4 shadow-sm">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
                 <div className="relative min-w-0 flex-1"><Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={event => setSearch(event.target.value)} className="pl-9" placeholder="搜尋欣亞品名、分類或候選商品…" /></div>

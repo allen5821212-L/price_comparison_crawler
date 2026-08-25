@@ -1,0 +1,2 @@
+ALTER TABLE `match_review_escalation_settings` ADD `escalation_recipient_user_id` int;--> statement-breakpoint
+CREATE INDEX `match_review_escalation_settings_recipient_active_idx` ON `match_review_escalation_settings` (`escalation_recipient_user_id`,`active`);
