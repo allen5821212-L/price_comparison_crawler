@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { and, asc, desc, eq, gte, inArray, isNotNull, like, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, like, lt, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   comparisonMatches,
@@ -15,6 +15,7 @@ import {
   crawlerIssueReports,
   crawlerJobs,
   InsertUser,
+  matchReviewActivityLogs,
   matchReviewAssignments,
   matchReviewNotificationSettings,
   matchReviewSkips,
@@ -26,7 +27,7 @@ import {
 import { ENV } from './_core/env';
 import { buildListingAvailability, buildListingCategories } from "./listingAvailability";
 import { filterAndSortReviewItems, summarizeReviewItems, type ReviewPlatform, type ReviewSeverity } from "./reviewQueue";
-import { buildReviewQualityDays, summarizeReviewQuality } from "./reviewQuality";
+import { buildReviewQualityDays, buildRiskSourceRanking, summarizeReviewQuality } from "./reviewQuality";
 
 export type FeedbackPlatform = "coolpc" | "pchome" | "momo";
 
@@ -61,6 +62,19 @@ export interface MatchReviewNotificationSettingsInput {
   mediumThreshold: number;
   highThreshold: number;
   criticalThreshold: number;
+}
+
+export interface MatchReviewActivityInput {
+  sourceKey: string;
+  fingerprint: string;
+  authorUserId: number;
+  message: string;
+}
+
+export interface MatchReviewHandoffInput extends MatchReviewActivityInput {
+  assigneeUserId: number;
+  assignedByOpenId: string;
+  dueAt: Date;
 }
 
 export interface CrawlerJobInput {
@@ -770,6 +784,81 @@ export async function resolveMatchReviewAssignment(input: {
   });
 }
 
+export async function listMatchReviewActivity(sourceKey: string, fingerprint: string) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  return db.select().from(matchReviewActivityLogs)
+    .where(and(eq(matchReviewActivityLogs.sourceKey, sourceKey), eq(matchReviewActivityLogs.fingerprint, fingerprint)))
+    .orderBy(desc(matchReviewActivityLogs.createdAt));
+}
+
+export async function addMatchReviewComment(input: MatchReviewActivityInput) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  await db.insert(matchReviewActivityLogs).values({
+    sourceKey: input.sourceKey,
+    fingerprint: input.fingerprint,
+    type: "comment",
+    authorUserId: input.authorUserId,
+    message: input.message,
+  });
+}
+
+export async function handoffMatchReview(input: MatchReviewHandoffInput) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const [existing] = await db.select().from(matchReviewAssignments)
+    .where(and(eq(matchReviewAssignments.sourceKey, input.sourceKey), eq(matchReviewAssignments.fingerprint, input.fingerprint)))
+    .limit(1);
+  await upsertMatchReviewAssignment({
+    sourceKey: input.sourceKey,
+    fingerprint: input.fingerprint,
+    assigneeUserId: input.assigneeUserId,
+    assignedByOpenId: input.assignedByOpenId,
+    dueAt: input.dueAt,
+  });
+  await db.insert(matchReviewActivityLogs).values({
+    sourceKey: input.sourceKey,
+    fingerprint: input.fingerprint,
+    type: "handoff",
+    authorUserId: input.authorUserId,
+    fromUserId: existing?.assigneeUserId ?? null,
+    toUserId: input.assigneeUserId,
+    message: input.message,
+  });
+}
+
+export async function bulkReassignOverdueMatchReviews(input: {
+  assigneeUserId: number;
+  assignedByOpenId: string;
+  authorUserId: number;
+  dueAt: Date;
+  message: string;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const now = new Date();
+  const overdueAssignments = await db.select().from(matchReviewAssignments)
+    .where(and(eq(matchReviewAssignments.status, "assigned"), lt(matchReviewAssignments.dueAt, now)));
+  await Promise.all(overdueAssignments.map(async assignment => {
+    await db.update(matchReviewAssignments).set({
+      assigneeUserId: input.assigneeUserId,
+      assignedByOpenId: input.assignedByOpenId,
+      dueAt: input.dueAt,
+    }).where(eq(matchReviewAssignments.id, assignment.id));
+    await db.insert(matchReviewActivityLogs).values({
+      sourceKey: assignment.sourceKey,
+      fingerprint: assignment.fingerprint,
+      type: "handoff",
+      authorUserId: input.authorUserId,
+      fromUserId: assignment.assigneeUserId,
+      toUserId: input.assigneeUserId,
+      message: input.message,
+    });
+  }));
+  return { count: overdueAssignments.length };
+}
+
 export async function getMatchReviewNotificationSettings(userId: number) {
   const db = await getDb();
   if (!db) throw new Error("資料庫目前無法使用");
@@ -797,18 +886,35 @@ export async function getWeeklyMatchQualityReport() {
   const start = new Date();
   start.setUTCDate(start.getUTCDate() - 6);
   start.setUTCHours(0, 0, 0, 0);
-  const rows = await db.select({
-    date: sql<string>`DATE(${comparisonMatches.createdAt})`,
-    totalMatches: sql<number>`COUNT(*)`,
-    highConfidenceMatches: sql<number>`SUM(CASE WHEN ${comparisonMatches.score} >= 0.86 AND ${comparisonMatches.hasSpecDiff} = 0 THEN 1 ELSE 0 END)`,
-    lowConfidenceMatches: sql<number>`SUM(CASE WHEN ${comparisonMatches.score} < 0.86 THEN 1 ELSE 0 END)`,
-    specDiffMatches: sql<number>`SUM(CASE WHEN ${comparisonMatches.hasSpecDiff} = 1 THEN 1 ELSE 0 END)`,
-  }).from(comparisonMatches)
-    .where(gte(comparisonMatches.createdAt, start))
-    .groupBy(sql`DATE(${comparisonMatches.createdAt})`)
-    .orderBy(asc(sql`DATE(${comparisonMatches.createdAt})`));
+  const [rows, riskSourceRows] = await Promise.all([
+    db.select({
+      date: sql<string>`DATE(${comparisonMatches.createdAt})`,
+      totalMatches: sql<number>`COUNT(*)`,
+      highConfidenceMatches: sql<number>`SUM(CASE WHEN ${comparisonMatches.score} >= 0.86 AND ${comparisonMatches.hasSpecDiff} = 0 THEN 1 ELSE 0 END)`,
+      lowConfidenceMatches: sql<number>`SUM(CASE WHEN ${comparisonMatches.score} < 0.86 THEN 1 ELSE 0 END)`,
+      specDiffMatches: sql<number>`SUM(CASE WHEN ${comparisonMatches.hasSpecDiff} = 1 THEN 1 ELSE 0 END)`,
+    }).from(comparisonMatches)
+      .where(gte(comparisonMatches.createdAt, start))
+      .groupBy(sql`DATE(${comparisonMatches.createdAt})`)
+      .orderBy(asc(sql`DATE(${comparisonMatches.createdAt})`)),
+    db.select({
+      category: comparisonMatches.category,
+      totalMatches: sql<number>`COUNT(*)`,
+      riskMatches: sql<number>`SUM(CASE WHEN ${comparisonMatches.score} < 0.86 OR ${comparisonMatches.hasSpecDiff} = 1 THEN 1 ELSE 0 END)`,
+    }).from(comparisonMatches)
+      .where(gte(comparisonMatches.createdAt, start))
+      .groupBy(comparisonMatches.category)
+      .orderBy(desc(sql`SUM(CASE WHEN ${comparisonMatches.score} < 0.86 OR ${comparisonMatches.hasSpecDiff} = 1 THEN 1 ELSE 0 END)`))
+      .limit(10),
+  ]);
   const days = buildReviewQualityDays(rows);
-  return { startDate: start.toISOString().slice(0, 10), endDate: new Date().toISOString().slice(0, 10), summary: summarizeReviewQuality(days), days };
+  return {
+    startDate: start.toISOString().slice(0, 10),
+    endDate: new Date().toISOString().slice(0, 10),
+    summary: summarizeReviewQuality(days),
+    days,
+    riskSources: buildRiskSourceRanking(riskSourceRows),
+  };
 }
 
 export async function saveMatchReviewSkip(input: MatchReviewSkipInput) {

@@ -33,6 +33,10 @@ import {
   getLatestMatchReviewSummary,
   getMatchReviewNotificationSettings,
   getWeeklyMatchQualityReport,
+  addMatchReviewComment,
+  bulkReassignOverdueMatchReviews,
+  handoffMatchReview,
+  listMatchReviewActivity,
   listReviewAssignees,
   resolveMatchReviewAssignment,
   saveMatchReviewSkip,
@@ -178,6 +182,37 @@ export const appRouter = router({
         assignedByOpenId: ctx.user.openId,
       });
       return { success: true } as const;
+    }),
+    reviewActivity: adminProcedure.input(z.object({
+      sourceKey: z.string().min(1).max(128),
+      fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+    })).query(async ({ input }) => listMatchReviewActivity(input.sourceKey, input.fingerprint)),
+    addReviewComment: adminProcedure.input(z.object({
+      sourceKey: z.string().min(1).max(128),
+      fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+      message: z.string().trim().min(1).max(2_000),
+    })).mutation(async ({ ctx, input }) => {
+      await addMatchReviewComment({ ...input, authorUserId: ctx.user.id });
+      return { success: true } as const;
+    }),
+    handoffReview: adminProcedure.input(z.object({
+      sourceKey: z.string().min(1).max(128),
+      fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+      assigneeUserId: z.number().int().positive(),
+      dueAt: z.date(),
+      message: z.string().trim().max(2_000).default(""),
+    })).mutation(async ({ ctx, input }) => {
+      if (input.dueAt.getTime() <= Date.now()) throw new Error("交接後到期時間必須晚於目前時間");
+      await handoffMatchReview({ ...input, authorUserId: ctx.user.id, assignedByOpenId: ctx.user.openId });
+      return { success: true } as const;
+    }),
+    bulkReassignOverdueReviews: adminProcedure.input(z.object({
+      assigneeUserId: z.number().int().positive(),
+      dueAt: z.date(),
+      message: z.string().trim().max(2_000).default("逾期案件批次重新指派"),
+    })).mutation(async ({ ctx, input }) => {
+      if (input.dueAt.getTime() <= Date.now()) throw new Error("重新指派後到期時間必須晚於目前時間");
+      return bulkReassignOverdueMatchReviews({ ...input, authorUserId: ctx.user.id, assignedByOpenId: ctx.user.openId });
     }),
     reviewNotificationSettings: adminProcedure.query(async ({ ctx }) => getMatchReviewNotificationSettings(ctx.user.id)),
     updateReviewNotificationSettings: adminProcedure.input(z.object({

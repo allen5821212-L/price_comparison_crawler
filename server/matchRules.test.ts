@@ -18,6 +18,10 @@ const dbMocks = vi.hoisted(() => ({
   getLatestMatchReviewSummary: vi.fn(),
   getMatchReviewNotificationSettings: vi.fn(),
   getWeeklyMatchQualityReport: vi.fn(),
+  addMatchReviewComment: vi.fn(),
+  bulkReassignOverdueMatchReviews: vi.fn(),
+  handoffMatchReview: vi.fn(),
+  listMatchReviewActivity: vi.fn(),
   listReviewAssignees: vi.fn(),
   resolveMatchReviewAssignment: vi.fn(),
   saveMatchReviewSkip: vi.fn(),
@@ -151,6 +155,22 @@ describe("matchRules router", () => {
     expect(dbMocks.upsertMatchReviewNotificationSettings).toHaveBeenCalledWith({ userId: 1, mediumThreshold: 3, highThreshold: 2, criticalThreshold: 1 });
     await expect(caller.comparison.reviewNotificationSettings()).resolves.toMatchObject({ highThreshold: 2 });
     await expect(caller.comparison.weeklyQualityReport()).resolves.toEqual(report);
+  });
+
+  it("records review comments and handoffs, and can bulk reassign overdue work", async () => {
+    const caller = appRouter.createCaller(createAdminContext());
+    const fingerprint = "d".repeat(64);
+    const dueAt = new Date(Date.now() + 86_400_000);
+    dbMocks.listMatchReviewActivity.mockResolvedValue([{ id: 1, type: "comment", message: "請確認容量規格" }]);
+    dbMocks.bulkReassignOverdueMatchReviews.mockResolvedValue({ count: 3 });
+
+    await expect(caller.comparison.addReviewComment({ sourceKey: "sinya_7", fingerprint, message: "請確認容量規格" })).resolves.toEqual({ success: true });
+    expect(dbMocks.addMatchReviewComment).toHaveBeenCalledWith({ sourceKey: "sinya_7", fingerprint, message: "請確認容量規格", authorUserId: 1 });
+    await expect(caller.comparison.handoffReview({ sourceKey: "sinya_7", fingerprint, assigneeUserId: 2, dueAt, message: "交接給下一班" })).resolves.toEqual({ success: true });
+    expect(dbMocks.handoffMatchReview).toHaveBeenCalledWith({ sourceKey: "sinya_7", fingerprint, assigneeUserId: 2, dueAt, message: "交接給下一班", authorUserId: 1, assignedByOpenId: "owner-open-id" });
+    await expect(caller.comparison.reviewActivity({ sourceKey: "sinya_7", fingerprint })).resolves.toEqual([{ id: 1, type: "comment", message: "請確認容量規格" }]);
+    await expect(caller.comparison.bulkReassignOverdueReviews({ assigneeUserId: 2, dueAt, message: "晚班接手" })).resolves.toEqual({ count: 3 });
+    expect(dbMocks.bulkReassignOverdueMatchReviews).toHaveBeenCalledWith({ assigneeUserId: 2, dueAt, message: "晚班接手", authorUserId: 1, assignedByOpenId: "owner-open-id" });
   });
 
   it("persists an administrator's deferred-review decision for the exact candidate fingerprint", async () => {

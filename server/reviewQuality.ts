@@ -15,6 +15,19 @@ export type ReviewQualityDay = {
   autoQualityRate: number;
 };
 
+export type RiskSourceRow = {
+  category: string | null;
+  totalMatches: number | string;
+  riskMatches: number | string;
+};
+
+export type RiskSourceRanking = {
+  category: string;
+  totalMatches: number;
+  riskMatches: number;
+  riskRate: number;
+};
+
 function asCount(value: number | string | null | undefined): number {
   const parsed = Number(value ?? 0);
   return Number.isFinite(parsed) ? Math.max(0, Math.trunc(parsed)) : 0;
@@ -47,4 +60,17 @@ export function summarizeReviewQuality(days: ReviewQualityDay[]) {
     specDiffMatches,
     autoQualityRate: totalMatches === 0 ? 0 : Number(((highConfidenceMatches / totalMatches) * 100).toFixed(1)),
   };
+}
+
+export function buildRiskSourceRanking(rows: RiskSourceRow[]): RiskSourceRanking[] {
+  return rows.map(row => {
+    const totalMatches = asCount(row.totalMatches);
+    const riskMatches = asCount(row.riskMatches);
+    return {
+      category: row.category?.trim() || "未分類",
+      totalMatches,
+      riskMatches,
+      riskRate: totalMatches === 0 ? 0 : Number(((riskMatches / totalMatches) * 100).toFixed(1)),
+    };
+  }).sort((left, right) => right.riskMatches - left.riskMatches || right.riskRate - left.riskRate || left.category.localeCompare(right.category, "zh-Hant"));
 }

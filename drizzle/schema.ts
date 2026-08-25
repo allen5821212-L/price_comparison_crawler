@@ -104,6 +104,29 @@ export const matchReviewAssignments = mysqlTable(
 export type MatchReviewAssignment = typeof matchReviewAssignments.$inferSelect;
 export type InsertMatchReviewAssignment = typeof matchReviewAssignments.$inferInsert;
 
+/** 審核工作的人員評論與交接紀錄，保留每一次交辦的責任脈絡。 */
+export const matchReviewActivityLogs = mysqlTable(
+  "match_review_activity_logs",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    sourceKey: varchar("source_key", { length: 128 }).notNull(),
+    fingerprint: varchar("fingerprint", { length: 64 }).notNull(),
+    type: mysqlEnum("type", ["comment", "handoff"]).notNull(),
+    authorUserId: int("author_user_id").notNull(),
+    fromUserId: int("from_user_id"),
+    toUserId: int("to_user_id"),
+    message: text("message"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  table => ({
+    reviewCreatedIdx: index("match_review_activity_logs_review_created_idx").on(table.sourceKey, table.fingerprint, table.createdAt),
+    authorCreatedIdx: index("match_review_activity_logs_author_created_idx").on(table.authorUserId, table.createdAt),
+  }),
+);
+
+export type MatchReviewActivityLog = typeof matchReviewActivityLogs.$inferSelect;
+export type InsertMatchReviewActivityLog = typeof matchReviewActivityLogs.$inferInsert;
+
 /** 管理員個人化的待審核提醒門檻；0 表示該風險級別不發出提醒。 */
 export const matchReviewNotificationSettings = mysqlTable(
   "match_review_notification_settings",

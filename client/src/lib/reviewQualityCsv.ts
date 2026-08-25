@@ -16,6 +16,12 @@ type WeeklyQualityReport = {
     specDiffMatches: number;
     autoQualityRate: number;
   }>;
+  riskSources?: Array<{
+    category: string;
+    totalMatches: number;
+    riskMatches: number;
+    riskRate: number;
+  }>;
 };
 
 /** CSV rows explain that the reported rate is an automatic quality proxy, not human-verification accuracy. */
@@ -31,5 +37,8 @@ export function buildWeeklyQualityCsvRows(report: WeeklyQualityReport): Array<Ar
     [],
     ["日期", "配對總數", "高信心配對", "低信心配對", "規格差異", "自動配對品質指標"],
     ...report.days.map(day => [day.date, day.totalMatches, day.highConfidenceMatches, day.lowConfidenceMatches, day.specDiffMatches, `${day.autoQualityRate}%`]),
+    [],
+    ["風險來源分類", "分類配對總數", "風險配對數", "風險率"],
+    ...(report.riskSources ?? []).map(source => [source.category, source.totalMatches, source.riskMatches, `${source.riskRate}%`]),
   ];
 }
