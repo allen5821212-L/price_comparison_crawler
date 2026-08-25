@@ -31,7 +31,13 @@ import {
   getLatestListingAvailability,
   getLatestMatchReviewQueue,
   getLatestMatchReviewSummary,
+  getMatchReviewNotificationSettings,
+  getWeeklyMatchQualityReport,
+  listReviewAssignees,
+  resolveMatchReviewAssignment,
   saveMatchReviewSkip,
+  upsertMatchReviewAssignment,
+  upsertMatchReviewNotificationSettings,
   getFavoriteForUser,
   getLatestCrawlerStatus,
   getLatestDynamicComparison,
@@ -151,12 +157,41 @@ export const appRouter = router({
     }).optional()).query(async ({ input }) => getLatestMatchReviewQueue(input ?? { page: 1, pageSize: 25 })),
     /** Compact pollable count for navigation badges and high-risk alerts. */
     reviewSummary: adminProcedure.query(async () => getLatestMatchReviewSummary()),
+    reviewAssignees: adminProcedure.query(async () => listReviewAssignees()),
+    assignReview: adminProcedure.input(z.object({
+      sourceKey: z.string().min(1).max(128),
+      fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+      assigneeUserId: z.number().int().positive(),
+      dueAt: z.date(),
+    })).mutation(async ({ ctx, input }) => {
+      if (input.dueAt.getTime() <= Date.now()) throw new Error("審核到期時間必須晚於目前時間");
+      await upsertMatchReviewAssignment({ ...input, assignedByOpenId: ctx.user.openId });
+      return { success: true } as const;
+    }),
+    resolveReview: adminProcedure.input(z.object({
+      sourceKey: z.string().min(1).max(128),
+      fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+    })).mutation(async ({ input }) => {
+      await resolveMatchReviewAssignment(input.sourceKey, input.fingerprint);
+      return { success: true } as const;
+    }),
+    reviewNotificationSettings: adminProcedure.query(async ({ ctx }) => getMatchReviewNotificationSettings(ctx.user.id)),
+    updateReviewNotificationSettings: adminProcedure.input(z.object({
+      mediumThreshold: z.number().int().min(0).max(9_999),
+      highThreshold: z.number().int().min(0).max(9_999),
+      criticalThreshold: z.number().int().min(0).max(9_999),
+    })).mutation(async ({ ctx, input }) => {
+      await upsertMatchReviewNotificationSettings({ userId: ctx.user.id, ...input });
+      return { success: true } as const;
+    }),
+    weeklyQualityReport: adminProcedure.query(async () => getWeeklyMatchQualityReport()),
     /** Saves a team-wide deferral for this exact set of candidate names. */
     skipReview: adminProcedure.input(z.object({
       sourceKey: z.string().min(1).max(128),
       fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
     })).mutation(async ({ ctx, input }) => {
       await saveMatchReviewSkip({ ...input, createdByOpenId: ctx.user.openId });
+      await resolveMatchReviewAssignment(input.sourceKey, input.fingerprint);
       return { success: true } as const;
     }),
     /** Database-backed history replaces price_history.json. */

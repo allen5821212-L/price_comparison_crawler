@@ -6,8 +6,10 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { downloadCsv, toCsv } from "@/lib/csvExport";
+import { buildWeeklyQualityCsvRows } from "@/lib/reviewQualityCsv";
 import { trpc } from "@/lib/trpc";
-import { AlertTriangle, ChevronLeft, ChevronRight, ClipboardCheck, RefreshCw, Search, ShieldAlert, SlidersHorizontal } from "lucide-react";
+import { AlertTriangle, ChevronLeft, ChevronRight, ClipboardCheck, Clock3, Download, RefreshCw, Search, ShieldAlert, SlidersHorizontal, UserRoundCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -18,6 +20,8 @@ type ManualReviewSource = {
   name: string;
   price: number;
   platform: ReviewPlatform;
+  sourceKey: string;
+  fingerprint: string;
 };
 
 type QueueReviewTarget = {
@@ -51,6 +55,10 @@ function formatPercent(value: number) {
   return `${Math.round(value * 100)}%`;
 }
 
+function formatDueAt(value: Date | string) {
+  return new Date(value).toLocaleString("zh-TW", { dateStyle: "short", timeStyle: "short" });
+}
+
 /** The existing candidate can be confirmed as a stable platform-specific crawler rule. */
 export function buildQueueConfirmationInput(sinyaName: string, target: QueueReviewTarget) {
   return { sinyaName, platform: target.platform, targetName: target.name };
@@ -69,6 +77,8 @@ export default function MatchReviewQueuePage() {
   const [search, setSearch] = useState("");
   const [manualSource, setManualSource] = useState<ManualReviewSource | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [assignmentHours, setAssignmentHours] = useState<Record<number, number>>({});
+  const [notificationThresholds, setNotificationThresholds] = useState({ mediumThreshold: 0, highThreshold: 1, criticalThreshold: 1 });
   const queueQuery = trpc.comparison.reviewQueue.useQuery({
     page,
     pageSize: 20,
@@ -80,6 +90,31 @@ export default function MatchReviewQueuePage() {
     enabled: user?.role === "admin",
     refetchInterval: 60_000,
     refetchOnWindowFocus: true,
+  });
+  const assigneesQuery = trpc.comparison.reviewAssignees.useQuery(undefined, { enabled: user?.role === "admin" });
+  const notificationSettingsQuery = trpc.comparison.reviewNotificationSettings.useQuery(undefined, { enabled: user?.role === "admin" });
+  const qualityReportQuery = trpc.comparison.weeklyQualityReport.useQuery(undefined, { enabled: user?.role === "admin" });
+  const assignReview = trpc.comparison.assignReview.useMutation({
+    onSuccess: () => {
+      toast.success("已指派處理人員並設定審核期限。");
+      void utils.comparison.reviewQueue.invalidate();
+    },
+    onError: error => toast.error(error.message || "無法儲存審核指派。"),
+  });
+  const resolveReview = trpc.comparison.resolveReview.useMutation({
+    onSuccess: () => {
+      toast.success("已完成此審核工作。候選將不再出現在待審核佇列。");
+      void utils.comparison.reviewQueue.invalidate();
+      void utils.comparison.reviewSummary.invalidate();
+    },
+    onError: error => toast.error(error.message || "無法完成此審核工作。"),
+  });
+  const updateNotificationSettings = trpc.comparison.updateReviewNotificationSettings.useMutation({
+    onSuccess: () => {
+      toast.success("已更新個人風險通知門檻。");
+      void utils.comparison.reviewNotificationSettings.invalidate();
+    },
+    onError: error => toast.error(error.message || "無法更新通知門檻。"),
   });
   const saveMatch = trpc.matchRules.confirm.useMutation({
     onSuccess: (_result, input) => {
@@ -101,10 +136,29 @@ export default function MatchReviewQueuePage() {
   });
 
   useEffect(() => setPage(1), [severity, platform, search]);
+  useEffect(() => {
+    if (notificationSettingsQuery.data) {
+      setNotificationThresholds({
+        mediumThreshold: notificationSettingsQuery.data.mediumThreshold,
+        highThreshold: notificationSettingsQuery.data.highThreshold,
+        criticalThreshold: notificationSettingsQuery.data.criticalThreshold,
+      });
+    }
+  }, [notificationSettingsQuery.data]);
 
-  const openManualReview = (name: string, price: number, targetPlatform: ReviewPlatform) => {
-    setManualSource({ name, price, platform: targetPlatform });
+  const openManualReview = (name: string, price: number, targetPlatform: ReviewPlatform, sourceKey: string, fingerprint: string) => {
+    setManualSource({ name, price, platform: targetPlatform, sourceKey, fingerprint });
     setDialogOpen(true);
+  };
+
+  const assignItem = (item: { id: number; sourceKey: string; fingerprint: string }, assigneeUserId: number) => {
+    const hours = assignmentHours[item.id] ?? 24;
+    assignReview.mutate({ sourceKey: item.sourceKey, fingerprint: item.fingerprint, assigneeUserId, dueAt: new Date(Date.now() + hours * 60 * 60 * 1000) });
+  };
+
+  const exportQualityReport = () => {
+    if (!qualityReportQuery.data) return;
+    downloadCsv(`配對品質報表_${qualityReportQuery.data.startDate}_${qualityReportQuery.data.endDate}.csv`, toCsv(buildWeeklyQualityCsvRows(qualityReportQuery.data)));
   };
 
   return (
@@ -126,6 +180,10 @@ export default function MatchReviewQueuePage() {
         ) : (
           <>
             {reviewSummaryQuery.data && <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><Card className="p-4 shadow-sm"><p className="text-xs font-medium text-muted-foreground">待審核總數</p><p className="mt-1 text-2xl font-bold tabular-nums">{reviewSummaryQuery.data.total.toLocaleString()}</p></Card><Card className="border-destructive/35 bg-destructive/5 p-4 shadow-sm"><p className="text-xs font-medium text-destructive">需優先確認</p><p className="mt-1 text-2xl font-bold tabular-nums text-destructive">{reviewSummaryQuery.data.criticalTotal.toLocaleString()}</p><Button variant="ghost" size="sm" className="mt-2 h-auto px-0 text-xs text-destructive hover:bg-transparent hover:text-destructive" onClick={() => setSeverity("critical")}>只看緊急風險</Button></Card><Card className="p-4 shadow-sm"><p className="text-xs font-medium text-muted-foreground">高度風險</p><p className="mt-1 text-2xl font-bold tabular-nums">{reviewSummaryQuery.data.highTotal.toLocaleString()}</p></Card><Card className="p-4 shadow-sm"><p className="text-xs font-medium text-muted-foreground">中度風險</p><p className="mt-1 text-2xl font-bold tabular-nums">{reviewSummaryQuery.data.mediumTotal.toLocaleString()}</p></Card></section>}
+            {qualityReportQuery.data && <section className="grid gap-3 lg:grid-cols-[1.2fr_0.8fr]">
+              <Card className="p-5 shadow-sm"><div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-start"><div><p className="text-sm font-semibold text-primary">最近七日配對品質</p><p className="mt-1 text-xs text-muted-foreground">{qualityReportQuery.data.startDate} 至 {qualityReportQuery.data.endDate} · 高信心且未偵測規格差異的自動配對占比。</p></div><Button variant="outline" size="sm" onClick={exportQualityReport}><Download className="mr-1.5 size-3.5" />下載 CSV</Button></div><div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4"><div><p className="text-xs text-muted-foreground">品質指標</p><p className="mt-1 text-xl font-bold tabular-nums">{qualityReportQuery.data.summary.autoQualityRate}%</p></div><div><p className="text-xs text-muted-foreground">配對總數</p><p className="mt-1 text-xl font-bold tabular-nums">{qualityReportQuery.data.summary.totalMatches.toLocaleString()}</p></div><div><p className="text-xs text-muted-foreground">低信心</p><p className="mt-1 text-xl font-bold tabular-nums">{qualityReportQuery.data.summary.lowConfidenceMatches.toLocaleString()}</p></div><div><p className="text-xs text-muted-foreground">規格差異</p><p className="mt-1 text-xl font-bold tabular-nums">{qualityReportQuery.data.summary.specDiffMatches.toLocaleString()}</p></div></div><p className="mt-4 text-xs text-muted-foreground">此為自動配對品質代理指標，並非人工驗證後的準確率。</p></Card>
+              <Card className="p-5 shadow-sm"><div className="flex items-center gap-2"><AlertTriangle className="size-4 text-primary" /><p className="text-sm font-semibold">個人通知門檻</p></div><p className="mt-1 text-xs text-muted-foreground">數量達到門檻且新增案件時顯示提醒；設定 0 即停用該級別。</p><div className="mt-4 grid grid-cols-3 gap-2"><label className="text-xs text-muted-foreground">中度<Input type="number" min={0} value={notificationThresholds.mediumThreshold} onChange={event => setNotificationThresholds(current => ({ ...current, mediumThreshold: Math.max(0, Number(event.target.value)) }))} className="mt-1 h-9" /></label><label className="text-xs text-muted-foreground">高度<Input type="number" min={0} value={notificationThresholds.highThreshold} onChange={event => setNotificationThresholds(current => ({ ...current, highThreshold: Math.max(0, Number(event.target.value)) }))} className="mt-1 h-9" /></label><label className="text-xs text-muted-foreground">緊急<Input type="number" min={0} value={notificationThresholds.criticalThreshold} onChange={event => setNotificationThresholds(current => ({ ...current, criticalThreshold: Math.max(0, Number(event.target.value)) }))} className="mt-1 h-9" /></label></div><Button className="mt-4 w-full" size="sm" onClick={() => updateNotificationSettings.mutate(notificationThresholds)} disabled={updateNotificationSettings.isPending}>儲存通知門檻</Button></Card>
+            </section>}
             <Card className="p-4 shadow-sm">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
                 <div className="relative min-w-0 flex-1"><Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={event => setSearch(event.target.value)} className="pl-9" placeholder="搜尋欣亞品名、分類或候選商品…" /></div>
@@ -147,9 +205,10 @@ export default function MatchReviewQueuePage() {
                     <h2 className="mt-3 font-semibold leading-6">{item.sinyaName}</h2>
                     <p className="mt-1 text-sm text-muted-foreground">欣亞 · {item.category} · {formatPrice(item.sinyaPrice)}</p>
                     <div className="mt-3 flex flex-wrap gap-2">{item.reasons.map(reason => <span key={reason} className="rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">{reason}</span>)}</div>
+                    <div className="mt-4 rounded-lg border border-border bg-muted/20 p-3"><div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">{item.assignment ? <div className="min-w-0"><p className="flex items-center gap-1 text-xs font-medium"><UserRoundCheck className="size-3.5 text-primary" />處理人：{item.assignment.assigneeName}</p><p className={`mt-1 flex items-center gap-1 text-xs ${item.assignment.isOverdue ? "text-destructive" : "text-muted-foreground"}`}><Clock3 className="size-3.5" />{item.assignment.isOverdue ? "已逾期" : "到期"}：{formatDueAt(item.assignment.dueAt)}</p></div> : <p className="text-xs text-muted-foreground">尚未指派處理人員與審核時限。</p>}<div className="flex flex-wrap gap-2"><label className="text-xs text-muted-foreground">期限<select value={assignmentHours[item.id] ?? 24} onChange={event => setAssignmentHours(current => ({ ...current, [item.id]: Number(event.target.value) }))} className="ml-1 h-8 rounded-md border border-input bg-background px-2 text-xs"><option value={4}>4 小時</option><option value={24}>24 小時</option><option value={72}>3 天</option></select></label><select defaultValue="" onChange={event => { const assigneeUserId = Number(event.target.value); if (assigneeUserId) assignItem(item, assigneeUserId); }} className="h-8 rounded-md border border-input bg-background px-2 text-xs" disabled={assignReview.isPending}><option value="">{item.assignment ? "重新指派" : "指派處理人員"}</option>{assigneesQuery.data?.map(assignee => <option key={assignee.id} value={assignee.id}>{assignee.name || assignee.email || `管理員 #${assignee.id}`}</option>)}</select>{item.assignment && <Button size="sm" variant="ghost" onClick={() => resolveReview.mutate({ sourceKey: item.sourceKey, fingerprint: item.fingerprint })} disabled={resolveReview.isPending}>完成工作</Button>}</div></div></div>
                     <Button className="mt-3" size="sm" variant="ghost" onClick={() => skipReview.mutate(buildQueueSkipInput(item.sourceKey, item.fingerprint))} disabled={skipReview.isPending || saveMatch.isPending}>稍後處理</Button>
                   </div>
-                  <div className="w-full space-y-2 lg:max-w-lg">{item.targets.map(target => <div key={target.platform} className="flex flex-col gap-2 rounded-lg border border-border bg-muted/20 p-3 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><p className="text-xs font-medium text-primary">{PLATFORM_LABELS[target.platform]}</p><p className="mt-1 line-clamp-2 text-sm font-medium">{target.name}</p><p className="mt-1 text-xs text-muted-foreground">{formatPrice(target.price)}</p></div><div className="flex shrink-0 gap-2"><Button size="sm" onClick={() => saveMatch.mutate(buildQueueConfirmationInput(item.sinyaName, target))} disabled={saveMatch.isPending}>採納配對</Button><Button size="sm" variant="outline" onClick={() => openManualReview(item.sinyaName, item.sinyaPrice, target.platform)} disabled={saveMatch.isPending}><SlidersHorizontal className="mr-1.5 size-3.5" />改配</Button></div></div>)}</div>
+                  <div className="w-full space-y-2 lg:max-w-lg">{item.targets.map(target => <div key={target.platform} className="flex flex-col gap-2 rounded-lg border border-border bg-muted/20 p-3 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><p className="text-xs font-medium text-primary">{PLATFORM_LABELS[target.platform]}</p><p className="mt-1 line-clamp-2 text-sm font-medium">{target.name}</p><p className="mt-1 text-xs text-muted-foreground">{formatPrice(target.price)}</p></div><div className="flex shrink-0 gap-2"><Button size="sm" onClick={() => saveMatch.mutate(buildQueueConfirmationInput(item.sinyaName, target), { onSuccess: () => resolveReview.mutate({ sourceKey: item.sourceKey, fingerprint: item.fingerprint }) })} disabled={saveMatch.isPending}>採納配對</Button><Button size="sm" variant="outline" onClick={() => openManualReview(item.sinyaName, item.sinyaPrice, target.platform, item.sourceKey, item.fingerprint)} disabled={saveMatch.isPending}><SlidersHorizontal className="mr-1.5 size-3.5" />改配</Button></div></div>)}</div>
                 </div>
               </Card>
             ))}</div>}
@@ -166,7 +225,7 @@ export default function MatchReviewQueuePage() {
         sinyaProduct={manualSource ? { name: manualSource.name, price: manualSource.price, url: "", image: "" } : null}
         onConfirm={(targetId, targetName, targetPlatform = "coolpc") => {
           if (!manualSource) return;
-          saveMatch.mutate({ sinyaName: manualSource.name, platform: targetPlatform, targetId, targetName });
+          saveMatch.mutate({ sinyaName: manualSource.name, platform: targetPlatform, targetId, targetName }, { onSuccess: () => resolveReview.mutate({ sourceKey: manualSource.sourceKey, fingerprint: manualSource.fingerprint }) });
         }}
         onReject={() => toast.info("已略過該候選。請繼續搜尋並選擇正確的商品。")}
         onNoMatch={() => toast.info("未建立規則，避免把暫時找不到的商品誤判為永久無對應。")}

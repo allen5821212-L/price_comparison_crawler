@@ -16,7 +16,13 @@ const dbMocks = vi.hoisted(() => ({
   listPriceNotificationsForUser: vi.fn(),
   getLatestMatchReviewQueue: vi.fn(),
   getLatestMatchReviewSummary: vi.fn(),
+  getMatchReviewNotificationSettings: vi.fn(),
+  getWeeklyMatchQualityReport: vi.fn(),
+  listReviewAssignees: vi.fn(),
+  resolveMatchReviewAssignment: vi.fn(),
   saveMatchReviewSkip: vi.fn(),
+  upsertMatchReviewAssignment: vi.fn(),
+  upsertMatchReviewNotificationSettings: vi.fn(),
   markCrawlerEventsRead: vi.fn(),
   searchDynamicProducts: vi.fn(),
   setMatchingFeedbackActive: vi.fn(),
@@ -129,6 +135,22 @@ describe("matchRules router", () => {
     const caller = appRouter.createCaller(createAdminContext());
 
     await expect(caller.comparison.reviewSummary()).resolves.toEqual(summary);
+  });
+
+  it("persists assignment, personal notification thresholds, and the weekly quality report through administrator procedures", async () => {
+    const caller = appRouter.createCaller(createAdminContext());
+    const fingerprint = "b".repeat(64);
+    const dueAt = new Date(Date.now() + 3_600_000);
+    const report = { startDate: "2026-08-19", endDate: "2026-08-25", summary: { totalMatches: 10 }, days: [] };
+    dbMocks.getWeeklyMatchQualityReport.mockResolvedValue(report);
+    dbMocks.getMatchReviewNotificationSettings.mockResolvedValue({ userId: 1, mediumThreshold: 0, highThreshold: 2, criticalThreshold: 1 });
+
+    await expect(caller.comparison.assignReview({ sourceKey: "sinya_5", fingerprint, assigneeUserId: 1, dueAt })).resolves.toEqual({ success: true });
+    expect(dbMocks.upsertMatchReviewAssignment).toHaveBeenCalledWith({ sourceKey: "sinya_5", fingerprint, assigneeUserId: 1, dueAt, assignedByOpenId: "owner-open-id" });
+    await expect(caller.comparison.updateReviewNotificationSettings({ mediumThreshold: 3, highThreshold: 2, criticalThreshold: 1 })).resolves.toEqual({ success: true });
+    expect(dbMocks.upsertMatchReviewNotificationSettings).toHaveBeenCalledWith({ userId: 1, mediumThreshold: 3, highThreshold: 2, criticalThreshold: 1 });
+    await expect(caller.comparison.reviewNotificationSettings()).resolves.toMatchObject({ highThreshold: 2 });
+    await expect(caller.comparison.weeklyQualityReport()).resolves.toEqual(report);
   });
 
   it("persists an administrator's deferred-review decision for the exact candidate fingerprint", async () => {

@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { and, asc, desc, eq, inArray, isNotNull, like, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, like, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   comparisonMatches,
@@ -15,6 +15,8 @@ import {
   crawlerIssueReports,
   crawlerJobs,
   InsertUser,
+  matchReviewAssignments,
+  matchReviewNotificationSettings,
   matchReviewSkips,
   matchingFeedback,
   priceNotifications,
@@ -24,6 +26,7 @@ import {
 import { ENV } from './_core/env';
 import { buildListingAvailability, buildListingCategories } from "./listingAvailability";
 import { filterAndSortReviewItems, summarizeReviewItems, type ReviewPlatform, type ReviewSeverity } from "./reviewQueue";
+import { buildReviewQualityDays, summarizeReviewQuality } from "./reviewQuality";
 
 export type FeedbackPlatform = "coolpc" | "pchome" | "momo";
 
@@ -43,6 +46,21 @@ export interface MatchReviewSkipInput {
   fingerprint: string;
   createdByOpenId: string;
   note?: string | null;
+}
+
+export interface MatchReviewAssignmentInput {
+  sourceKey: string;
+  fingerprint: string;
+  assigneeUserId: number;
+  assignedByOpenId: string;
+  dueAt: Date;
+}
+
+export interface MatchReviewNotificationSettingsInput {
+  userId: number;
+  mediumThreshold: number;
+  highThreshold: number;
+  criticalThreshold: number;
 }
 
 export interface CrawlerJobInput {
@@ -653,11 +671,18 @@ export async function getLatestMatchReviewQueue(input: {
   }).from(comparisonMatches)
     .where(eq(comparisonMatches.runId, run.id));
 
-  const skippedRows = await db.select({ fingerprint: matchReviewSkips.fingerprint }).from(matchReviewSkips);
+  const [skippedRows, assignmentRows, assignees] = await Promise.all([
+    db.select({ fingerprint: matchReviewSkips.fingerprint }).from(matchReviewSkips),
+    db.select().from(matchReviewAssignments),
+    db.select({ id: users.id, openId: users.openId, name: users.name, email: users.email }).from(users).where(eq(users.role, "admin")),
+  ]);
+  const resolvedAssignmentKeys = new Set(assignmentRows.filter(row => row.status === "resolved").map(row => `${row.sourceKey}:${row.fingerprint}`));
+  const activeAssignments = new Map(assignmentRows.filter(row => row.status === "assigned").map(row => [`${row.sourceKey}:${row.fingerprint}`, row]));
+  const assigneeById = new Map(assignees.map(user => [user.id, user]));
   const candidates = filterAndSortReviewItems(rows, {
     ...input,
     skippedFingerprints: new Set(skippedRows.map(row => row.fingerprint)),
-  });
+  }).filter(item => !resolvedAssignmentKeys.has(`${item.sourceKey}:${item.fingerprint}`));
   const total = candidates.length;
   const pageSize = Math.min(100, Math.max(10, input.pageSize));
   const totalPages = Math.ceil(total / pageSize);
@@ -669,7 +694,20 @@ export async function getLatestMatchReviewQueue(input: {
     pageSize,
     totalPages,
     summary: summarizeReviewItems(candidates),
-    items: candidates.slice((page - 1) * pageSize, page * pageSize),
+    items: candidates.slice((page - 1) * pageSize, page * pageSize).map(item => {
+      const assignment = activeAssignments.get(`${item.sourceKey}:${item.fingerprint}`);
+      const assignee = assignment ? assigneeById.get(assignment.assigneeUserId) : null;
+      return {
+        ...item,
+        assignment: assignment ? {
+          id: assignment.id,
+          assigneeUserId: assignment.assigneeUserId,
+          assigneeName: assignee?.name || assignee?.email || `管理員 #${assignment.assigneeUserId}`,
+          dueAt: assignment.dueAt,
+          isOverdue: assignment.dueAt.getTime() < Date.now(),
+        } : null,
+      };
+    }),
   };
 }
 
@@ -677,6 +715,85 @@ export async function getLatestMatchReviewQueue(input: {
 export async function getLatestMatchReviewSummary() {
   const queue = await getLatestMatchReviewQueue({ page: 1, pageSize: 10 });
   return { run: queue.run, ...queue.summary };
+}
+
+export async function listReviewAssignees() {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  return db.select({ id: users.id, name: users.name, email: users.email, openId: users.openId })
+    .from(users)
+    .where(eq(users.role, "admin"))
+    .orderBy(asc(users.name), asc(users.email));
+}
+
+export async function upsertMatchReviewAssignment(input: MatchReviewAssignmentInput) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  await db.insert(matchReviewAssignments).values({
+    sourceKey: input.sourceKey,
+    fingerprint: input.fingerprint,
+    assigneeUserId: input.assigneeUserId,
+    assignedByOpenId: input.assignedByOpenId,
+    dueAt: input.dueAt,
+    status: "assigned",
+    resolvedAt: null,
+  }).onDuplicateKeyUpdate({
+    set: {
+      assigneeUserId: input.assigneeUserId,
+      assignedByOpenId: input.assignedByOpenId,
+      dueAt: input.dueAt,
+      status: "assigned",
+      resolvedAt: null,
+    },
+  });
+}
+
+export async function resolveMatchReviewAssignment(sourceKey: string, fingerprint: string) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  await db.update(matchReviewAssignments).set({ status: "resolved", resolvedAt: new Date() })
+    .where(and(eq(matchReviewAssignments.sourceKey, sourceKey), eq(matchReviewAssignments.fingerprint, fingerprint)));
+}
+
+export async function getMatchReviewNotificationSettings(userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const [settings] = await db.select().from(matchReviewNotificationSettings)
+    .where(eq(matchReviewNotificationSettings.userId, userId)).limit(1);
+  return settings ?? { userId, mediumThreshold: 0, highThreshold: 1, criticalThreshold: 1 };
+}
+
+export async function upsertMatchReviewNotificationSettings(input: MatchReviewNotificationSettingsInput) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  await db.insert(matchReviewNotificationSettings).values(input).onDuplicateKeyUpdate({
+    set: {
+      mediumThreshold: input.mediumThreshold,
+      highThreshold: input.highThreshold,
+      criticalThreshold: input.criticalThreshold,
+    },
+  });
+}
+
+/** Seven-day auto-match quality indicator. It is a transparent quality proxy, not a human-verified accuracy claim. */
+export async function getWeeklyMatchQualityReport() {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const start = new Date();
+  start.setUTCDate(start.getUTCDate() - 6);
+  start.setUTCHours(0, 0, 0, 0);
+  const rows = await db.select({
+    date: sql<string>`DATE(${comparisonMatches.createdAt})`,
+    totalMatches: sql<number>`COUNT(*)`,
+    highConfidenceMatches: sql<number>`SUM(CASE WHEN ${comparisonMatches.score} >= 0.86 AND ${comparisonMatches.hasSpecDiff} = 0 THEN 1 ELSE 0 END)`,
+    lowConfidenceMatches: sql<number>`SUM(CASE WHEN ${comparisonMatches.score} < 0.86 THEN 1 ELSE 0 END)`,
+    specDiffMatches: sql<number>`SUM(CASE WHEN ${comparisonMatches.hasSpecDiff} = 1 THEN 1 ELSE 0 END)`,
+  }).from(comparisonMatches)
+    .where(gte(comparisonMatches.createdAt, start))
+    .groupBy(sql`DATE(${comparisonMatches.createdAt})`)
+    .orderBy(asc(sql`DATE(${comparisonMatches.createdAt})`));
+  const days = buildReviewQualityDays(rows);
+  return { startDate: start.toISOString().slice(0, 10), endDate: new Date().toISOString().slice(0, 10), summary: summarizeReviewQuality(days), days };
 }
 
 export async function saveMatchReviewSkip(input: MatchReviewSkipInput) {

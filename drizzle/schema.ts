@@ -79,6 +79,51 @@ export const matchReviewSkips = mysqlTable(
 export type MatchReviewSkip = typeof matchReviewSkips.$inferSelect;
 export type InsertMatchReviewSkip = typeof matchReviewSkips.$inferInsert;
 
+/** 可疑配對的管理員工作指派；同一候選指紋在候選內容變更後會產生新工作。 */
+export const matchReviewAssignments = mysqlTable(
+  "match_review_assignments",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    sourceKey: varchar("source_key", { length: 128 }).notNull(),
+    fingerprint: varchar("fingerprint", { length: 64 }).notNull(),
+    assigneeUserId: int("assignee_user_id").notNull(),
+    assignedByOpenId: varchar("assigned_by_open_id", { length: 64 }).notNull(),
+    status: mysqlEnum("status", ["assigned", "resolved"]).default("assigned").notNull(),
+    dueAt: timestamp("due_at").notNull(),
+    resolvedAt: timestamp("resolved_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    uniqueSourceFingerprint: uniqueIndex("match_review_assignments_source_fingerprint_unique").on(table.sourceKey, table.fingerprint),
+    assigneeDueIdx: index("match_review_assignments_assignee_due_idx").on(table.assigneeUserId, table.status, table.dueAt),
+    statusDueIdx: index("match_review_assignments_status_due_idx").on(table.status, table.dueAt),
+  }),
+);
+
+export type MatchReviewAssignment = typeof matchReviewAssignments.$inferSelect;
+export type InsertMatchReviewAssignment = typeof matchReviewAssignments.$inferInsert;
+
+/** 管理員個人化的待審核提醒門檻；0 表示該風險級別不發出提醒。 */
+export const matchReviewNotificationSettings = mysqlTable(
+  "match_review_notification_settings",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    userId: int("user_id").notNull(),
+    mediumThreshold: int("medium_threshold").default(0).notNull(),
+    highThreshold: int("high_threshold").default(1).notNull(),
+    criticalThreshold: int("critical_threshold").default(1).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    uniqueUser: uniqueIndex("match_review_notification_settings_user_unique").on(table.userId),
+  }),
+);
+
+export type MatchReviewNotificationSettings = typeof matchReviewNotificationSettings.$inferSelect;
+export type InsertMatchReviewNotificationSettings = typeof matchReviewNotificationSettings.$inferInsert;
+
 /**
  * 每次四平台爬蟲的執行生命週期與彙總數據。
  * 只有 completed 的最新一筆會提供給公開比價 API，避免失敗中的爬蟲覆蓋使用者目前看到的資料。
