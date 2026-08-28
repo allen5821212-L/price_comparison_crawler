@@ -1,0 +1,51 @@
+name: crawl
+
+on:
+  schedule:
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: crawl
+  cancel-in-progress: false
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run crawler
+        env:
+          MATCHING_RULES_URL: ''
+          MATCHING_RULE_USAGE_URL: ''
+        run: python crawler/crawl.py
+
+      - name: Build summary
+        run: python make_summary.py
+
+      - name: Upload raw comparison
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: comparison-${{ github.run_number }}
+          path: client/public/data/comparison.json
+          retention-days: 14
+
+      - name: Commit results
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add client/public/data/summary.json client/public/data/price_history.json
+          git diff --staged --quiet && echo "no change" && exit 0
+          git commit -m "chore: update price summary [skip ci]"
+          git push
