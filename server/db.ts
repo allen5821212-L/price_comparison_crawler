@@ -31,6 +31,8 @@ import { buildListingAvailability, buildListingCategories } from "./listingAvail
 import { filterAndSortReviewItems, summarizeReviewItems, type ReviewPlatform, type ReviewSeverity } from "./reviewQueue";
 import { aggregateReviewQualityRows, summarizeReviewQuality } from "./reviewQuality";
 import { selectEscalationRulesForRecipient } from "./reviewEscalations";
+import { measureReviewHealthCheck, summarizeReviewHealth } from "./reviewHealth";
+import { TtlCache } from "./ttlCache";
 
 export type FeedbackPlatform = "coolpc" | "pchome" | "momo";
 
@@ -91,6 +93,8 @@ export interface MatchReviewEscalationSettingsInput {
   escalateAfterMinutes: number;
   reminderIntervalMinutes: number;
 }
+
+const weeklyQualityReportCache = new TtlCache<Awaited<ReturnType<typeof buildWeeklyMatchQualityReport>>>(60_000);
 
 export interface CrawlerJobInput {
   scope: "full" | "category";
@@ -1004,7 +1008,7 @@ export async function getMyOverdueMatchReviewEscalations(userId: number, testSto
 }
 
 /** Seven-day auto-match quality indicator. It is a transparent quality proxy, not a human-verified accuracy claim. */
-export async function getWeeklyMatchQualityReport() {
+async function buildWeeklyMatchQualityReport() {
   const db = await getDb();
   if (!db) throw new Error("資料庫目前無法使用");
   const start = new Date();
@@ -1025,6 +1029,30 @@ export async function getWeeklyMatchQualityReport() {
     days,
     riskSources: riskSources.slice(0, 10),
   };
+}
+
+/** Uses a short per-instance cache so frequent dashboard reads do not repeat the weekly aggregation query. */
+export async function getWeeklyMatchQualityReport() {
+  const { value, cache } = await weeklyQualityReportCache.get(buildWeeklyMatchQualityReport);
+  return { ...value, cache };
+}
+
+/** Checks the read dependencies most critical to the review workspace without failing the whole dashboard. */
+export async function getReviewApiHealth() {
+  const checks = await Promise.all([
+    measureReviewHealthCheck("review-queue", "待審核佇列", async () => {
+      await getLatestMatchReviewSummary();
+    }),
+    measureReviewHealthCheck("review-activity", "評論與交接紀錄", async () => {
+      const db = await getDb();
+      if (!db) throw new Error("資料庫目前無法使用");
+      await db.select({ id: matchReviewActivityLogs.id }).from(matchReviewActivityLogs).limit(1);
+    }),
+    measureReviewHealthCheck("weekly-quality", "週品質報表", async () => {
+      await getWeeklyMatchQualityReport();
+    }),
+  ]);
+  return { checkedAt: new Date().toISOString(), ...summarizeReviewHealth(checks) };
 }
 
 export async function saveMatchReviewSkip(input: MatchReviewSkipInput) {

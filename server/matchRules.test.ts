@@ -16,6 +16,7 @@ const dbMocks = vi.hoisted(() => ({
   listPriceNotificationsForUser: vi.fn(),
   getLatestMatchReviewQueue: vi.fn(),
   getLatestMatchReviewSummary: vi.fn(),
+  getReviewApiHealth: vi.fn(),
   getMatchReviewEscalationSettings: vi.fn(),
   getMatchReviewNotificationSettings: vi.fn(),
   getMyOverdueMatchReviewEscalations: vi.fn(),
@@ -144,6 +145,14 @@ describe("matchRules router", () => {
     const caller = appRouter.createCaller(createAdminContext());
 
     await expect(caller.comparison.reviewSummary()).resolves.toEqual(summary);
+  });
+
+  it("returns the review API health summary through the administrator procedure", async () => {
+    const health = { checkedAt: "2026-08-28T04:30:00.000Z", status: "healthy", checks: [] };
+    dbMocks.getReviewApiHealth.mockResolvedValue(health);
+    const caller = appRouter.createCaller(createAdminContext());
+
+    await expect(caller.comparison.reviewHealth()).resolves.toEqual(health);
   });
 
   it("persists assignment, personal notification thresholds, and the weekly quality report through administrator procedures", async () => {

@@ -34,4 +34,15 @@ describe("comparison.weeklyQualityReport tRPC integration", () => {
     expect(report.days).toEqual(expect.any(Array));
     expect(report.riskSources).toEqual(expect.any(Array));
   }, 15_000);
+
+  databaseIt("returns health and latency information for the review dashboard dependencies", async () => {
+    const health = await appRouter.createCaller(createAdminContext()).comparison.reviewHealth();
+
+    expect(health).toMatchObject({ checkedAt: expect.any(String), status: expect.stringMatching(/healthy|degraded/) });
+    expect(health.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "review-queue", durationMs: expect.any(Number) }),
+      expect.objectContaining({ id: "review-activity", durationMs: expect.any(Number) }),
+      expect.objectContaining({ id: "weekly-quality", durationMs: expect.any(Number) }),
+    ]));
+  }, 15_000);
 });

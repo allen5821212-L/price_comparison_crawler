@@ -31,6 +31,7 @@ import {
   getLatestListingAvailability,
   getLatestMatchReviewQueue,
   getLatestMatchReviewSummary,
+  getReviewApiHealth,
   getMatchReviewEscalationSettings,
   getMatchReviewNotificationSettings,
   getMyOverdueMatchReviewEscalations,
@@ -248,6 +249,8 @@ export const appRouter = router({
     }),
     myOverdueReviewEscalations: adminProcedure.query(async ({ ctx }) => getMyOverdueMatchReviewEscalations(ctx.user.id)),
     weeklyQualityReport: adminProcedure.query(async () => getWeeklyMatchQualityReport()),
+    /** On-demand health summary for the review dashboard's key read dependencies. */
+    reviewHealth: adminProcedure.query(async () => getReviewApiHealth()),
     /** Saves a team-wide deferral for this exact set of candidate names. */
     skipReview: adminProcedure.input(z.object({
       sourceKey: z.string().min(1).max(128),
