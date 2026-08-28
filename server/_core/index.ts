@@ -6,8 +6,9 @@ import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
 import { registerStorageProxy } from "./storageProxy";
 import { appRouter } from "../routers";
-import { listActiveMatchingFeedback, recordMatchingFeedbackUsage } from "../db";
+import { listActiveMatchingFeedback, recordMatchingFeedbackUsage, runReviewApiHealthMonitorByTaskUid } from "../db";
 import { createContext } from "./context";
+import { sdk } from "./sdk";
 import { serveStatic, setupVite } from "./vite";
 
 function isPortAvailable(port: number): Promise<boolean> {
@@ -58,6 +59,18 @@ async function startServer() {
     } catch (error) {
       console.error("[Matching rules] usage update failed", error);
       res.status(500).json({ success: false, error: "usage update unavailable" });
+    }
+  });
+  app.post("/api/scheduled/review-api-health", async (req, res) => {
+    try {
+      const user = await sdk.authenticateRequest(req);
+      if (!user.isCron || !user.taskUid) return res.status(403).json({ error: "cron-only" });
+      const result = await runReviewApiHealthMonitorByTaskUid(user.taskUid);
+      return res.json({ ok: true, ...result });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("[Review API health monitor] failed", error);
+      return res.status(500).json({ error: message, timestamp: new Date().toISOString() });
     }
   });
   // tRPC API

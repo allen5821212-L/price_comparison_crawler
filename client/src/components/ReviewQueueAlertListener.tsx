@@ -29,11 +29,21 @@ export function shouldEmitOverdueEscalation(lastNotifiedAt: number, now: number,
   return active && total > 0 && now - lastNotifiedAt >= Math.max(5 * 60_000, reminderIntervalMinutes * 60_000);
 }
 
+export function buildPersistentDegradationAlert(alerts: Array<{ title: string; message: string }>) {
+  const first = alerts[0];
+  if (!first) return null;
+  return {
+    title: alerts.length > 1 ? `有 ${alerts.length} 項審核 API 持續降級` : first.title,
+    message: first.message,
+  };
+}
+
 /** Polls the compact admin summary in the browser; no server-side timer is required. */
 export function ReviewQueueAlertListener() {
   const { user } = useAuth();
   const previous = useRef<ReviewAlertSnapshot | null>(null);
   const mentionedIds = useRef<Set<number>>(new Set());
+  const degradationAlertIds = useRef<Set<number>>(new Set());
   const lastEscalationNotifiedAt = useRef(0);
   const summary = trpc.comparison.reviewSummary.useQuery(undefined, {
     enabled: user?.role === "admin",
@@ -58,8 +68,16 @@ export function ReviewQueueAlertListener() {
     refetchInterval: 60_000,
     refetchOnWindowFocus: true,
   });
+  const degradationAlerts = trpc.comparison.reviewDegradationAlerts.useQuery(undefined, {
+    enabled: user?.role === "admin",
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
+  });
   const markMentionsRead = trpc.comparison.markReviewMentionsRead.useMutation({
     onSuccess: () => void unreadMentions.refetch(),
+  });
+  const markDegradationAlertsRead = trpc.comparison.markReviewDegradationAlertsRead.useMutation({
+    onSuccess: () => void degradationAlerts.refetch(),
   });
 
   useEffect(() => {
@@ -93,6 +111,17 @@ export function ReviewQueueAlertListener() {
     if (typeof Notification !== "undefined" && Notification.permission === "granted") new Notification(title, { body: message });
     markMentionsRead.mutate({ mentionIds: unseen.map(mention => mention.id) });
   }, [markMentionsRead, unreadMentions.data]);
+
+  useEffect(() => {
+    const unseen = (degradationAlerts.data ?? []).filter(alert => !degradationAlertIds.current.has(alert.id));
+    if (unseen.length === 0) return;
+    unseen.forEach(alert => degradationAlertIds.current.add(alert.id));
+    const alert = buildPersistentDegradationAlert(unseen);
+    if (!alert) return;
+    toast.error(alert.title, { description: alert.message, action: { label: "查看健康狀態", onClick: () => { window.location.href = "/review-queue"; } } });
+    if (typeof Notification !== "undefined" && Notification.permission === "granted") new Notification(alert.title, { body: alert.message });
+    markDegradationAlertsRead.mutate({ ids: unseen.map(alert => alert.id) });
+  }, [degradationAlerts.data, markDegradationAlertsRead]);
 
   useEffect(() => {
     const data = overdueEscalations.data;

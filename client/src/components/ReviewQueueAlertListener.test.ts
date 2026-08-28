@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildOverdueEscalationAlert, buildReviewAlert, shouldEmitOverdueEscalation } from "./ReviewQueueAlertListener";
+import { buildOverdueEscalationAlert, buildPersistentDegradationAlert, buildReviewAlert, shouldEmitOverdueEscalation } from "./ReviewQueueAlertListener";
 
 describe("高風險配對提醒", () => {
   it("prioritizes newly critical review items", () => {
@@ -30,5 +30,11 @@ describe("高風險配對提醒", () => {
     expect(shouldEmitOverdueEscalation(now - 30 * 60_000, now, 1, true, 60)).toBe(false);
     expect(shouldEmitOverdueEscalation(now - 60 * 60_000, now, 1, true, 60)).toBe(true);
     expect(shouldEmitOverdueEscalation(now - 60 * 60_000, now, 0, true, 60)).toBe(false);
+  });
+
+  it("uses the source API incident for one alert and summarizes multiple unread incidents", () => {
+    expect(buildPersistentDegradationAlert([{ title: "審核 API 持續降級：週品質報表", message: "已持續降級 15 分鐘" }])).toEqual({ title: "審核 API 持續降級：週品質報表", message: "已持續降級 15 分鐘" });
+    expect(buildPersistentDegradationAlert([{ title: "A", message: "a" }, { title: "B", message: "b" }])).toEqual({ title: "有 2 項審核 API 持續降級", message: "a" });
+    expect(buildPersistentDegradationAlert([])).toBeNull();
   });
 });

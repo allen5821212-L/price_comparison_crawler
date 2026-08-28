@@ -24,6 +24,9 @@ import {
   matchingFeedback,
   priceNotifications,
   productFavorites,
+  reviewApiDegradationAlerts,
+  reviewApiHealthEvents,
+  reviewApiHealthMonitorSettings,
   users,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
@@ -32,6 +35,7 @@ import { filterAndSortReviewItems, summarizeReviewItems, type ReviewPlatform, ty
 import { aggregateReviewQualityRows, summarizeReviewQuality } from "./reviewQuality";
 import { selectEscalationRulesForRecipient } from "./reviewEscalations";
 import { measureReviewHealthCheck, summarizeReviewHealth } from "./reviewHealth";
+import { createHealthIncidentKey, findPersistentDegradations } from "./reviewHealthMonitor";
 import { TtlCache } from "./ttlCache";
 
 export type FeedbackPlatform = "coolpc" | "pchome" | "momo";
@@ -92,6 +96,11 @@ export interface MatchReviewEscalationSettingsInput {
   active: boolean;
   escalateAfterMinutes: number;
   reminderIntervalMinutes: number;
+}
+
+export interface ReviewApiHealthMonitorSettingsInput {
+  active: boolean;
+  degradationThresholdMinutes: number;
 }
 
 const weeklyQualityReportCache = new TtlCache<Awaited<ReturnType<typeof buildWeeklyMatchQualityReport>>>(60_000);
@@ -1032,13 +1041,14 @@ async function buildWeeklyMatchQualityReport() {
 }
 
 /** Uses a short per-instance cache so frequent dashboard reads do not repeat the weekly aggregation query. */
-export async function getWeeklyMatchQualityReport() {
+export async function getWeeklyMatchQualityReport(options: { forceFresh?: boolean } = {}) {
+  if (options.forceFresh) weeklyQualityReportCache.clear();
   const { value, cache } = await weeklyQualityReportCache.get(buildWeeklyMatchQualityReport);
   return { ...value, cache };
 }
 
 /** Checks the read dependencies most critical to the review workspace without failing the whole dashboard. */
-export async function getReviewApiHealth() {
+export async function getReviewApiHealth(options: { forceFresh?: boolean } = {}) {
   const checks = await Promise.all([
     measureReviewHealthCheck("review-queue", "待審核佇列", async () => {
       await getLatestMatchReviewSummary();
@@ -1049,10 +1059,100 @@ export async function getReviewApiHealth() {
       await db.select({ id: matchReviewActivityLogs.id }).from(matchReviewActivityLogs).limit(1);
     }),
     measureReviewHealthCheck("weekly-quality", "週品質報表", async () => {
-      await getWeeklyMatchQualityReport();
+      await getWeeklyMatchQualityReport({ forceFresh: options.forceFresh });
     }),
   ]);
   return { checkedAt: new Date().toISOString(), ...summarizeReviewHealth(checks) };
+}
+
+export async function getReviewApiHealthMonitorSettings() {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const [settings] = await db.select().from(reviewApiHealthMonitorSettings).orderBy(desc(reviewApiHealthMonitorSettings.id)).limit(1);
+  return settings ?? { id: null, active: true, degradationThresholdMinutes: 15, scheduleCronTaskUid: null, lastCheckedAt: null };
+}
+
+export async function updateReviewApiHealthMonitorSettings(input: ReviewApiHealthMonitorSettingsInput) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const [existing] = await db.select({ id: reviewApiHealthMonitorSettings.id }).from(reviewApiHealthMonitorSettings).orderBy(desc(reviewApiHealthMonitorSettings.id)).limit(1);
+  if (existing) await db.update(reviewApiHealthMonitorSettings).set(input).where(eq(reviewApiHealthMonitorSettings.id, existing.id));
+  else await db.insert(reviewApiHealthMonitorSettings).values(input);
+}
+
+export async function setReviewApiHealthMonitorTaskUid(taskUid: string) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const [existing] = await db.select({ id: reviewApiHealthMonitorSettings.id }).from(reviewApiHealthMonitorSettings).orderBy(desc(reviewApiHealthMonitorSettings.id)).limit(1);
+  if (existing) await db.update(reviewApiHealthMonitorSettings).set({ scheduleCronTaskUid: taskUid }).where(eq(reviewApiHealthMonitorSettings.id, existing.id));
+  else await db.insert(reviewApiHealthMonitorSettings).values({ scheduleCronTaskUid: taskUid });
+}
+
+export async function getReviewApiHealthHistory(limit = 30) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  return db.select().from(reviewApiHealthEvents)
+    .orderBy(desc(reviewApiHealthEvents.observedAt), desc(reviewApiHealthEvents.id))
+    .limit(Math.min(100, Math.max(1, limit)));
+}
+
+export async function getUnreadReviewApiDegradationAlerts(userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  return db.select().from(reviewApiDegradationAlerts)
+    .where(and(eq(reviewApiDegradationAlerts.userId, userId), isNull(reviewApiDegradationAlerts.readAt)))
+    .orderBy(desc(reviewApiDegradationAlerts.createdAt))
+    .limit(20);
+}
+
+export async function markReviewApiDegradationAlertsRead(userId: number, ids: number[]) {
+  const db = await getDb();
+  if (!db || ids.length === 0) return;
+  await db.update(reviewApiDegradationAlerts).set({ readAt: new Date() })
+    .where(and(eq(reviewApiDegradationAlerts.userId, userId), inArray(reviewApiDegradationAlerts.id, ids)));
+}
+
+/** Executes an uncached check, persists timeline events, and creates one admin alert per ongoing incident. */
+export async function runReviewApiHealthMonitorByTaskUid(taskUid: string) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const [settings] = await db.select().from(reviewApiHealthMonitorSettings)
+    .where(eq(reviewApiHealthMonitorSettings.scheduleCronTaskUid, taskUid)).limit(1);
+  if (!settings) return { skipped: "unknown-schedule" as const };
+  if (!settings.active) return { skipped: "inactive" as const };
+
+  const health = await getReviewApiHealth({ forceFresh: true });
+  const observedAt = new Date(health.checkedAt);
+  if (health.checks.length > 0) {
+    await db.insert(reviewApiHealthEvents).values(health.checks.map(check => ({
+      checkId: check.id,
+      checkLabel: check.label,
+      status: check.status,
+      durationMs: check.durationMs,
+      message: check.message,
+      observedAt,
+    })));
+  }
+  const history = await db.select({ checkId: reviewApiHealthEvents.checkId, status: reviewApiHealthEvents.status, observedAt: reviewApiHealthEvents.observedAt })
+    .from(reviewApiHealthEvents)
+    .where(inArray(reviewApiHealthEvents.checkId, health.checks.map(check => check.id)))
+    .orderBy(desc(reviewApiHealthEvents.observedAt))
+    .limit(300);
+  const persistent = findPersistentDegradations(health.checks, history, settings.degradationThresholdMinutes, observedAt);
+  const admins = await db.select({ id: users.id }).from(users).where(eq(users.role, "admin"));
+  for (const incident of persistent) {
+    const check = health.checks.find(item => item.id === incident.checkId);
+    if (!check) continue;
+    const incidentKey = createHealthIncidentKey(incident.checkId, incident.startedAt);
+    const title = `審核 API 持續降級：${check.label}`;
+    const message = `${check.label} 已持續降級 ${incident.durationMinutes} 分鐘。${check.message ? `原因：${check.message}` : "請檢查審核工作台與資料庫依賴。"}`;
+    for (const admin of admins) {
+      await db.insert(reviewApiDegradationAlerts).values({ userId: admin.id, checkId: incident.checkId, incidentKey, title, message })
+        .onDuplicateKeyUpdate({ set: { title, message } });
+    }
+  }
+  await db.update(reviewApiHealthMonitorSettings).set({ lastCheckedAt: observedAt }).where(eq(reviewApiHealthMonitorSettings.id, settings.id));
+  return { skipped: null, checkedAt: health.checkedAt, status: health.status, checks: health.checks, persistentCount: persistent.length };
 }
 
 export async function saveMatchReviewSkip(input: MatchReviewSkipInput) {

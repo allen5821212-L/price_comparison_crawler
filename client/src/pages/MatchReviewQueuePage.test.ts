@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildQueueConfirmationInput, buildQueueSkipInput } from "./MatchReviewQueuePage";
+import { buildQueueConfirmationInput, buildQueueSkipInput, shouldLoadQualityReport } from "./MatchReviewQueuePage";
 
 describe("待審核佇列確認操作", () => {
   it("creates a platform-specific rule input when an existing candidate is adopted", () => {
@@ -12,5 +12,11 @@ describe("待審核佇列確認操作", () => {
 
   it("keeps the source key and candidate fingerprint when a review is deferred", () => {
     expect(buildQueueSkipInput("sinya_42", "a".repeat(64))).toEqual({ sourceKey: "sinya_42", fingerprint: "a".repeat(64) });
+  });
+
+  it("defers the weekly quality report query until an administrator explicitly requests it", () => {
+    expect(shouldLoadQualityReport("admin", false)).toBe(false);
+    expect(shouldLoadQualityReport("admin", true)).toBe(true);
+    expect(shouldLoadQualityReport("user", true)).toBe(false);
   });
 });

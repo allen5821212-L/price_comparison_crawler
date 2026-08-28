@@ -168,6 +168,69 @@ export const matchReviewEscalationSettings = mysqlTable(
 export type MatchReviewEscalationSettings = typeof matchReviewEscalationSettings.$inferSelect;
 export type InsertMatchReviewEscalationSettings = typeof matchReviewEscalationSettings.$inferInsert;
 
+/** 審核 API 每次健康檢查的可追溯歷程，供異常時間軸與持續降級判定使用。 */
+export const reviewApiHealthEvents = mysqlTable(
+  "review_api_health_events",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    checkId: varchar("check_id", { length: 64 }).notNull(),
+    checkLabel: varchar("check_label", { length: 128 }).notNull(),
+    status: mysqlEnum("status", ["healthy", "degraded"]).notNull(),
+    durationMs: int("duration_ms").notNull(),
+    message: text("message"),
+    observedAt: timestamp("observed_at").defaultNow().notNull(),
+  },
+  table => ({
+    checkObservedIdx: index("review_api_health_events_check_observed_idx").on(table.checkId, table.observedAt),
+    statusObservedIdx: index("review_api_health_events_status_observed_idx").on(table.status, table.observedAt),
+  }),
+);
+
+export type ReviewApiHealthEvent = typeof reviewApiHealthEvents.$inferSelect;
+export type InsertReviewApiHealthEvent = typeof reviewApiHealthEvents.$inferInsert;
+
+/** 專案層級的健康監控排程設定；回呼以 task UID 查找此列，避免信任請求本文。 */
+export const reviewApiHealthMonitorSettings = mysqlTable(
+  "review_api_health_monitor_settings",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    active: boolean("active").default(true).notNull(),
+    degradationThresholdMinutes: int("degradation_threshold_minutes").default(15).notNull(),
+    scheduleCronTaskUid: varchar("schedule_cron_task_uid", { length: 65 }),
+    lastCheckedAt: timestamp("last_checked_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    taskUidIdx: uniqueIndex("review_api_health_monitor_task_uid_unique").on(table.scheduleCronTaskUid),
+  }),
+);
+
+export type ReviewApiHealthMonitorSettings = typeof reviewApiHealthMonitorSettings.$inferSelect;
+export type InsertReviewApiHealthMonitorSettings = typeof reviewApiHealthMonitorSettings.$inferInsert;
+
+/** 持續降級事件針對每位管理員建立一次提醒，直到該事件恢復正常為止。 */
+export const reviewApiDegradationAlerts = mysqlTable(
+  "review_api_degradation_alerts",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    userId: int("user_id").notNull(),
+    checkId: varchar("check_id", { length: 64 }).notNull(),
+    incidentKey: varchar("incident_key", { length: 256 }).notNull(),
+    title: varchar("title", { length: 256 }).notNull(),
+    message: text("message").notNull(),
+    readAt: timestamp("read_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  table => ({
+    uniqueUserIncident: uniqueIndex("review_api_degradation_alerts_user_incident_unique").on(table.userId, table.incidentKey),
+    userReadCreatedIdx: index("review_api_degradation_alerts_user_read_created_idx").on(table.userId, table.readAt, table.createdAt),
+  }),
+);
+
+export type ReviewApiDegradationAlert = typeof reviewApiDegradationAlerts.$inferSelect;
+export type InsertReviewApiDegradationAlert = typeof reviewApiDegradationAlerts.$inferInsert;
+
 /** 管理員個人化的待審核提醒門檻；0 表示該風險級別不發出提醒。 */
 export const matchReviewNotificationSettings = mysqlTable(
   "match_review_notification_settings",

@@ -4,8 +4,11 @@ const state = vi.hoisted(() => ({
   refs: [] as Array<{ current: unknown }>,
   cursor: 0,
   overdueData: undefined as undefined | { active: boolean; reminderIntervalMinutes: number; total: number; items: Array<{ ownerUserId: number; escalateAfterMinutes: number }> },
+  degradationData: [] as Array<{ id: number; title: string; message: string }>,
   warning: vi.fn(),
   info: vi.fn(),
+  error: vi.fn(),
+  markDegradationRead: vi.fn(),
 }));
 
 vi.mock("react", () => ({
@@ -30,12 +33,14 @@ vi.mock("@/lib/trpc", () => ({
       myOverdueReviewEscalations: { useQuery: () => ({ data: state.overdueData }) },
       unreadReviewMentions: { useQuery: () => ({ data: [] }) },
       markReviewMentionsRead: { useMutation: () => ({ mutate: vi.fn() }) },
+      reviewDegradationAlerts: { useQuery: () => ({ data: state.degradationData }) },
+      markReviewDegradationAlertsRead: { useMutation: () => ({ mutate: state.markDegradationRead }) },
     },
   },
 }));
 
 vi.mock("sonner", () => ({
-  toast: { warning: state.warning, info: state.info },
+  toast: { warning: state.warning, info: state.info, error: state.error },
 }));
 
 import { ReviewQueueAlertListener } from "./ReviewQueueAlertListener";
@@ -50,8 +55,11 @@ describe("ReviewQueueAlertListener tRPC 整合", () => {
     state.refs = [];
     state.cursor = 0;
     state.overdueData = undefined;
+    state.degradationData = [];
     state.warning.mockReset();
     state.info.mockReset();
+    state.error.mockReset();
+    state.markDegradationRead.mockReset();
     vi.spyOn(Date, "now").mockReturnValue(3_600_000);
   });
 
@@ -79,5 +87,16 @@ describe("ReviewQueueAlertListener tRPC 整合", () => {
     renderListener();
 
     expect(state.warning).not.toHaveBeenCalled();
+  });
+
+  it("notifies once for unread persistent degradation incidents and marks them read", () => {
+    state.degradationData = [{ id: 21, title: "審核 API 持續降級：週品質報表", message: "已持續降級 15 分鐘" }];
+
+    renderListener();
+    expect(state.error).toHaveBeenCalledWith("審核 API 持續降級：週品質報表", expect.objectContaining({ description: "已持續降級 15 分鐘" }));
+    expect(state.markDegradationRead).toHaveBeenCalledWith({ ids: [21] });
+
+    renderListener();
+    expect(state.error).toHaveBeenCalledTimes(1);
   });
 });

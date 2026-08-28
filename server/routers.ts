@@ -32,6 +32,9 @@ import {
   getLatestMatchReviewQueue,
   getLatestMatchReviewSummary,
   getReviewApiHealth,
+  getReviewApiHealthHistory,
+  getReviewApiHealthMonitorSettings,
+  getUnreadReviewApiDegradationAlerts,
   getMatchReviewEscalationSettings,
   getMatchReviewNotificationSettings,
   getMyOverdueMatchReviewEscalations,
@@ -43,11 +46,13 @@ import {
   listUnreadMatchReviewMentions,
   listReviewAssignees,
   markMatchReviewMentionsRead,
+  markReviewApiDegradationAlertsRead,
   resolveMatchReviewAssignment,
   saveMatchReviewSkip,
   upsertMatchReviewAssignment,
   upsertMatchReviewEscalationSettings,
   upsertMatchReviewNotificationSettings,
+  updateReviewApiHealthMonitorSettings,
   getFavoriteForUser,
   getLatestCrawlerStatus,
   getLatestDynamicComparison,
@@ -251,6 +256,22 @@ export const appRouter = router({
     weeklyQualityReport: adminProcedure.query(async () => getWeeklyMatchQualityReport()),
     /** On-demand health summary for the review dashboard's key read dependencies. */
     reviewHealth: adminProcedure.query(async () => getReviewApiHealth()),
+    reviewHealthHistory: adminProcedure.input(z.object({ limit: z.number().int().min(1).max(100).default(30) }).optional())
+      .query(async ({ input }) => getReviewApiHealthHistory(input?.limit ?? 30)),
+    reviewHealthMonitorSettings: adminProcedure.query(async () => getReviewApiHealthMonitorSettings()),
+    updateReviewHealthMonitorSettings: adminProcedure.input(z.object({
+      active: z.boolean(),
+      degradationThresholdMinutes: z.number().int().min(5).max(1_440),
+    })).mutation(async ({ input }) => {
+      await updateReviewApiHealthMonitorSettings(input);
+      return { success: true } as const;
+    }),
+    reviewDegradationAlerts: adminProcedure.query(async ({ ctx }) => getUnreadReviewApiDegradationAlerts(ctx.user.id)),
+    markReviewDegradationAlertsRead: adminProcedure.input(z.object({ ids: z.array(z.number().int().positive()).max(20) }))
+      .mutation(async ({ ctx, input }) => {
+        await markReviewApiDegradationAlertsRead(ctx.user.id, input.ids);
+        return { success: true } as const;
+      }),
     /** Saves a team-wide deferral for this exact set of candidate names. */
     skipReview: adminProcedure.input(z.object({
       sourceKey: z.string().min(1).max(128),

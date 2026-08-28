@@ -10,7 +10,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { downloadCsv, toCsv } from "@/lib/csvExport";
 import { buildWeeklyQualityCsvRows } from "@/lib/reviewQualityCsv";
 import { trpc } from "@/lib/trpc";
-import { AlertTriangle, BarChart3, BellRing, ChevronLeft, ChevronRight, CircleCheck, ClipboardCheck, Clock3, Download, HeartPulse, RefreshCw, Search, ShieldAlert, SlidersHorizontal, UserRoundCheck, UsersRound } from "lucide-react";
+import { Activity, AlertTriangle, BarChart3, BellRing, ChevronLeft, ChevronRight, CircleCheck, ClipboardCheck, Clock3, Download, HeartPulse, RefreshCw, Search, ShieldAlert, SlidersHorizontal, UserRoundCheck, UsersRound } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import React, { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -70,6 +70,10 @@ export function buildQueueSkipInput(sourceKey: string, fingerprint: string) {
   return { sourceKey, fingerprint };
 }
 
+export function shouldLoadQualityReport(role: string | undefined, qualityEnabled: boolean) {
+  return role === "admin" && qualityEnabled;
+}
+
 export default function MatchReviewQueuePage() {
   const { user } = useAuth();
   const utils = trpc.useUtils();
@@ -84,6 +88,8 @@ export default function MatchReviewQueuePage() {
   const [escalationSettings, setEscalationSettings] = useState({ active: true, escalationRecipientUserId: null as number | null, escalateAfterMinutes: 60, reminderIntervalMinutes: 30 });
   const [bulkAssigneeUserId, setBulkAssigneeUserId] = useState("");
   const [bulkHours, setBulkHours] = useState(24);
+  const [qualityEnabled, setQualityEnabled] = useState(false);
+  const [degradationThresholdMinutes, setDegradationThresholdMinutes] = useState(15);
   const queueQuery = trpc.comparison.reviewQueue.useQuery({
     page,
     pageSize: 20,
@@ -99,12 +105,21 @@ export default function MatchReviewQueuePage() {
   const assigneesQuery = trpc.comparison.reviewAssignees.useQuery(undefined, { enabled: user?.role === "admin" });
   const notificationSettingsQuery = trpc.comparison.reviewNotificationSettings.useQuery(undefined, { enabled: user?.role === "admin" });
   const escalationSettingsQuery = trpc.comparison.reviewEscalationSettings.useQuery(undefined, { enabled: user?.role === "admin" });
-  const qualityReportQuery = trpc.comparison.weeklyQualityReport.useQuery(undefined, { enabled: user?.role === "admin" });
+  const qualityReportQuery = trpc.comparison.weeklyQualityReport.useQuery(undefined, {
+    enabled: shouldLoadQualityReport(user?.role, qualityEnabled),
+    staleTime: 60_000,
+  });
   const reviewHealthQuery = trpc.comparison.reviewHealth.useQuery(undefined, {
     enabled: user?.role === "admin",
     refetchInterval: 5 * 60_000,
     refetchOnWindowFocus: true,
   });
+  const reviewHealthHistoryQuery = trpc.comparison.reviewHealthHistory.useQuery({ limit: 24 }, {
+    enabled: user?.role === "admin",
+    refetchInterval: 5 * 60_000,
+    refetchOnWindowFocus: true,
+  });
+  const healthMonitorSettingsQuery = trpc.comparison.reviewHealthMonitorSettings.useQuery(undefined, { enabled: user?.role === "admin" });
   const assignReview = trpc.comparison.assignReview.useMutation({
     onSuccess: () => {
       toast.success("已指派處理人員並設定審核期限。");
@@ -160,6 +175,13 @@ export default function MatchReviewQueuePage() {
     },
     onError: error => toast.error(error.message || "無法略過此待審核項目。"),
   });
+  const updateHealthMonitorSettings = trpc.comparison.updateReviewHealthMonitorSettings.useMutation({
+    onSuccess: () => {
+      toast.success("已更新持續降級提醒門檻。");
+      void utils.comparison.reviewHealthMonitorSettings.invalidate();
+    },
+    onError: error => toast.error(error.message || "無法更新健康監控設定。"),
+  });
 
   useEffect(() => setPage(1), [severity, platform, search]);
   useEffect(() => {
@@ -181,6 +203,9 @@ export default function MatchReviewQueuePage() {
       });
     }
   }, [escalationSettingsQuery.data]);
+  useEffect(() => {
+    if (healthMonitorSettingsQuery.data) setDegradationThresholdMinutes(healthMonitorSettingsQuery.data.degradationThresholdMinutes);
+  }, [healthMonitorSettingsQuery.data]);
 
   const openManualReview = (name: string, price: number, targetPlatform: ReviewPlatform, sourceKey: string, fingerprint: string) => {
     setManualSource({ name, price, platform: targetPlatform, sourceKey, fingerprint });
@@ -217,7 +242,7 @@ export default function MatchReviewQueuePage() {
               系統會從最新完成批次挑出規格差異、低信心或跨平台價格落差過大的配對。請開啟精準搜尋後選取正確候選，讓後續爬蟲優先採用已確認規則。
             </p>
           </div>
-          <Button variant="outline" onClick={() => { void queueQuery.refetch(); void reviewSummaryQuery.refetch(); void qualityReportQuery.refetch(); void reviewHealthQuery.refetch(); }} disabled={queueQuery.isFetching || user?.role !== "admin"}><RefreshCw className={`mr-2 size-4 ${queueQuery.isFetching ? "animate-spin" : ""}`} />重新檢查佇列</Button>
+          <Button variant="outline" onClick={() => { void queueQuery.refetch(); void reviewSummaryQuery.refetch(); if (qualityEnabled) void qualityReportQuery.refetch(); void reviewHealthQuery.refetch(); void reviewHealthHistoryQuery.refetch(); }} disabled={queueQuery.isFetching || user?.role !== "admin"}><RefreshCw className={`mr-2 size-4 ${queueQuery.isFetching ? "animate-spin" : ""}`} />重新檢查佇列</Button>
         </section>
 
         {user?.role !== "admin" ? (
@@ -230,7 +255,10 @@ export default function MatchReviewQueuePage() {
               {reviewHealthQuery.isLoading && <div className="mt-4 grid gap-2 md:grid-cols-3" aria-label="審核 API 健康檢查載入中">{Array.from({ length: 3 }, (_, index) => <Skeleton key={index} className="h-16" />)}</div>}
               {reviewHealthQuery.isError && <div className="mt-4 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm"><p className="font-medium text-destructive">健康檢查暫時無法完成</p><p className="mt-1 text-xs text-muted-foreground">{reviewHealthQuery.error.message}</p></div>}
               {reviewHealthQuery.data && <div className="mt-4 grid gap-2 md:grid-cols-3">{reviewHealthQuery.data.checks.map(check => <div key={check.id} className={`rounded-lg border p-3 ${check.status === "healthy" ? "border-emerald-500/25 bg-emerald-500/5" : "border-destructive/30 bg-destructive/5"}`}><div className="flex items-center justify-between gap-2"><span className="text-sm font-medium">{check.label}</span><Badge variant="outline" className={check.status === "healthy" ? "border-emerald-500/35 text-emerald-600" : "border-destructive/35 text-destructive"}>{check.status === "healthy" ? <><CircleCheck className="mr-1 size-3" />正常</> : "需注意"}</Badge></div><p className="mt-1 text-xs text-muted-foreground">{check.durationMs} ms{check.message ? ` · ${check.message}` : ""}</p></div>)}</div>}
+              {healthMonitorSettingsQuery.data && <div className="mt-4 flex flex-col gap-3 rounded-lg border border-border bg-muted/20 p-3 sm:flex-row sm:items-end sm:justify-between"><div><p className="text-sm font-medium">持續降級提醒</p><p className="mt-1 text-xs text-muted-foreground">每 5 分鐘記錄檢查；同一 API 連續降級達門檻後建立管理員提醒。</p></div><div className="flex items-end gap-2"><label className="text-xs text-muted-foreground">門檻（分鐘）<Input type="number" min={5} max={1440} value={degradationThresholdMinutes} onChange={event => setDegradationThresholdMinutes(Math.max(5, Number(event.target.value)))} className="mt-1 h-9 w-28" /></label><Button size="sm" onClick={() => updateHealthMonitorSettings.mutate({ active: healthMonitorSettingsQuery.data.active, degradationThresholdMinutes })} disabled={updateHealthMonitorSettings.isPending}>儲存</Button></div></div>}
             </Card>
+            <Card className="p-5 shadow-sm"><div className="flex items-center gap-2"><Activity className="size-4 text-primary" /><div><p className="text-sm font-semibold">健康狀態歷程</p><p className="text-xs text-muted-foreground">最近 24 筆排程健康檢查；紅色標記代表異常時間軸事件。</p></div></div>{reviewHealthHistoryQuery.isLoading && <div className="mt-4 space-y-2" aria-label="健康歷程載入中">{Array.from({ length: 4 }, (_, index) => <Skeleton key={index} className="h-10" />)}</div>}{reviewHealthHistoryQuery.isError && <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3"><p className="text-sm text-destructive">健康歷程暫時無法載入</p><Button size="sm" variant="outline" onClick={() => reviewHealthHistoryQuery.refetch()}>再試一次</Button></div>}{reviewHealthHistoryQuery.data && <div className="mt-4 max-h-56 space-y-2 overflow-y-auto pr-1">{reviewHealthHistoryQuery.data.length === 0 ? <p className="text-sm text-muted-foreground">監控排程尚未產生健康歷程。</p> : reviewHealthHistoryQuery.data.map(event => <div key={event.id} className={`flex items-center justify-between gap-3 rounded-lg border p-3 ${event.status === "healthy" ? "border-emerald-500/20 bg-emerald-500/5" : "border-destructive/25 bg-destructive/5"}`}><div className="min-w-0"><p className="text-sm font-medium">{event.checkLabel}</p><p className="mt-1 truncate text-xs text-muted-foreground">{event.message || "檢查正常"}</p></div><div className="shrink-0 text-right"><Badge variant="outline" className={event.status === "healthy" ? "border-emerald-500/35 text-emerald-600" : "border-destructive/35 text-destructive"}>{event.status === "healthy" ? "正常" : "降級"}</Badge><p className="mt-1 text-xs text-muted-foreground">{formatDueAt(event.observedAt)} · {event.durationMs} ms</p></div></div>)}</div>}</Card>
+            {!qualityEnabled && <Card className="p-5 shadow-sm"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-sm font-semibold">最近七日配對品質</p><p className="mt-1 text-xs text-muted-foreground">品質圖表與風險排行會在需要時才查詢，避免影響待審核工作台的首屏速度。</p></div><Button onClick={() => setQualityEnabled(true)}><BarChart3 className="mr-2 size-4" />載入週品質報表</Button></div></Card>}
             {qualityReportQuery.isLoading && <section className="grid gap-3 lg:grid-cols-[1.2fr_0.8fr]" aria-label="週品質報表載入中"><Card className="p-5 shadow-sm"><Skeleton className="h-5 w-40" /><Skeleton className="mt-2 h-3 w-72" /><div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">{Array.from({ length: 4 }, (_, index) => <Skeleton key={index} className="h-14" />)}</div></Card><Card className="p-5 shadow-sm"><Skeleton className="h-5 w-28" /><div className="mt-4 grid grid-cols-3 gap-2">{Array.from({ length: 3 }, (_, index) => <Skeleton key={index} className="h-16" />)}</div></Card></section>}
             {qualityReportQuery.isError && <Card className="border-destructive/35 p-5 shadow-sm"><div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center"><div><p className="font-semibold">週品質報表暫時無法載入</p><p className="mt-1 text-sm text-muted-foreground">{qualityReportQuery.error.message}</p></div><Button onClick={() => qualityReportQuery.refetch()} disabled={qualityReportQuery.isFetching}>{qualityReportQuery.isFetching && <RefreshCw className="mr-2 size-4 animate-spin" />}再試一次</Button></div></Card>}
             {qualityReportQuery.data && <section className="grid gap-3 lg:grid-cols-[1.2fr_0.8fr]">

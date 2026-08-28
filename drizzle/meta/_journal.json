@@ -120,6 +120,13 @@
       "when": 1787656773568,
       "tag": "0016_lush_shotgun",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "5",
+      "when": 1787901035611,
+      "tag": "0017_silly_the_fallen",
+      "breakpoints": true
     }
   ]
 }
