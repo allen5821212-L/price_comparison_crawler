@@ -29,7 +29,7 @@ import {
 import { ENV } from './_core/env';
 import { buildListingAvailability, buildListingCategories } from "./listingAvailability";
 import { filterAndSortReviewItems, summarizeReviewItems, type ReviewPlatform, type ReviewSeverity } from "./reviewQueue";
-import { buildReviewQualityDays, buildRiskSourceRanking, summarizeReviewQuality } from "./reviewQuality";
+import { aggregateReviewQualityRows, summarizeReviewQuality } from "./reviewQuality";
 import { selectEscalationRulesForRecipient } from "./reviewEscalations";
 
 export type FeedbackPlatform = "coolpc" | "pchome" | "momo";
@@ -1010,34 +1010,20 @@ export async function getWeeklyMatchQualityReport() {
   const start = new Date();
   start.setUTCDate(start.getUTCDate() - 6);
   start.setUTCHours(0, 0, 0, 0);
-  const [rows, riskSourceRows] = await Promise.all([
-    db.select({
-      date: sql<string>`DATE(${comparisonMatches.createdAt})`,
-      totalMatches: sql<number>`COUNT(*)`,
-      highConfidenceMatches: sql<number>`SUM(CASE WHEN ${comparisonMatches.score} >= 0.86 AND ${comparisonMatches.hasSpecDiff} = 0 THEN 1 ELSE 0 END)`,
-      lowConfidenceMatches: sql<number>`SUM(CASE WHEN ${comparisonMatches.score} < 0.86 THEN 1 ELSE 0 END)`,
-      specDiffMatches: sql<number>`SUM(CASE WHEN ${comparisonMatches.hasSpecDiff} = 1 THEN 1 ELSE 0 END)`,
-    }).from(comparisonMatches)
-      .where(gte(comparisonMatches.createdAt, start))
-      .groupBy(sql`DATE(${comparisonMatches.createdAt})`)
-      .orderBy(asc(sql`DATE(${comparisonMatches.createdAt})`)),
-    db.select({
-      category: comparisonMatches.category,
-      totalMatches: sql<number>`COUNT(*)`,
-      riskMatches: sql<number>`SUM(CASE WHEN ${comparisonMatches.score} < 0.86 OR ${comparisonMatches.hasSpecDiff} = 1 THEN 1 ELSE 0 END)`,
-    }).from(comparisonMatches)
-      .where(gte(comparisonMatches.createdAt, start))
-      .groupBy(comparisonMatches.category)
-      .orderBy(desc(sql`SUM(CASE WHEN ${comparisonMatches.score} < 0.86 OR ${comparisonMatches.hasSpecDiff} = 1 THEN 1 ELSE 0 END)`))
-      .limit(10),
-  ]);
-  const days = buildReviewQualityDays(rows);
+  const rows = await db.select({
+    createdAt: comparisonMatches.createdAt,
+    score: comparisonMatches.score,
+    hasSpecDiff: comparisonMatches.hasSpecDiff,
+    category: comparisonMatches.category,
+  }).from(comparisonMatches)
+    .where(gte(comparisonMatches.createdAt, start));
+  const { days, riskSources } = aggregateReviewQualityRows(rows);
   return {
     startDate: start.toISOString().slice(0, 10),
     endDate: new Date().toISOString().slice(0, 10),
     summary: summarizeReviewQuality(days),
     days,
-    riskSources: buildRiskSourceRanking(riskSourceRows),
+    riskSources: riskSources.slice(0, 10),
   };
 }
 

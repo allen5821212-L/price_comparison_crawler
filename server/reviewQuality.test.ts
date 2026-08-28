@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildReviewQualityDays, buildRiskSourceRanking, summarizeReviewQuality } from "./reviewQuality";
+import { aggregateReviewQualityRows, buildReviewQualityDays, buildRiskSourceRanking, summarizeReviewQuality } from "./reviewQuality";
 
 describe("七日配對品質報表", () => {
   it("computes the auto-quality indicator from high-confidence, no-spec-difference matches", () => {
@@ -24,5 +24,19 @@ describe("七日配對品質報表", () => {
       { category: "顯示卡", totalMatches: 10, riskMatches: 5, riskRate: 50 },
       { category: "主機板", totalMatches: 40, riskMatches: 4, riskRate: 10 },
     ]);
+  });
+
+  it("aggregates raw match rows without relying on database date grouping", () => {
+    const report = aggregateReviewQualityRows([
+      { createdAt: "2026-08-22T12:00:00.000Z", score: "0.95", hasSpecDiff: 0, category: "CPU" },
+      { createdAt: "2026-08-22T13:00:00.000Z", score: "0.70", hasSpecDiff: 0, category: "CPU" },
+      { createdAt: "2026-08-23T10:00:00.000Z", score: "0.98", hasSpecDiff: 1, category: "主機板" },
+    ]);
+
+    expect(report.days).toMatchObject([
+      { date: "2026-08-22", totalMatches: 2, highConfidenceMatches: 1, lowConfidenceMatches: 1 },
+      { date: "2026-08-23", totalMatches: 1, specDiffMatches: 1 },
+    ]);
+    expect(report.riskSources.map(source => [source.category, source.riskMatches])).toEqual([["主機板", 1], ["CPU", 1]]);
   });
 });
