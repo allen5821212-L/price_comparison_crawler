@@ -1,31 +1,31 @@
 {
- "update_time": "2026-08-28 10:41:02",
+ "update_time": "2026-08-29 08:04:32",
  "totals": {
-  "sinya": 5939,
-  "coolpc": 6683,
-  "pchome": 8659,
-  "momo": 4685,
-  "matched": 1958
+  "sinya": 5911,
+  "coolpc": 6684,
+  "pchome": 8687,
+  "momo": 4649,
+  "matched": 1955
  },
  "cheapest": {
   "sinya": 123,
-  "coolpc": 225,
-  "pchome": 207,
-  "momo": 182,
-  "same": 1221
+  "coolpc": 220,
+  "pchome": 199,
+  "momo": 196,
+  "same": 1217
  },
- "avg_price_diff": 358,
- "worse_count": 466,
+ "avg_price_diff": 388,
+ "worse_count": 458,
  "worse_top": [
   {
-   "name": "ASUS ROG Strix G18 G815LW-0071G290HX-NBLM 電光綠 華碩旗艦滿血版電競筆電/Ultra 9-290HX/RTX5080 16G/16GB DDR5/1TB PCIe/18吋 16:10 2.5K 240Hz MiniLED/W11/含ROG後背包及電競滑鼠",
-   "cat": "最夯遊戲推薦筆電",
-   "sinya": 119999,
-   "rival": "momo",
-   "rival_price": 81999,
-   "diff": 38000,
-   "pct": 31.7,
-   "url": "https://www.sinya.com.tw/prod/224097"
+   "name": "ASUS Ascent GX10 華碩商用工作站/NVIDIA GB10 Grace Blackwell/2ARM v9.2-A CPU (GB10)\r\n/128G D5/4TB SSD/DGX OS/1年保固 現貨限量供應中",
+   "cat": "商用桌上型電腦",
+   "sinya": 245900,
+   "rival": "原價屋",
+   "rival_price": 175900,
+   "diff": 70000,
+   "pct": 28.5,
+   "url": "https://www.sinya.com.tw/prod/223702"
   },
   {
    "name": "【32G雙碟版】ASUS ROG Strix G16 G614PM-0044C8940HX-NBL 幻潮黑 華碩經典潮流電競筆電/R9-8940HX/RTX5060 8G/32GB(16G*2)DDR5/2TB(1T*2)PCIe/16吋 16:10 2.5K 300Hz/W11/含ROG後背包及電競滑鼠【筆電高興價】",
@@ -78,16 +78,6 @@
    "url": "https://www.sinya.com.tw/prod/213008"
   },
   {
-   "name": "【32G升級版】ASUS TUF Gaming F17 FX707VJB-0032A210H 月影灰 華碩軍規電競筆電/Core 5-210H/RTX3050 6G/32GB(16G*2)DDR5/512GB PCIe/17.3吋 FHD 144Hz/W11/含TUF電競滑鼠【筆電高興價】",
-   "cat": "最夯遊戲推薦筆電",
-   "sinya": 44999,
-   "rival": "原價屋",
-   "rival_price": 35999,
-   "diff": 9000,
-   "pct": 20.0,
-   "url": "https://www.sinya.com.tw/prod/227064"
-  },
-  {
    "name": "HP ZBOOK 8 G1i 惠普商用行動工作站/Ultra7-255H/16G D5/1TB SSD/RTX 500 Ada/14吋 WUXGA/Win11 Pro/1年保固/BR6U9PT",
    "cat": "商務筆記型電腦",
    "sinya": 66400,
@@ -108,16 +98,6 @@
    "url": "https://www.sinya.com.tw/prod/225618"
   },
   {
-   "name": "技嘉 X870E AORUS MASTER X3D ICE 白色 (ATX/1H/Realtek 5GbE/Wi-Fi 7+BT 5.4/註冊五年保) 18+2+2相供電【X3D優化】",
-   "cat": "MB 主機板",
-   "sinya": 20990,
-   "rival": "momo",
-   "rival_price": 13590,
-   "diff": 7400,
-   "pct": 35.3,
-   "url": "https://www.sinya.com.tw/prod/218040"
-  },
-  {
    "name": "【32G升級版】ASUS TUF Gaming A15 FA506NCG-0162B8845HS 石墨黑 華碩軍規電競筆電/R7-8845HS/RTX3050 4G/32GB(16G*2)DDR5/512GB PCIe/15.6吋 FHD 144Hz/W11/含TUF電競滑鼠【筆電高興價】",
    "cat": "最夯遊戲推薦筆電",
    "sinya": 40999,
@@ -128,14 +108,14 @@
    "url": "https://www.sinya.com.tw/prod/227046"
   },
   {
-   "name": "【雙螢組】MSI Katana 15 HX B14WFK-897TW 微星炫彩戰鬥款電競筆電+MSI MAG MAG 274QF 電競螢幕 /i5-14450HX/RTX5060 8G/16GB DDR5/1TB PCIe/15.6吋 FHD 144Hz/W11/四區RGB背光電競鍵盤【筆電高興價】",
-   "cat": "最夯遊戲推薦筆電",
-   "sinya": 50999,
-   "rival": "PChome",
-   "rival_price": 44999,
-   "diff": 6000,
-   "pct": 11.8,
-   "url": "https://www.sinya.com.tw/prod/224077"
+   "name": "技嘉 X870E AORUS MASTER X3D ICE 白色 (ATX/1H/Realtek 5GbE/Wi-Fi 7+BT 5.4/註冊五年保) 18+2+2相供電【X3D優化】",
+   "cat": "MB 主機板",
+   "sinya": 20990,
+   "rival": "momo",
+   "rival_price": 14090,
+   "diff": 6900,
+   "pct": 32.9,
+   "url": "https://www.sinya.com.tw/prod/218040"
   },
   {
    "name": "ASUS Vivobook 14 X1407QA-0041D26100 鉑金色 華碩時尚輕薄高效AI筆電/Snapdragon X  X1 26 100/16GB LPDDR5X/512GB PCIe/14吋 16:10 FHD+/W11/含原廠包包及滑鼠",
@@ -166,9 +146,29 @@
    "diff": 6000,
    "pct": 6.8,
    "url": "https://www.sinya.com.tw/prod/227044"
+  },
+  {
+   "name": "【32G升級版】ASUS ROG Strix G16 G614PR-0074C8940HX-NBL 幻潮黑 華碩經典潮流電競筆電/R9-8940HX/RTX5070Ti 12G/32GB(16G*2)DDR5/1TB PCIe/16吋 16:10 2.5K 300Hz/W11/含ROG後背包及電競滑鼠【筆電高興價】",
+   "cat": "最夯遊戲推薦筆電",
+   "sinya": 85999,
+   "rival": "原價屋",
+   "rival_price": 79999,
+   "diff": 6000,
+   "pct": 7.0,
+   "url": "https://www.sinya.com.tw/prod/227040"
+  },
+  {
+   "name": "acer Swift Air SFA14-71M-57TB 銀 宏碁時尚輕纖筆電/Ultra 5-125H/16GB LPDDR5/512GB PCIe/14吋 16:10 2.8K OLED/W11/0.99Kg/含原廠包包及滑鼠",
+   "cat": "最夯遊戲推薦筆電",
+   "sinya": 30900,
+   "rival": "原價屋",
+   "rival_price": 25000,
+   "diff": 5900,
+   "pct": 19.1,
+   "url": "https://www.sinya.com.tw/prod/225519"
   }
  ],
- "suspect_count": 217,
+ "suspect_count": 221,
  "suspect_top": [
   {
    "name": "【24型】ASUS ROG Strix XG248QSG 電競螢幕/HDMI/DP/FHD/TN面板/0.1ms/610Hz/HDR400/G-SYNC",
@@ -181,22 +181,12 @@
    "url": "https://www.sinya.com.tw/prod/217234"
   },
   {
-   "name": "【32型】華碩 ROG Strix OLED XG32UCWMG 電競螢幕 (DP/HDMI/Type-C/OLED/4K/0.03ms/240Hz(FHD480Hz)/FreeSync Premium/G-Sync/HDR400/DELTA E < 2/Neo 近接感測器/可升降/無喇叭/三年保固)",
-   "cat": "液晶螢幕/支架",
-   "sinya": 22618,
-   "rival": "PChome",
-   "rival_price": 237,
-   "diff": 22381,
-   "pct": 99.0,
-   "url": "https://www.sinya.com.tw/prod/222187"
-  },
-  {
    "name": "【32型】華碩 ROG Strix OLED XG32UCWG 電競螢幕 (DP/HDMI/Type-C/WOLED/4K/0.03ms/165Hz(FHD320Hz)/FreeSync Premium/G-Sync/HDR400/DELTA E < 2/Neo 近接感測器/可升降/無喇叭/三年保固)",
    "cat": "液晶螢幕/支架",
    "sinya": 21212,
-   "rival": "PChome",
-   "rival_price": 237,
-   "diff": 20975,
+   "rival": "momo",
+   "rival_price": 235,
+   "diff": 20977,
    "pct": 98.9,
    "url": "https://www.sinya.com.tw/prod/215304"
   },
@@ -269,22 +259,32 @@
    "diff": 56709,
    "pct": 97.8,
    "url": "https://www.sinya.com.tw/prod/213680"
+  },
+  {
+   "name": "ASUS TUF Gaming A16 FA608PP-0071A8940HX 御鐵灰 華碩薄邊框軍規電競筆電/R9-8940HX/RTX5070 8G/16GB DDR5/512GB PCIe/16吋 16:10 2.5K 165Hz/W11/含TUF電競滑鼠",
+   "cat": "最夯遊戲推薦筆電",
+   "sinya": 57999,
+   "rival": "PChome",
+   "rival_price": 1290,
+   "diff": 56709,
+   "pct": 97.8,
+   "url": "https://www.sinya.com.tw/prod/215402"
   }
  ],
  "listing": {
   "coolpc": {
    "label": "原價屋",
-   "listed": 1958,
+   "listed": 1955,
    "rate": 100.0
   },
   "pchome": {
    "label": "PChome",
-   "listed": 1034,
-   "rate": 52.8
+   "listed": 1030,
+   "rate": 52.7
   },
   "momo": {
    "label": "momo",
-   "listed": 955,
+   "listed": 954,
    "rate": 48.8
   }
  }
