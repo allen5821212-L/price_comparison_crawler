@@ -1,21 +1,21 @@
 {
- "update_time": "2026-08-29 08:04:32",
+ "update_time": "2026-08-30 06:37:53",
  "totals": {
-  "sinya": 5911,
-  "coolpc": 6684,
-  "pchome": 8687,
-  "momo": 4649,
-  "matched": 1955
+  "sinya": 5895,
+  "coolpc": 6686,
+  "pchome": 8685,
+  "momo": 4605,
+  "matched": 1954
  },
  "cheapest": {
-  "sinya": 123,
-  "coolpc": 220,
-  "pchome": 199,
-  "momo": 196,
-  "same": 1217
+  "sinya": 124,
+  "coolpc": 228,
+  "pchome": 195,
+  "momo": 201,
+  "same": 1206
  },
- "avg_price_diff": 388,
- "worse_count": 458,
+ "avg_price_diff": 394,
+ "worse_count": 466,
  "worse_top": [
   {
    "name": "ASUS Ascent GX10 華碩商用工作站/NVIDIA GB10 Grace Blackwell/2ARM v9.2-A CPU (GB10)\r\n/128G D5/4TB SSD/DGX OS/1年保固 現貨限量供應中",
@@ -98,6 +98,16 @@
    "url": "https://www.sinya.com.tw/prod/225618"
   },
   {
+   "name": "技嘉 X870E AORUS MASTER X3D ICE 白色 (ATX/1H/Realtek 5GbE/Wi-Fi 7+BT 5.4/註冊五年保) 18+2+2相供電【X3D優化】",
+   "cat": "MB 主機板",
+   "sinya": 20990,
+   "rival": "momo",
+   "rival_price": 12990,
+   "diff": 8000,
+   "pct": 38.1,
+   "url": "https://www.sinya.com.tw/prod/218040"
+  },
+  {
    "name": "【32G升級版】ASUS TUF Gaming A15 FA506NCG-0162B8845HS 石墨黑 華碩軍規電競筆電/R7-8845HS/RTX3050 4G/32GB(16G*2)DDR5/512GB PCIe/15.6吋 FHD 144Hz/W11/含TUF電競滑鼠【筆電高興價】",
    "cat": "最夯遊戲推薦筆電",
    "sinya": 40999,
@@ -106,16 +116,6 @@
    "diff": 7000,
    "pct": 17.1,
    "url": "https://www.sinya.com.tw/prod/227046"
-  },
-  {
-   "name": "技嘉 X870E AORUS MASTER X3D ICE 白色 (ATX/1H/Realtek 5GbE/Wi-Fi 7+BT 5.4/註冊五年保) 18+2+2相供電【X3D優化】",
-   "cat": "MB 主機板",
-   "sinya": 20990,
-   "rival": "momo",
-   "rival_price": 14090,
-   "diff": 6900,
-   "pct": 32.9,
-   "url": "https://www.sinya.com.tw/prod/218040"
   },
   {
    "name": "ASUS Vivobook 14 X1407QA-0041D26100 鉑金色 華碩時尚輕薄高效AI筆電/Snapdragon X  X1 26 100/16GB LPDDR5X/512GB PCIe/14吋 16:10 FHD+/W11/含原廠包包及滑鼠",
@@ -168,7 +168,7 @@
    "url": "https://www.sinya.com.tw/prod/225519"
   }
  ],
- "suspect_count": 221,
+ "suspect_count": 228,
  "suspect_top": [
   {
    "name": "【24型】ASUS ROG Strix XG248QSG 電競螢幕/HDMI/DP/FHD/TN面板/0.1ms/610Hz/HDR400/G-SYNC",
@@ -274,18 +274,18 @@
  "listing": {
   "coolpc": {
    "label": "原價屋",
-   "listed": 1955,
+   "listed": 1954,
    "rate": 100.0
   },
   "pchome": {
    "label": "PChome",
-   "listed": 1030,
-   "rate": 52.7
+   "listed": 1037,
+   "rate": 53.1
   },
   "momo": {
    "label": "momo",
-   "listed": 954,
-   "rate": 48.8
+   "listed": 970,
+   "rate": 49.6
   }
  }
 }
