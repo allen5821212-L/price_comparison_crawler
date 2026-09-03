@@ -8,6 +8,7 @@ import { ReviewQueueAlertListener } from "./components/ReviewQueueAlertListener"
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
 import RulesManagement from "./pages/RulesManagement";
+import BrandAliasManagement from "./pages/BrandAliasManagement";
 import CrawlerMonitor from "./pages/CrawlerMonitor";
 import FavoritesPage from "./pages/FavoritesPage";
 import CoolpcCoveragePage from "./pages/CoolpcCoveragePage";
@@ -23,6 +24,7 @@ function Router() {
       <Route path={"/"} component={Home} />
       <Route path={"/comparisons"} component={ComparisonListPage} />
       <Route path={"/rules"} component={RulesManagement} />
+      <Route path={"/brand-aliases"} component={BrandAliasManagement} />
       <Route path={"/crawler"} component={CrawlerMonitor} />
       <Route path={"/favorites"} component={FavoritesPage} />
       <Route path={"/matching"} component={PrecisionMatchingPage} />

@@ -6,6 +6,7 @@ import {
   comparisonPriceHistory,
   comparisonProducts,
   comparisonRuns,
+  brandAliases,
   coolpcCategoryRecrawlPresetHistory,
   coolpcCategoryRecrawlPresets,
   coolpcCategoryRecrawlPresetTemplateCollaborators,
@@ -65,6 +66,12 @@ export interface NegativeMatchFeatureFeedbackInput {
   sourceName: string;
   targetName: string;
   rejectedByUserId: number;
+}
+
+export interface BrandAliasInput {
+  alias: string;
+  canonicalName: string;
+  createdByOpenId: string;
 }
 
 export interface MatchReviewAssignmentInput {
@@ -471,6 +478,87 @@ export async function listLearnedNegativeMatchFeatures() {
   return rows.map(row => ({ ...row, penalty: calculateNegativePenalty(row.rejectionCount) }));
 }
 
+/** Crawler-safe export that excludes the administrator who last edited each alias. */
+export async function listActiveBrandAliases() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({ alias: brandAliases.alias, canonicalName: brandAliases.canonicalName })
+    .from(brandAliases)
+    .where(eq(brandAliases.active, true))
+    .orderBy(asc(brandAliases.alias));
+}
+
+export async function listBrandAliasesForAdmin() {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  return db.select().from(brandAliases).orderBy(asc(brandAliases.canonicalName), asc(brandAliases.alias));
+}
+
+export function normalizeBrandAliasInput(input: Pick<BrandAliasInput, "alias" | "canonicalName">) {
+  return { alias: input.alias.trim(), canonicalName: input.canonicalName.trim() };
+}
+
+export async function upsertBrandAlias(input: BrandAliasInput) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const { alias, canonicalName } = normalizeBrandAliasInput(input);
+  await db.insert(brandAliases).values({ alias, canonicalName, active: true, createdByOpenId: input.createdByOpenId })
+    .onDuplicateKeyUpdate({ set: { canonicalName, active: true, createdByOpenId: input.createdByOpenId } });
+}
+
+export async function setBrandAliasActive(id: number, active: boolean) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  await db.update(brandAliases).set({ active }).where(eq(brandAliases.id, id));
+}
+
+export function parseReviewMatchSignals(payload: string) {
+  try {
+    const value = JSON.parse(payload) as { hard_filter_reasons?: unknown; exact_mpn?: unknown };
+    return {
+      hardFilterReasons: Array.isArray(value.hard_filter_reasons)
+        ? value.hard_filter_reasons.filter((reason): reason is string => typeof reason === "string")
+        : [],
+      exactMpnCodes: Array.isArray(value.exact_mpn)
+        ? value.exact_mpn.filter((code): code is string => typeof code === "string")
+        : [],
+    };
+  } catch {
+    return { hardFilterReasons: [] as string[], exactMpnCodes: [] as string[] };
+  }
+}
+
+export function buildMpnMatchMetrics(payloads: string[]) {
+  const parsed = payloads.map(payload => parseReviewMatchSignals(payload).exactMpnCodes);
+  const exactMpnTotal = parsed.filter(codes => codes.length > 0).length;
+  const total = payloads.length;
+  return {
+    total,
+    exactMpnTotal,
+    exactMpnRate: total === 0 ? 0 : Number((exactMpnTotal / total).toFixed(4)),
+    samples: Array.from(new Set(parsed.flat())).slice(0, 8),
+  };
+}
+
+/** The latest successful primary-match batch is the source of truth for exact-MPN match rate. */
+export async function getLatestMpnMatchMetrics() {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const [run] = await db.select({ id: comparisonRuns.id, finishedAt: comparisonRuns.finishedAt, startedAt: comparisonRuns.startedAt })
+    .from(comparisonRuns)
+    .where(eq(comparisonRuns.status, "completed"))
+    .orderBy(desc(comparisonRuns.finishedAt), desc(comparisonRuns.id))
+    .limit(1);
+  if (!run) return { run: null, total: 0, exactMpnTotal: 0, exactMpnRate: 0, samples: [] as string[] };
+
+  const rows = await db.select({ payload: comparisonMatches.payload }).from(comparisonMatches)
+    .where(eq(comparisonMatches.runId, run.id));
+  return {
+    run: { id: run.id, finishedAt: run.finishedAt ?? run.startedAt },
+    ...buildMpnMatchMetrics(rows.map(row => row.payload)),
+  };
+}
+
 type DynamicProduct = {
   source: string;
   id: string;
@@ -787,8 +875,11 @@ export async function getLatestMatchReviewQueue(input: {
     momoPrice: comparisonMatches.momoPrice,
     score: comparisonMatches.score,
     hasSpecDiff: comparisonMatches.hasSpecDiff,
+    payload: comparisonMatches.payload,
   }).from(comparisonMatches)
     .where(eq(comparisonMatches.runId, run.id));
+
+  const reviewRows = rows.map(row => ({ ...row, ...parseReviewMatchSignals(row.payload) }));
 
   const [skippedRows, assignmentRows, assignees] = await Promise.all([
     db.select({ fingerprint: matchReviewSkips.fingerprint }).from(matchReviewSkips),
@@ -798,7 +889,7 @@ export async function getLatestMatchReviewQueue(input: {
   const resolvedAssignmentKeys = new Set(assignmentRows.filter(row => row.status === "resolved").map(row => `${row.sourceKey}:${row.fingerprint}`));
   const activeAssignments = new Map(assignmentRows.filter(row => row.status === "assigned").map(row => [`${row.sourceKey}:${row.fingerprint}`, row]));
   const assigneeById = new Map(assignees.map(user => [user.id, user]));
-  const candidates = filterAndSortReviewItems(rows, {
+  const candidates = filterAndSortReviewItems(reviewRows, {
     ...input,
     skippedFingerprints: new Set(skippedRows.map(row => row.fingerprint)),
   }).filter(item => !resolvedAssignmentKeys.has(`${item.sourceKey}:${item.fingerprint}`));

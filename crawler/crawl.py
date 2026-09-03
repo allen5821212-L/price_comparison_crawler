@@ -89,12 +89,13 @@ def fetch_matching_policies():
         payload = json.loads(raw) if raw else {}
         rules = payload.get("rules", [])
         negative_features = payload.get("negativeFeatures", [])
-        if isinstance(rules, list) and isinstance(negative_features, list):
-            print(f"  已載入人工確認規則: {len(rules)} 組；高頻拒絕特徵: {len(negative_features)} 組")
-            return rules, negative_features
+        brand_aliases = payload.get("brandAliases", [])
+        if isinstance(rules, list) and isinstance(negative_features, list) and isinstance(brand_aliases, list):
+            print(f"  已載入人工確認規則: {len(rules)} 組；高頻拒絕特徵: {len(negative_features)} 組；品牌別名: {len(brand_aliases)} 組")
+            return rules, negative_features, brand_aliases
     except (json.JSONDecodeError, TypeError, ValueError) as error:
         print(f"  [WARN] 無法解析比對回饋規則: {error}")
-    return [], []
+    return [], [], []
 
 
 def report_matching_rule_usage(rule_ids):
@@ -1039,7 +1040,9 @@ def main(max_cats=None, priority_category=None):
     for a, b in CATEGORY_COMPAT:
         compat_set.add((a, b))
         compat_set.add((b, a))
-    confirmed_rules, negative_features = fetch_matching_policies()
+    confirmed_rules, negative_features, brand_aliases = fetch_matching_policies()
+    from matcher import register_brand_aliases
+    register_brand_aliases(brand_aliases)
     from negative_features import build_negative_penalty_lookup
     matched, rejected, review, price_review = match_all_platforms(
         sinya_products, coolpc_products, pchome_products, momo_products,

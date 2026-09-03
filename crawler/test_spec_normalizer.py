@@ -2,7 +2,7 @@
 
 import unittest
 
-from matcher import compute_score, veto
+from matcher import compute_score, extract_brands, match_products_v2, register_brand_aliases, veto
 from spec_normalizer import extract_mpn_codes, extract_spec_features, normalize_match_text
 
 
@@ -58,6 +58,22 @@ class SpecNormalizerTests(unittest.TestCase):
         )
         self.assertEqual(score, 1.0)
         self.assertEqual(details["exactMpn"], ["V3607VJ0031K210H"])
+
+    def test_match_payload_retains_hard_filter_evidence_and_mpn_hit(self):
+        matched, _rejected, _review, _price_review = match_products_v2(
+            [{"id": "source-1", "name": "ASUS V3607VJ-0031K210H RTX 4060 8G", "price": 30000, "category": "筆電"}],
+            [
+                {"id": "target-1", "name": "華碩 V3607VJ-0031K210H RTX 4060 8G", "price": 29500, "category": "筆電"},
+                {"id": "target-2", "name": "華碩 V3607VJ-0031K210H RTX 4060 Ti 8G", "price": 31000, "category": "筆電"},
+            ],
+        )
+        self.assertEqual(len(matched), 1)
+        self.assertEqual(matched[0]["exact_mpn"], ["V3607VJ0031K210H"])
+        self.assertTrue(any("關鍵後綴" in reason for reason in matched[0]["hard_filter_reasons"]))
+
+    def test_registered_brand_alias_is_available_to_hard_filter(self):
+        self.assertEqual(register_brand_aliases([{"alias": "DemoBrand-TW", "canonicalName": "DemoBrand"}]), 1)
+        self.assertIn("DemoBrand", extract_brands("DEmobrand-tw X100"))
 
 
 if __name__ == "__main__":

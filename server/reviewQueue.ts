@@ -17,6 +17,8 @@ export type ReviewMatchSource = {
   momoPrice: number | string | null;
   score: number | string;
   hasSpecDiff: boolean | number;
+  hardFilterReasons?: string[];
+  exactMpnCodes?: string[];
 };
 
 export type ReviewTarget = {
@@ -38,6 +40,8 @@ export type MatchReviewItem = {
   riskScore: number;
   severity: ReviewSeverity;
   reasons: string[];
+  hardFilterReasons: string[];
+  exactMpnCodes: string[];
   targets: ReviewTarget[];
 };
 
@@ -95,6 +99,8 @@ export function buildMatchReviewItem(source: ReviewMatchSource): MatchReviewItem
   }));
   const priceSpread = calculatePriceSpread([source.sinyaPrice, ...targets.map(target => target.price)]);
   const reasons: string[] = [];
+  const hardFilterReasons = Array.from(new Set(source.hardFilterReasons ?? [])).filter(Boolean).slice(0, 5);
+  const exactMpnCodes = Array.from(new Set(source.exactMpnCodes ?? [])).filter(Boolean).slice(0, 5);
   const confidenceRisk = Math.round((1 - score) * 100);
   const priceRisk = priceSpread >= HIGH_PRICE_SPREAD ? Math.min(90, Math.round(priceSpread * 100)) : 0;
 
@@ -118,6 +124,8 @@ export function buildMatchReviewItem(source: ReviewMatchSource): MatchReviewItem
     riskScore,
     severity,
     reasons,
+    hardFilterReasons,
+    exactMpnCodes,
     targets,
   };
 }

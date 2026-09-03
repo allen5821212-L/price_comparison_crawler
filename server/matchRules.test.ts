@@ -9,10 +9,13 @@ const dbMocks = vi.hoisted(() => ({
   getLatestDynamicComparison: vi.fn(),
   enqueueCrawlerJob: vi.fn(),
   listActiveMatchingFeedback: vi.fn(),
+  listActiveBrandAliases: vi.fn(),
   listCrawlerEvents: vi.fn(),
   listCrawlerJobs: vi.fn(),
   listFavoritesForUser: vi.fn(),
   listMatchingFeedbackForAdmin: vi.fn(),
+  listBrandAliasesForAdmin: vi.fn(),
+  getLatestMpnMatchMetrics: vi.fn(),
   listPriceNotificationsForUser: vi.fn(),
   getLatestMatchReviewQueue: vi.fn(),
   getLatestMatchReviewSummary: vi.fn(),
@@ -48,8 +51,10 @@ const dbMocks = vi.hoisted(() => ({
   upsertReviewApiDegradationAlertResolution: vi.fn(),
   searchDynamicProducts: vi.fn(),
   setMatchingFeedbackActive: vi.fn(),
+  setBrandAliasActive: vi.fn(),
   setFavoriteActiveForUser: vi.fn(),
   upsertMatchingFeedback: vi.fn(),
+  upsertBrandAlias: vi.fn(),
   upsertFavoriteForUser: vi.fn(),
 }));
 
@@ -128,6 +133,30 @@ describe("matchRules router", () => {
 
     await expect(caller.matchRules.setActive({ id: 7, active: false })).resolves.toEqual({ success: true });
     expect(dbMocks.setMatchingFeedbackActive).toHaveBeenCalledWith(7, false);
+  });
+
+  it("exports only active brand aliases and records administrator-maintained aliases", async () => {
+    const aliases = [{ id: 4, alias: "COOLER MASTER", canonicalName: "酷碼", active: true }];
+    dbMocks.listActiveBrandAliases.mockResolvedValue([{ alias: "COOLER MASTER", canonicalName: "酷碼" }]);
+    dbMocks.listBrandAliasesForAdmin.mockResolvedValue(aliases);
+    dbMocks.upsertBrandAlias.mockResolvedValue(undefined);
+    dbMocks.setBrandAliasActive.mockResolvedValue(undefined);
+    const caller = appRouter.createCaller(createAdminContext());
+
+    await expect(caller.brandAliases.listForCrawler()).resolves.toEqual([{ alias: "COOLER MASTER", canonicalName: "酷碼" }]);
+    await expect(caller.brandAliases.listForAdmin()).resolves.toEqual(aliases);
+    await expect(caller.brandAliases.save({ alias: "Cooler Master", canonicalName: "酷碼" })).resolves.toEqual({ success: true });
+    await expect(caller.brandAliases.setActive({ id: 4, active: false })).resolves.toEqual({ success: true });
+    expect(dbMocks.upsertBrandAlias).toHaveBeenCalledWith({ alias: "Cooler Master", canonicalName: "酷碼", createdByOpenId: "owner-open-id" });
+    expect(dbMocks.setBrandAliasActive).toHaveBeenCalledWith(4, false);
+  });
+
+  it("returns latest-batch MPN full-score metrics only to administrators", async () => {
+    const metrics = { run: { id: 10, finishedAt: new Date("2026-09-03T00:00:00.000Z") }, total: 50, exactMpnTotal: 12, exactMpnRate: 0.24, samples: ["V3607VJ0031K210H"] };
+    dbMocks.getLatestMpnMatchMetrics.mockResolvedValue(metrics);
+    const caller = appRouter.createCaller(createAdminContext());
+    await expect(caller.comparison.mpnMatchMetrics()).resolves.toEqual(metrics);
+    expect(dbMocks.getLatestMpnMatchMetrics).toHaveBeenCalledOnce();
   });
 
   it("returns the latest dynamic comparison payload for public storefront queries", async () => {

@@ -79,6 +79,24 @@ def extract_brands(name):
     return found
 
 
+def register_brand_aliases(entries):
+    """Merge administrator-maintained aliases without allowing malformed crawler payloads to alter matching."""
+    if not isinstance(entries, list):
+        return 0
+    applied = 0
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        alias = str(entry.get("alias", "")).strip().upper()
+        canonical = str(entry.get("canonicalName", "")).strip()
+        if not alias or not canonical or len(alias) > 128 or len(canonical) > 128:
+            continue
+        BRAND_ALIASES[alias] = canonical
+        BRAND_ALIASES[canonical.upper()] = canonical
+        applied += 1
+    return applied
+
+
 # ════════════════════════════════════════════════════════════
 #  正規化 (步驟 2)
 # ════════════════════════════════════════════════════════════
@@ -1047,6 +1065,8 @@ def match_products_v2(sinya_products, coolpc_products, category_compat=None, neg
             })
             sinya_matched.add(si_orig)
             coolpc_matched.add(best_ci)
+            matched[-1]["exact_mpn"] = best_details.get("exactMpn", [])
+            matched[-1]["hard_filter_reasons"] = sorted({reason for _, reason, _ in vetoed_candidates})
         elif best_ci >= 0 and best_score >= REVIEW_THRESHOLD:
             # Borderline — put in review list
             cp = coolpc_products[best_ci]
@@ -1095,6 +1115,7 @@ def match_products_v2(sinya_products, coolpc_products, category_compat=None, neg
         
         best_score = -1
         best_ci = -1
+        best_details = {}
         for ci_pos in candidate_positions:
             ci_orig = coolpc_pos_to_orig[ci_pos]
             # 第二輪：允許配對已配對的 CoolPC 商品
@@ -1120,6 +1141,7 @@ def match_products_v2(sinya_products, coolpc_products, category_compat=None, neg
             if score > best_score:
                 best_score = score
                 best_ci = ci_orig
+                best_details = details
         
         if best_ci >= 0 and best_score >= MATCH_THRESHOLD:
             cp = coolpc_products[best_ci]
@@ -1143,6 +1165,8 @@ def match_products_v2(sinya_products, coolpc_products, category_compat=None, neg
                 "spec_diff": compute_spec_diff(sinya_name, cp["name"]),
             })
             sinya_matched.add(si_orig)
+            matched[-1]["exact_mpn"] = best_details.get("exactMpn", [])
+            matched[-1]["hard_filter_reasons"] = []
     
     # ── 步驟 7: 後處理 ──
     # 7a. 價差合理性

@@ -40,8 +40,9 @@ vi.mock("@/lib/trpc", () => {
     trpc: {
       useUtils: () => ({ comparison: { reviewQueue: { invalidate: noop }, reviewSummary: { invalidate: noop }, reviewNotificationSettings: { invalidate: noop }, reviewEscalationSettings: { invalidate: noop }, reviewHealthMonitorSettings: { invalidate: noop }, reviewDegradationAlertRecords: { invalidate: noop }, reviewDegradationAlertStats: { invalidate: noop } }, matchRules: { listForAdmin: { invalidate: noop } } }),
       comparison: {
-        reviewQueue: query({ run: { id: 1 }, total: 0, page: 1, pageSize: 20, totalPages: 0, items: [] }),
+        reviewQueue: query({ run: { id: 1 }, total: 1, page: 1, pageSize: 20, totalPages: 1, items: [{ id: 1, sourceKey: "source-1", fingerprint: "fingerprint-1", sinyaName: "ASUS RTX 4060", category: "顯示卡", sinyaPrice: 10000, score: 0.75, reasons: ["配對信心偏低"], targets: [], hardFilterReasons: ["R0品牌衝突：ASUS vs MSI"], exactMpnCodes: ["V3607VJ0031K210H"] }] }),
         reviewSummary: query({ total: 0, criticalTotal: 0, highTotal: 0, mediumTotal: 0 }),
+        mpnMatchMetrics: query({ run: { id: 1 }, total: 20, exactMpnTotal: 4, exactMpnRate: 0.2, samples: ["V3607VJ0031K210H"] }),
         reviewAssignees: query([]),
         reviewNotificationSettings: query({ mediumThreshold: 0, highThreshold: 1, criticalThreshold: 1 }),
         reviewEscalationSettings: query({ active: true, escalationRecipientUserId: null, escalateAfterMinutes: 60, reminderIntervalMinutes: 30 }),
@@ -97,6 +98,9 @@ describe("待審核工作台可靠性介面", () => {
     expect(markup).toContain("每週降級趨勢摘要");
     expect(markup).toContain("已讀提醒處置註記");
     expect(markup).toContain("待註記");
+    expect(markup).toContain("MPN 滿分命中率");
+    expect(markup).toContain("MPN 滿分：V3607VJ0031K210H");
+    expect(markup).toContain("已阻斷候選：R0品牌衝突：ASUS vs MSI");
     expect(markup).toContain("載入週品質報表");
   });
 

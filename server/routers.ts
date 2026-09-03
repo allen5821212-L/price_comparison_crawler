@@ -63,6 +63,7 @@ import {
   getFavoriteForUser,
   getLatestCrawlerStatus,
   getLatestDynamicComparison,
+  getLatestMpnMatchMetrics,
   getCoolpcCoverageSummary,
   getSinyaCoverageSummary,
   exportSinyaUnlistedCoolpcProducts,
@@ -77,13 +78,17 @@ import {
   listPriceNotificationsForUser,
   searchDynamicProducts,
   listActiveMatchingFeedback,
+  listActiveBrandAliases,
+  listBrandAliasesForAdmin,
   listMatchingFeedbackForAdmin,
   markCrawlerEventsRead,
   upsertCrawlerIssueReport,
   markPriceNotificationsReadForUser,
   setMatchingFeedbackActive,
+  setBrandAliasActive,
   setFavoriteActiveForUser,
   upsertMatchingFeedback,
+  upsertBrandAlias,
   upsertFavoriteForUser,
   saveCoolpcCategoryRecrawlReminder,
   saveCoolpcCategoryRecrawlPreset,
@@ -147,6 +152,22 @@ export const appRouter = router({
       return { success: true, sourceAlias, targetAlias } as const;
     }),
   }),
+  brandAliases: router({
+    listForCrawler: publicProcedure.query(async () => listActiveBrandAliases()),
+    listForAdmin: adminProcedure.query(async () => listBrandAliasesForAdmin()),
+    save: adminProcedure.input(z.object({
+      alias: z.string().trim().min(1).max(128),
+      canonicalName: z.string().trim().min(1).max(128),
+    })).mutation(async ({ ctx, input }) => {
+      await upsertBrandAlias({ ...input, createdByOpenId: ctx.user.openId });
+      return { success: true } as const;
+    }),
+    setActive: adminProcedure.input(z.object({ id: z.number().int().positive(), active: z.boolean() }))
+      .mutation(async ({ input }) => {
+        await setBrandAliasActive(input.id, input.active);
+        return { success: true } as const;
+      }),
+  }),
   comparison: router({
     /** Small availability payload for the public listing-rate dashboard. */
     availability: publicProcedure.query(async () => getLatestListingAvailability()),
@@ -179,6 +200,7 @@ export const appRouter = router({
     }).optional()).query(async ({ input }) => getLatestMatchReviewQueue(input ?? { page: 1, pageSize: 25 })),
     /** Compact pollable count for navigation badges and high-risk alerts. */
     reviewSummary: adminProcedure.query(async () => getLatestMatchReviewSummary()),
+    mpnMatchMetrics: adminProcedure.query(async () => getLatestMpnMatchMetrics()),
     reviewAssignees: adminProcedure.query(async () => listReviewAssignees()),
     assignReview: adminProcedure.input(z.object({
       sourceKey: z.string().min(1).max(128),

@@ -58,6 +58,27 @@ export const matchingFeedback = mysqlTable(
 export type MatchingFeedback = typeof matchingFeedback.$inferSelect;
 export type InsertMatchingFeedback = typeof matchingFeedback.$inferInsert;
 
+/** 管理員可維護的跨通路品牌拼寫／中文名稱別名；僅啟用資料會匯出給爬蟲。 */
+export const brandAliases = mysqlTable(
+  "brand_aliases",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    alias: varchar("alias", { length: 128 }).notNull(),
+    canonicalName: varchar("canonical_name", { length: 128 }).notNull(),
+    active: boolean("active").default(true).notNull(),
+    createdByOpenId: varchar("created_by_open_id", { length: 64 }).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    uniqueAlias: uniqueIndex("brand_aliases_alias_unique").on(table.alias),
+    canonicalActiveIdx: index("brand_aliases_canonical_active_idx").on(table.canonicalName, table.active),
+  }),
+);
+
+export type BrandAlias = typeof brandAliases.$inferSelect;
+export type InsertBrandAlias = typeof brandAliases.$inferInsert;
+
 /** 管理員略過的可疑配對組合；候選品名改變時會產生新指紋並重新進入待審核佇列。 */
 export const matchReviewSkips = mysqlTable(
   "match_review_skips",
