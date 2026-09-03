@@ -7,7 +7,7 @@
 import re
 from difflib import SequenceMatcher
 from negative_features import negative_penalty
-from spec_normalizer import hard_spec_conflict, normalize_match_text, suffix_confidence_cap
+from spec_normalizer import extract_mpn_codes, hard_spec_conflict, normalize_match_text, suffix_confidence_cap
 
 # ════════════════════════════════════════════════════════════
 #  品牌對照表 (R1)
@@ -553,24 +553,16 @@ def extract_suffixes(name):
 def veto(name1, name2):
     """執行 7 條硬否決規則。返回 (vetoed: bool, reason: str)。"""
 
+    # 分層 Hard Filter 第 1 層：品牌衝突直接否決。這一層必須早於任何模糊字串計分。
+    brands1 = extract_brands(name1)
+    brands2 = extract_brands(name2)
+    if brands1 and brands2 and not (brands1 & brands2):
+        return True, f"R0品牌衝突: {brands1} vs {brands2}"
+
+    # 第 2 層：核心晶片、容量／瓦數、關鍵後綴與 DDR／PCIe 世代均為不可協商特徵。
     spec_conflict = hard_spec_conflict(name1, name2)
     if spec_conflict:
         return True, f"R0{spec_conflict}"
-    
-    # R1. 品牌衝突（RAM 例外：同規格不同品牌可配對）
-    brands1 = extract_brands(name1)
-    brands2 = extract_brands(name2)
-    if brands1 and brands2:
-        if not (brands1 & brands2):
-            # RAM 例外：如果雙方都有 DDR 速度+容量 token 且完全一致，允許跨品牌配對
-            tokens1 = extract_tokens(name1)
-            tokens2 = extract_tokens(name2)
-            ram_tokens1 = {t for t in tokens1 if t.startswith('D4') or t.startswith('D5')}
-            ram_tokens2 = {t for t in tokens2 if t.startswith('D4') or t.startswith('D5')}
-            if ram_tokens1 and ram_tokens2 and ram_tokens1 == ram_tokens2:
-                pass  # 允許跨品牌 RAM 配對
-            else:
-                return True, f"R1品牌衝突: {brands1} vs {brands2}"
     
     # R2. 數字型號衝突
     p1 = extract_numeric_patterns(name1)
@@ -754,6 +746,15 @@ def string_similarity(a, b):
 
 def compute_score(name1, name2):
     """計算配對分數。返回 (score, details)。"""
+    vetoed, veto_reason = veto(name1, name2)
+    if vetoed:
+        return 0.0, {"overlap": 0, "rHead": 0, "rFull": 0, "hardFilter": veto_reason}
+
+    # MPN／料號為跨通路最穩定的高信號；只有先通過所有關鍵規格阻斷時才給滿分。
+    mpn_overlap = extract_mpn_codes(name1) & extract_mpn_codes(name2)
+    if mpn_overlap:
+        return 1.0, {"overlap": 1.0, "rHead": 1.0, "rFull": 1.0, "exactMpn": sorted(mpn_overlap)}
+
     tokens1 = extract_tokens(name1)
     tokens2 = extract_tokens(name2)
     
