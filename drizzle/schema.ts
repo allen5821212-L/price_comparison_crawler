@@ -222,11 +222,16 @@ export const reviewApiDegradationAlerts = mysqlTable(
     /** First time this alert was rendered to its recipient inside the management workspace. */
     deliveredAt: timestamp("delivered_at"),
     readAt: timestamp("read_at"),
+    /** An administrator's documented handling after an in-app alert has been read. */
+    resolutionNote: text("resolution_note"),
+    resolvedByUserId: int("resolved_by_user_id"),
+    resolvedAt: timestamp("resolved_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   table => ({
     uniqueUserIncident: uniqueIndex("review_api_degradation_alerts_user_incident_unique").on(table.userId, table.incidentKey),
     userReadCreatedIdx: index("review_api_degradation_alerts_user_read_created_idx").on(table.userId, table.readAt, table.createdAt),
+    resolvedAtIdx: index("review_api_degradation_alerts_resolved_at_idx").on(table.resolvedAt),
   }),
 );
 

@@ -134,6 +134,13 @@
       "when": 1788409733882,
       "tag": "0018_material_micromax",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "5",
+      "when": 1788418788694,
+      "tag": "0019_chief_susan_delgado",
+      "breakpoints": true
     }
   ]
 }

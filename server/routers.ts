@@ -36,6 +36,8 @@ import {
   getReviewApiHealthMonitorSettings,
   getReviewApiDegradationAlertStats,
   getReviewApiDegradationDiagnostics,
+  getRecentReviewApiDegradationAlerts,
+  getReviewApiWeeklyDegradationTrend,
   getUnreadReviewApiDegradationAlerts,
   getMatchReviewEscalationSettings,
   getMatchReviewNotificationSettings,
@@ -50,6 +52,7 @@ import {
   markReviewApiDegradationAlertsDelivered,
   markMatchReviewMentionsRead,
   markReviewApiDegradationAlertsRead,
+  upsertReviewApiDegradationAlertResolution,
   resolveMatchReviewAssignment,
   saveMatchReviewSkip,
   upsertMatchReviewAssignment,
@@ -262,6 +265,7 @@ export const appRouter = router({
     reviewHealthHistory: adminProcedure.input(z.object({
       limit: z.number().int().min(1).max(100).default(30),
       status: z.enum(["healthy", "degraded"]).optional(),
+      checkId: z.enum(["review-queue", "review-activity", "weekly-quality"]).optional(),
       startAt: z.date().optional(),
       endAt: z.date().optional(),
     }).refine(input => !input.startAt || !input.endAt || input.startAt <= input.endAt, {
@@ -279,6 +283,7 @@ export const appRouter = router({
     reviewDegradationAlerts: adminProcedure.query(async ({ ctx }) => getUnreadReviewApiDegradationAlerts(ctx.user.id)),
     reviewDegradationAlertStats: adminProcedure.query(async () => getReviewApiDegradationAlertStats()),
     reviewDegradationDiagnostics: adminProcedure.input(z.object({
+      checkId: z.enum(["review-queue", "review-activity", "weekly-quality"]).optional(),
       startAt: z.date().optional(),
       endAt: z.date().optional(),
     }).refine(input => !input.startAt || !input.endAt || input.startAt <= input.endAt, {
@@ -290,6 +295,20 @@ export const appRouter = router({
         await markReviewApiDegradationAlertsDelivered(ctx.user.id, input.ids);
         return { success: true } as const;
       }),
+    reviewDegradationAlertRecords: adminProcedure.input(z.object({
+      limit: z.number().int().min(1).max(50).default(20),
+      checkId: z.enum(["review-queue", "review-activity", "weekly-quality"]).optional(),
+    }).optional()).query(async ({ input }) => getRecentReviewApiDegradationAlerts(input ?? {})),
+    saveReviewDegradationAlertResolution: adminProcedure.input(z.object({
+      alertId: z.number().int().positive(),
+      note: z.string().trim().min(1).max(2_000),
+    })).mutation(async ({ ctx, input }) => {
+      await upsertReviewApiDegradationAlertResolution({ ...input, resolvedByUserId: ctx.user.id });
+      return { success: true } as const;
+    }),
+    reviewWeeklyDegradationTrend: adminProcedure.input(z.object({
+      checkId: z.enum(["review-queue", "review-activity", "weekly-quality"]).optional(),
+    }).optional()).query(async ({ input }) => getReviewApiWeeklyDegradationTrend(input ?? {})),
     markReviewDegradationAlertsRead: adminProcedure.input(z.object({ ids: z.array(z.number().int().positive()).max(20) }))
       .mutation(async ({ ctx, input }) => {
         await markReviewApiDegradationAlertsRead(ctx.user.id, input.ids);

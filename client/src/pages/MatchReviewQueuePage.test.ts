@@ -21,12 +21,13 @@ describe("待審核佇列確認操作", () => {
   });
 
   it("builds a bounded date and degraded-only health-history filter", () => {
-    expect(buildHealthHistoryInput("degraded", "2026-09-01", "2026-09-03")).toEqual({
-      limit: 100,
+    expect(buildHealthHistoryInput("degraded", "weekly-quality", "2026-09-01", "2026-09-03")).toEqual({
+      limit: 24,
       status: "degraded",
+      checkId: "weekly-quality",
       startAt: new Date("2026-09-01T00:00:00"),
       endAt: new Date("2026-09-03T23:59:59.999"),
     });
-    expect(buildHealthHistoryInput("all", "", "")).toMatchObject({ limit: 100, status: undefined, startAt: undefined, endAt: undefined });
+    expect(buildHealthHistoryInput("all", "all", "", "")).toMatchObject({ limit: 24, status: undefined, checkId: undefined, startAt: undefined, endAt: undefined });
   });
 });

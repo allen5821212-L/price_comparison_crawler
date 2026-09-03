@@ -21,6 +21,8 @@ const dbMocks = vi.hoisted(() => ({
   getReviewApiHealthMonitorSettings: vi.fn(),
   getReviewApiDegradationAlertStats: vi.fn(),
   getReviewApiDegradationDiagnostics: vi.fn(),
+  getRecentReviewApiDegradationAlerts: vi.fn(),
+  getReviewApiWeeklyDegradationTrend: vi.fn(),
   getUnreadReviewApiDegradationAlerts: vi.fn(),
   getMatchReviewEscalationSettings: vi.fn(),
   getMatchReviewNotificationSettings: vi.fn(),
@@ -42,6 +44,7 @@ const dbMocks = vi.hoisted(() => ({
   markMatchReviewMentionsRead: vi.fn(),
   markReviewApiDegradationAlertsDelivered: vi.fn(),
   markReviewApiDegradationAlertsRead: vi.fn(),
+  upsertReviewApiDegradationAlertResolution: vi.fn(),
   searchDynamicProducts: vi.fn(),
   setMatchingFeedbackActive: vi.fn(),
   setFavoriteActiveForUser: vi.fn(),
@@ -181,6 +184,21 @@ describe("matchRules router", () => {
     expect(dbMocks.getReviewApiDegradationDiagnostics).toHaveBeenCalledWith({ startAt, endAt });
     await expect(caller.comparison.markReviewDegradationAlertsDelivered({ ids: [8, 9] })).resolves.toEqual({ success: true });
     expect(dbMocks.markReviewApiDegradationAlertsDelivered).toHaveBeenCalledWith(1, [8, 9]);
+  });
+
+  it("filters alert records by check, saves read-alert handling notes, and returns a weekly degradation trend", async () => {
+    const caller = appRouter.createCaller(createAdminContext());
+    const records = [{ id: 9, checkId: "review-queue", readAt: new Date(), resolvedAt: null }];
+    const trend = { startDate: "2026-09-01", endDate: "2026-09-07", checkId: "review-queue", summary: { totalChecks: 21, degradedChecks: 2, persistentIncidents: 1 }, days: [] };
+    dbMocks.getRecentReviewApiDegradationAlerts.mockResolvedValue(records);
+    dbMocks.getReviewApiWeeklyDegradationTrend.mockResolvedValue(trend);
+
+    await expect(caller.comparison.reviewDegradationAlertRecords({ limit: 20, checkId: "review-queue" })).resolves.toEqual(records);
+    expect(dbMocks.getRecentReviewApiDegradationAlerts).toHaveBeenCalledWith({ limit: 20, checkId: "review-queue" });
+    await expect(caller.comparison.saveReviewDegradationAlertResolution({ alertId: 9, note: "已完成查詢重試並恢復" })).resolves.toEqual({ success: true });
+    expect(dbMocks.upsertReviewApiDegradationAlertResolution).toHaveBeenCalledWith({ alertId: 9, note: "已完成查詢重試並恢復", resolvedByUserId: 1 });
+    await expect(caller.comparison.reviewWeeklyDegradationTrend({ checkId: "review-queue" })).resolves.toEqual(trend);
+    expect(dbMocks.getReviewApiWeeklyDegradationTrend).toHaveBeenCalledWith({ checkId: "review-queue" });
   });
 
   it("persists assignment, personal notification thresholds, and the weekly quality report through administrator procedures", async () => {

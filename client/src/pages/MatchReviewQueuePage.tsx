@@ -76,11 +76,19 @@ export function shouldLoadQualityReport(role: string | undefined, qualityEnabled
 }
 
 type HealthStatusFilter = "all" | "healthy" | "degraded";
+type HealthCheckFilter = "all" | "review-queue" | "review-activity" | "weekly-quality";
 
-export function buildHealthHistoryInput(status: HealthStatusFilter, startDate: string, endDate: string) {
+const HEALTH_CHECK_LABELS: Record<Exclude<HealthCheckFilter, "all">, string> = {
+  "review-queue": "待審核佇列",
+  "review-activity": "評論與交接紀錄",
+  "weekly-quality": "週品質報表",
+};
+
+export function buildHealthHistoryInput(status: HealthStatusFilter, checkId: HealthCheckFilter, startDate: string, endDate: string) {
   return {
-    limit: 100,
+    limit: 24,
     status: status === "all" ? undefined : status,
+    checkId: checkId === "all" ? undefined : checkId,
     startAt: startDate ? new Date(`${startDate}T00:00:00`) : undefined,
     endAt: endDate ? new Date(`${endDate}T23:59:59.999`) : undefined,
   };
@@ -103,11 +111,13 @@ export default function MatchReviewQueuePage() {
   const [qualityEnabled, setQualityEnabled] = useState(false);
   const [degradationThresholdMinutes, setDegradationThresholdMinutes] = useState(15);
   const [healthStatusFilter, setHealthStatusFilter] = useState<HealthStatusFilter>("all");
+  const [healthCheckFilter, setHealthCheckFilter] = useState<HealthCheckFilter>("all");
   const [healthStartDate, setHealthStartDate] = useState("");
   const [healthEndDate, setHealthEndDate] = useState("");
+  const [resolutionNotes, setResolutionNotes] = useState<Record<number, string>>({});
   const healthHistoryInput = useMemo(
-    () => buildHealthHistoryInput(healthStatusFilter, healthStartDate, healthEndDate),
-    [healthStatusFilter, healthStartDate, healthEndDate],
+    () => buildHealthHistoryInput(healthStatusFilter, healthCheckFilter, healthStartDate, healthEndDate),
+    [healthStatusFilter, healthCheckFilter, healthStartDate, healthEndDate],
   );
   const queueQuery = trpc.comparison.reviewQueue.useQuery({
     page,
@@ -145,9 +155,17 @@ export default function MatchReviewQueuePage() {
     refetchOnWindowFocus: true,
   });
   const healthDiagnosticsQuery = trpc.comparison.reviewDegradationDiagnostics.useQuery({
+    checkId: healthHistoryInput.checkId,
     startAt: healthHistoryInput.startAt,
     endAt: healthHistoryInput.endAt,
   }, { enabled: false });
+  const degradationAlertRecordsQuery = trpc.comparison.reviewDegradationAlertRecords.useQuery({
+    limit: 20,
+    checkId: healthHistoryInput.checkId,
+  }, { enabled: user?.role === "admin", refetchOnWindowFocus: true });
+  const weeklyDegradationTrendQuery = trpc.comparison.reviewWeeklyDegradationTrend.useQuery({
+    checkId: healthHistoryInput.checkId,
+  }, { enabled: user?.role === "admin", refetchOnWindowFocus: true });
   const assignReview = trpc.comparison.assignReview.useMutation({
     onSuccess: () => {
       toast.success("已指派處理人員並設定審核期限。");
@@ -209,6 +227,14 @@ export default function MatchReviewQueuePage() {
       void utils.comparison.reviewHealthMonitorSettings.invalidate();
     },
     onError: error => toast.error(error.message || "無法更新健康監控設定。"),
+  });
+  const saveDegradationAlertResolution = trpc.comparison.saveReviewDegradationAlertResolution.useMutation({
+    onSuccess: () => {
+      toast.success("已保存降級提醒的人工處置註記。");
+      void utils.comparison.reviewDegradationAlertRecords.invalidate();
+      void utils.comparison.reviewDegradationAlertStats.invalidate();
+    },
+    onError: error => toast.error(error.message || "無法保存處置註記。"),
   });
 
   useEffect(() => setPage(1), [severity, platform, search]);
@@ -301,25 +327,27 @@ export default function MatchReviewQueuePage() {
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                   <div>
                     <p className="text-sm font-semibold">健康歷程篩選</p>
-                    <p className="mt-1 text-xs text-muted-foreground">日期範圍與狀態會立即套用至時間軸；重大降級診斷匯出沿用日期區間。</p>
+                    <p className="mt-1 text-xs text-muted-foreground">日期、檢查項目與狀態會立即套用至時間軸、趨勢與重大降級診斷匯出。</p>
                   </div>
                   <Button
                     size="sm"
                     variant="ghost"
                     onClick={() => {
                       setHealthStatusFilter("all");
+                      setHealthCheckFilter("all");
                       setHealthStartDate("");
                       setHealthEndDate("");
                     }}
-                    disabled={healthStatusFilter === "all" && !healthStartDate && !healthEndDate}
+                    disabled={healthStatusFilter === "all" && healthCheckFilter === "all" && !healthStartDate && !healthEndDate}
                   >
                     清除篩選
                   </Button>
                 </div>
-                <div className="mt-4 grid gap-3 sm:grid-cols-3" aria-label="健康歷程篩選條件">
+                <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="健康歷程篩選條件">
                   <label className="text-xs text-muted-foreground">開始日期<Input type="date" value={healthStartDate} onChange={event => setHealthStartDate(event.target.value)} className="mt-1 h-9" /></label>
                   <label className="text-xs text-muted-foreground">結束日期<Input type="date" value={healthEndDate} onChange={event => setHealthEndDate(event.target.value)} className="mt-1 h-9" /></label>
                   <label className="text-xs text-muted-foreground">狀態<select value={healthStatusFilter} onChange={event => setHealthStatusFilter(event.target.value as HealthStatusFilter)} className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm"><option value="all">全部狀態</option><option value="degraded">僅降級</option><option value="healthy">僅正常</option></select></label>
+                  <label className="text-xs text-muted-foreground">檢查項目<select value={healthCheckFilter} onChange={event => setHealthCheckFilter(event.target.value as HealthCheckFilter)} className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm"><option value="all">全部檢查項目</option>{Object.entries(HEALTH_CHECK_LABELS).map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
                 </div>
               </Card>
               <Card className="p-4 shadow-sm">
@@ -327,6 +355,20 @@ export default function MatchReviewQueuePage() {
                 {degradationAlertStatsQuery.isLoading && <div className="mt-4 grid grid-cols-3 gap-2"><Skeleton className="h-12" /><Skeleton className="h-12" /><Skeleton className="h-12" /></div>}
                 {degradationAlertStatsQuery.isError && <p className="mt-4 text-sm text-destructive">提醒統計暫時無法載入。</p>}
                 {degradationAlertStatsQuery.data && <><div className="mt-4 grid grid-cols-3 gap-2"><div className="rounded-md bg-muted/60 p-2"><p className="text-xs text-muted-foreground">已建立</p><p className="mt-1 font-semibold tabular-nums">{degradationAlertStatsQuery.data.total}</p></div><div className="rounded-md bg-emerald-500/5 p-2"><p className="text-xs text-muted-foreground">已送達</p><p className="mt-1 font-semibold tabular-nums">{degradationAlertStatsQuery.data.delivered}</p></div><div className="rounded-md bg-primary/5 p-2"><p className="text-xs text-muted-foreground">已讀</p><p className="mt-1 font-semibold tabular-nums">{degradationAlertStatsQuery.data.read}</p></div></div><p className="mt-2 text-xs text-muted-foreground">未讀 {degradationAlertStatsQuery.data.unread} 則 · 共 {degradationAlertStatsQuery.data.distinctIncidents} 個事件</p><Button className="mt-3 w-full" size="sm" variant="outline" onClick={() => void exportHealthDiagnostics()} disabled={healthDiagnosticsQuery.isFetching}>{healthDiagnosticsQuery.isFetching ? <RefreshCw className="mr-1.5 size-3.5 animate-spin" /> : <Download className="mr-1.5 size-3.5" />}匯出重大降級診斷 CSV</Button></>}
+              </Card>
+            </section>
+            <section className="grid gap-3 xl:grid-cols-[1.15fr_0.85fr]">
+              <Card className="p-5 shadow-sm">
+                <div className="flex items-center gap-2"><BarChart3 className="size-4 text-primary" /><div><p className="text-sm font-semibold">每週降級趨勢摘要</p><p className="text-xs text-muted-foreground">最近七日的降級檢查次數與持續降級事件數，會依指定檢查項目更新。</p></div></div>
+                {weeklyDegradationTrendQuery.isLoading && <Skeleton className="mt-4 h-52" />}
+                {weeklyDegradationTrendQuery.isError && <p className="mt-4 text-sm text-destructive">每週降級趨勢暫時無法載入。</p>}
+                {weeklyDegradationTrendQuery.data && <><div className="mt-4 grid grid-cols-3 gap-3"><div><p className="text-xs text-muted-foreground">檢查總次數</p><p className="mt-1 text-lg font-semibold tabular-nums">{weeklyDegradationTrendQuery.data.summary.totalChecks}</p></div><div><p className="text-xs text-muted-foreground">降級檢查</p><p className="mt-1 text-lg font-semibold tabular-nums text-destructive">{weeklyDegradationTrendQuery.data.summary.degradedChecks}</p></div><div><p className="text-xs text-muted-foreground">持續降級事件</p><p className="mt-1 text-lg font-semibold tabular-nums">{weeklyDegradationTrendQuery.data.summary.persistentIncidents}</p></div></div><div className="mt-4 h-48"><ResponsiveContainer width="100%" height="100%"><BarChart data={weeklyDegradationTrendQuery.data.days}><CartesianGrid strokeDasharray="3 3" vertical={false} className="stroke-border" /><XAxis dataKey="date" tickFormatter={value => String(value).slice(5)} fontSize={11} /><YAxis allowDecimals={false} fontSize={11} /><Tooltip labelFormatter={label => `日期：${label}`} /><Bar dataKey="degradedChecks" name="降級檢查" fill="hsl(var(--destructive))" radius={[4, 4, 0, 0]} /><Bar dataKey="persistentIncidents" name="持續降級事件" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} /></BarChart></ResponsiveContainer></div></>}
+              </Card>
+              <Card className="p-5 shadow-sm">
+                <div className="flex items-center gap-2"><CircleCheck className="size-4 text-primary" /><div><p className="text-sm font-semibold">已讀提醒處置註記</p><p className="text-xs text-muted-foreground">為已讀提醒記錄實際處理結果；註記不會關閉後續相同檢查的新降級事件。</p></div></div>
+                {degradationAlertRecordsQuery.isLoading && <div className="mt-4 space-y-2"><Skeleton className="h-16" /><Skeleton className="h-16" /></div>}
+                {degradationAlertRecordsQuery.isError && <p className="mt-4 text-sm text-destructive">提醒紀錄暫時無法載入。</p>}
+                {degradationAlertRecordsQuery.data && <div className="mt-4 max-h-60 space-y-2 overflow-y-auto pr-1">{degradationAlertRecordsQuery.data.length === 0 ? <p className="text-sm text-muted-foreground">目前沒有可註記的持續降級提醒。</p> : degradationAlertRecordsQuery.data.map(alert => <div key={alert.id} className="rounded-lg border border-border bg-muted/20 p-3"><div className="flex items-center justify-between gap-2"><p className="text-sm font-medium">{HEALTH_CHECK_LABELS[alert.checkId as Exclude<HealthCheckFilter, "all">] || alert.checkId}</p><Badge variant="outline" className={alert.resolvedAt ? "border-emerald-500/35 text-emerald-600" : alert.readAt ? "border-primary/35 text-primary" : "border-amber-500/35 text-amber-600"}>{alert.resolvedAt ? "已處置" : alert.readAt ? "待註記" : "尚未讀取"}</Badge></div><p className="mt-1 text-xs text-muted-foreground">{alert.message}</p>{alert.resolvedAt ? <p className="mt-2 text-xs text-emerald-700 dark:text-emerald-400">處置：{alert.resolutionNote}</p> : alert.readAt ? <div className="mt-3 flex gap-2"><Input value={resolutionNotes[alert.id] ?? ""} onChange={event => setResolutionNotes(current => ({ ...current, [alert.id]: event.target.value }))} placeholder="例如：已完成資料庫連線重試並觀察正常" className="h-8 text-xs" /><Button size="sm" onClick={() => saveDegradationAlertResolution.mutate({ alertId: alert.id, note: (resolutionNotes[alert.id] || "").trim() })} disabled={!resolutionNotes[alert.id]?.trim() || saveDegradationAlertResolution.isPending}>保存</Button></div> : <p className="mt-2 text-xs text-muted-foreground">待提醒顯示並標記已讀後即可加入處置註記。</p>}</div>)}</div>}
               </Card>
             </section>
             <Card className="p-5 shadow-sm"><div className="flex items-center gap-2"><Activity className="size-4 text-primary" /><div><p className="text-sm font-semibold">健康狀態歷程</p><p className="text-xs text-muted-foreground">最近 24 筆排程健康檢查；紅色標記代表異常時間軸事件。</p></div></div>{reviewHealthHistoryQuery.isLoading && <div className="mt-4 space-y-2" aria-label="健康歷程載入中">{Array.from({ length: 4 }, (_, index) => <Skeleton key={index} className="h-10" />)}</div>}{reviewHealthHistoryQuery.isError && <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3"><p className="text-sm text-destructive">健康歷程暫時無法載入</p><Button size="sm" variant="outline" onClick={() => reviewHealthHistoryQuery.refetch()}>再試一次</Button></div>}{reviewHealthHistoryQuery.data && <div className="mt-4 max-h-56 space-y-2 overflow-y-auto pr-1">{reviewHealthHistoryQuery.data.length === 0 ? <p className="text-sm text-muted-foreground">監控排程尚未產生健康歷程。</p> : reviewHealthHistoryQuery.data.map(event => <div key={event.id} className={`flex items-center justify-between gap-3 rounded-lg border p-3 ${event.status === "healthy" ? "border-emerald-500/20 bg-emerald-500/5" : "border-destructive/25 bg-destructive/5"}`}><div className="min-w-0"><p className="text-sm font-medium">{event.checkLabel}</p><p className="mt-1 truncate text-xs text-muted-foreground">{event.message || "檢查正常"}</p></div><div className="shrink-0 text-right"><Badge variant="outline" className={event.status === "healthy" ? "border-emerald-500/35 text-emerald-600" : "border-destructive/35 text-destructive"}>{event.status === "healthy" ? "正常" : "降級"}</Badge><p className="mt-1 text-xs text-muted-foreground">{formatDueAt(event.observedAt)} · {event.durationMs} ms</p></div></div>)}</div>}</Card>

@@ -106,13 +106,26 @@ export interface ReviewApiHealthMonitorSettingsInput {
 export interface ReviewApiHealthHistoryInput {
   limit?: number;
   status?: "healthy" | "degraded";
+  checkId?: string;
   startAt?: Date;
   endAt?: Date;
 }
 
 export interface ReviewApiDegradationDiagnosticsInput {
+  checkId?: string;
   startAt?: Date;
   endAt?: Date;
+}
+
+export interface ReviewApiDegradationAlertResolutionInput {
+  alertId: number;
+  note: string;
+  resolvedByUserId: number;
+}
+
+export interface ReviewApiDegradationAlertListInput {
+  limit?: number;
+  checkId?: string;
 }
 
 const weeklyQualityReportCache = new TtlCache<Awaited<ReturnType<typeof buildWeeklyMatchQualityReport>>>(60_000);
@@ -1105,6 +1118,7 @@ export async function getReviewApiHealthHistory(input: ReviewApiHealthHistoryInp
   if (!db) throw new Error("資料庫目前無法使用");
   const conditions = [
     input.status ? eq(reviewApiHealthEvents.status, input.status) : undefined,
+    input.checkId ? eq(reviewApiHealthEvents.checkId, input.checkId) : undefined,
     input.startAt ? gte(reviewApiHealthEvents.observedAt, input.startAt) : undefined,
     input.endAt ? lte(reviewApiHealthEvents.observedAt, input.endAt) : undefined,
   ].filter(Boolean) as NonNullable<ReturnType<typeof eq>>[];
@@ -1123,6 +1137,18 @@ export async function getUnreadReviewApiDegradationAlerts(userId: number) {
     .limit(20);
 }
 
+/** Recent alerts include read and unresolved entries so administrators can document handling after notification. */
+export async function getRecentReviewApiDegradationAlerts(input: ReviewApiDegradationAlertListInput = {}) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const conditions = [input.checkId ? eq(reviewApiDegradationAlerts.checkId, input.checkId) : undefined]
+    .filter(Boolean) as NonNullable<ReturnType<typeof eq>>[];
+  const query = db.select().from(reviewApiDegradationAlerts);
+  return (conditions.length > 0 ? query.where(and(...conditions)) : query)
+    .orderBy(desc(reviewApiDegradationAlerts.createdAt), desc(reviewApiDegradationAlerts.id))
+    .limit(Math.min(50, Math.max(1, input.limit ?? 20)));
+}
+
 /** Counts persisted station alerts. “Delivered” means the in-app warning was rendered, not OS-notification confirmation. */
 export async function getReviewApiDegradationAlertStats() {
   const db = await getDb();
@@ -1132,6 +1158,7 @@ export async function getReviewApiDegradationAlertStats() {
     delivered: sql<number>`coalesce(sum(case when ${reviewApiDegradationAlerts.deliveredAt} is not null then 1 else 0 end), 0)`,
     read: sql<number>`coalesce(sum(case when ${reviewApiDegradationAlerts.readAt} is not null then 1 else 0 end), 0)`,
     unread: sql<number>`coalesce(sum(case when ${reviewApiDegradationAlerts.readAt} is null then 1 else 0 end), 0)`,
+    resolved: sql<number>`coalesce(sum(case when ${reviewApiDegradationAlerts.resolvedAt} is not null then 1 else 0 end), 0)`,
     distinctIncidents: sql<number>`count(distinct ${reviewApiDegradationAlerts.incidentKey})`,
     latestAlertAt: sql<Date | null>`max(${reviewApiDegradationAlerts.createdAt})`,
   }).from(reviewApiDegradationAlerts);
@@ -1140,6 +1167,7 @@ export async function getReviewApiDegradationAlertStats() {
     delivered: Number(stats?.delivered ?? 0),
     read: Number(stats?.read ?? 0),
     unread: Number(stats?.unread ?? 0),
+    resolved: Number(stats?.resolved ?? 0),
     distinctIncidents: Number(stats?.distinctIncidents ?? 0),
     latestAlertAt: stats?.latestAlertAt ?? null,
   };
@@ -1150,6 +1178,7 @@ export async function getReviewApiDegradationDiagnostics(input: ReviewApiDegrada
   const db = await getDb();
   if (!db) throw new Error("資料庫目前無法使用");
   const alertConditions = [
+    input.checkId ? eq(reviewApiDegradationAlerts.checkId, input.checkId) : undefined,
     input.startAt ? gte(reviewApiDegradationAlerts.createdAt, input.startAt) : undefined,
     input.endAt ? lte(reviewApiDegradationAlerts.createdAt, input.endAt) : undefined,
   ].filter(Boolean) as NonNullable<ReturnType<typeof eq>>[];
@@ -1227,6 +1256,78 @@ export async function markReviewApiDegradationAlertsRead(userId: number, ids: nu
   if (!db || ids.length === 0) return;
   await db.update(reviewApiDegradationAlerts).set({ readAt: new Date() })
     .where(and(eq(reviewApiDegradationAlerts.userId, userId), inArray(reviewApiDegradationAlerts.id, ids)));
+}
+
+/** Stores a human handling note only for a reminder that was already surfaced and read. */
+export async function upsertReviewApiDegradationAlertResolution(input: ReviewApiDegradationAlertResolutionInput) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const [alert] = await db.select({ id: reviewApiDegradationAlerts.id, readAt: reviewApiDegradationAlerts.readAt })
+    .from(reviewApiDegradationAlerts).where(eq(reviewApiDegradationAlerts.id, input.alertId)).limit(1);
+  if (!alert) throw new Error("找不到指定的降級提醒");
+  if (!alert.readAt) throw new Error("提醒尚未標記為已讀，無法新增處置註記");
+  await db.update(reviewApiDegradationAlerts).set({
+    resolutionNote: input.note,
+    resolvedByUserId: input.resolvedByUserId,
+    resolvedAt: new Date(),
+  }).where(eq(reviewApiDegradationAlerts.id, input.alertId));
+}
+
+/** Builds a seven-day daily summary in Node to avoid database-specific date grouping behavior. */
+export async function getReviewApiWeeklyDegradationTrend(input: Pick<ReviewApiHealthHistoryInput, "checkId"> = {}) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const now = new Date();
+  const endDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59, 999));
+  const startDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 6));
+  const eventConditions = [
+    gte(reviewApiHealthEvents.observedAt, startDate),
+    lte(reviewApiHealthEvents.observedAt, endDate),
+    input.checkId ? eq(reviewApiHealthEvents.checkId, input.checkId) : undefined,
+  ].filter(Boolean) as NonNullable<ReturnType<typeof eq>>[];
+  const alertConditions = [
+    gte(reviewApiDegradationAlerts.createdAt, startDate),
+    lte(reviewApiDegradationAlerts.createdAt, endDate),
+    input.checkId ? eq(reviewApiDegradationAlerts.checkId, input.checkId) : undefined,
+  ].filter(Boolean) as NonNullable<ReturnType<typeof eq>>[];
+  const [events, alerts] = await Promise.all([
+    db.select().from(reviewApiHealthEvents).where(and(...eventConditions)),
+    db.select({ incidentKey: reviewApiDegradationAlerts.incidentKey, createdAt: reviewApiDegradationAlerts.createdAt })
+      .from(reviewApiDegradationAlerts).where(and(...alertConditions)),
+  ]);
+  const days = Array.from({ length: 7 }, (_, offset) => {
+    const date = new Date(startDate);
+    date.setUTCDate(startDate.getUTCDate() + offset);
+    return { date: date.toISOString().slice(0, 10), totalChecks: 0, degradedChecks: 0, persistentIncidents: 0 };
+  });
+  const dayByDate = new Map(days.map(day => [day.date, day]));
+  for (const event of events) {
+    const day = dayByDate.get(event.observedAt.toISOString().slice(0, 10));
+    if (!day) continue;
+    day.totalChecks += 1;
+    if (event.status === "degraded") day.degradedChecks += 1;
+  }
+  const incidentDays = new Set<string>();
+  for (const alert of alerts) {
+    const date = alert.createdAt.toISOString().slice(0, 10);
+    const day = dayByDate.get(date);
+    const key = `${date}:${alert.incidentKey}`;
+    if (day && !incidentDays.has(key)) {
+      day.persistentIncidents += 1;
+      incidentDays.add(key);
+    }
+  }
+  return {
+    startDate: days[0].date,
+    endDate: days[days.length - 1].date,
+    checkId: input.checkId ?? null,
+    summary: {
+      totalChecks: days.reduce((total, day) => total + day.totalChecks, 0),
+      degradedChecks: days.reduce((total, day) => total + day.degradedChecks, 0),
+      persistentIncidents: days.reduce((total, day) => total + day.persistentIncidents, 0),
+    },
+    days,
+  };
 }
 
 /** Executes an uncached check, persists timeline events, and creates one admin alert per ongoing incident. */

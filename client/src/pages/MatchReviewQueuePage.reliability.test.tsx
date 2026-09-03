@@ -38,7 +38,7 @@ vi.mock("@/lib/trpc", () => {
   const mutate = { useMutation: () => ({ mutate: noop, isPending: false }) };
   return {
     trpc: {
-      useUtils: () => ({ comparison: { reviewQueue: { invalidate: noop }, reviewSummary: { invalidate: noop }, reviewNotificationSettings: { invalidate: noop }, reviewEscalationSettings: { invalidate: noop }, reviewHealthMonitorSettings: { invalidate: noop } }, matchRules: { listForAdmin: { invalidate: noop } } }),
+      useUtils: () => ({ comparison: { reviewQueue: { invalidate: noop }, reviewSummary: { invalidate: noop }, reviewNotificationSettings: { invalidate: noop }, reviewEscalationSettings: { invalidate: noop }, reviewHealthMonitorSettings: { invalidate: noop }, reviewDegradationAlertRecords: { invalidate: noop }, reviewDegradationAlertStats: { invalidate: noop } }, matchRules: { listForAdmin: { invalidate: noop } } }),
       comparison: {
         reviewQueue: query({ run: { id: 1 }, total: 0, page: 1, pageSize: 20, totalPages: 0, items: [] }),
         reviewSummary: query({ total: 0, criticalTotal: 0, highTotal: 0, mediumTotal: 0 }),
@@ -49,13 +49,16 @@ vi.mock("@/lib/trpc", () => {
         reviewHealth: status({ status: "healthy", checks: [{ id: "weekly-quality", label: "週品質報表", status: "healthy", durationMs: 12, message: null }] }),
         reviewHealthHistory: status([{ id: 1, checkLabel: "週品質報表", status: "degraded", message: "逾時", observedAt: new Date("2026-08-28T00:00:00.000Z"), durationMs: 5000 }]),
         reviewHealthMonitorSettings: query({ active: true, degradationThresholdMinutes: 15 }),
-        reviewDegradationAlertStats: query({ total: 3, delivered: 2, read: 1, unread: 2, distinctIncidents: 2, latestAlertAt: new Date("2026-08-28T00:00:00.000Z") }),
+        reviewDegradationAlertStats: query({ total: 3, delivered: 2, read: 1, unread: 2, resolved: 1, distinctIncidents: 2, latestAlertAt: new Date("2026-08-28T00:00:00.000Z") }),
         reviewDegradationDiagnostics: status({ generatedAt: new Date("2026-08-28T00:00:00.000Z"), filters: { startAt: null, endAt: null }, incidents: [], evidence: [] }),
+        reviewDegradationAlertRecords: query([{ id: 21, checkId: "weekly-quality", message: "資料庫逾時", readAt: new Date(), resolvedAt: null, resolutionNote: null }]),
+        reviewWeeklyDegradationTrend: query({ startDate: "2026-08-22", endDate: "2026-08-28", checkId: null, summary: { totalChecks: 21, degradedChecks: 2, persistentIncidents: 1 }, days: [] }),
         assignReview: mutate,
         resolveReview: mutate,
         updateReviewNotificationSettings: mutate,
         updateReviewEscalationSettings: mutate,
         updateReviewHealthMonitorSettings: mutate,
+        saveReviewDegradationAlertResolution: mutate,
         bulkReassignOverdueReviews: mutate,
         skipReview: mutate,
       },
@@ -86,9 +89,13 @@ describe("待審核工作台可靠性介面", () => {
     expect(markup).toContain("降級");
     expect(markup).toContain("健康歷程篩選");
     expect(markup).toContain("全部狀態");
+    expect(markup).toContain("全部檢查項目");
     expect(markup).toContain("持續降級提醒統計");
     expect(markup).toContain("已送達");
     expect(markup).toContain("匯出重大降級診斷 CSV");
+    expect(markup).toContain("每週降級趨勢摘要");
+    expect(markup).toContain("已讀提醒處置註記");
+    expect(markup).toContain("待註記");
     expect(markup).toContain("載入週品質報表");
   });
 
