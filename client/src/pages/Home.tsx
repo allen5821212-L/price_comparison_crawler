@@ -4,6 +4,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { useTheme } from "@/contexts/ThemeContext";
 import { trpc } from "@/lib/trpc";
 import { getCompletedRunIdToRefresh } from "@/lib/comparisonSync";
+import { formatCategoryListingMetricLabel } from "@/lib/listingMetric";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -62,11 +63,12 @@ function averageRate(row: CategoryAvailability): number {
   return (row.coolpc.listingRate + row.pchome.listingRate + row.momo.listingRate) / 3;
 }
 
-function RateBar({ rate, platform, compact = false }: { rate: number; platform: PlatformKey; compact?: boolean }) {
+function RateBar({ rate, platform, compact = false, caption }: { rate: number; platform: PlatformKey; compact?: boolean; caption?: string }) {
   const tone = platformTone[platform];
   return (
     <div className={compact ? "min-w-28" : "min-w-36"}>
       <div className="mb-1 flex items-center justify-between gap-2 text-xs tabular-nums">
+        {caption && <span className="text-[10px] font-medium text-muted-foreground">{caption}</span>}
         <span className="font-semibold text-foreground">{formatRate(rate)}</span>
       </div>
       <div
@@ -79,6 +81,31 @@ function RateBar({ rate, platform, compact = false }: { rate: number; platform: 
       >
         <div className={`h-full rounded-full ${tone.fill}`} style={{ width: `${Math.min(100, rate)}%` }} />
       </div>
+    </div>
+  );
+}
+
+function CategoryListingMetric({
+  platform,
+  platformLabel,
+  listedCount,
+  listingRate,
+}: {
+  platform: PlatformKey;
+  platformLabel: string;
+  listedCount: number;
+  listingRate: number;
+}) {
+  return (
+    <div
+      className="flex min-w-[15.5rem] items-center gap-3"
+      aria-label={formatCategoryListingMetricLabel(platformLabel, listedCount, listingRate)}
+    >
+      <div className="min-w-14 border-r border-border pr-3 text-right tabular-nums">
+        <p className="text-[10px] font-medium text-muted-foreground">已上架</p>
+        <p className="font-mono text-sm font-semibold">{formatCount(listedCount)}<span className="ml-0.5 text-[10px] font-medium text-muted-foreground">項</span></p>
+      </div>
+      <RateBar compact caption="上架率" platform={platform} rate={listingRate} />
     </div>
   );
 }
@@ -339,9 +366,9 @@ export default function Home() {
                         <TableRow key={row.category}>
                           <TableCell className="font-medium">{row.category}</TableCell>
                           <TableCell className="text-right font-mono tabular-nums">{formatCount(row.sourceCount)}</TableCell>
-                          <TableCell><div className="flex items-center gap-3"><span className="w-12 text-right font-mono text-sm tabular-nums">{formatCount(row.coolpc.listedCount)}</span><RateBar compact platform="coolpc" rate={row.coolpc.listingRate} /></div></TableCell>
-                          <TableCell><div className="flex items-center gap-3"><span className="w-12 text-right font-mono text-sm tabular-nums">{formatCount(row.pchome.listedCount)}</span><RateBar compact platform="pchome" rate={row.pchome.listingRate} /></div></TableCell>
-                          <TableCell><div className="flex items-center gap-3"><span className="w-12 text-right font-mono text-sm tabular-nums">{formatCount(row.momo.listedCount)}</span><RateBar compact platform="momo" rate={row.momo.listingRate} /></div></TableCell>
+                          <TableCell><CategoryListingMetric platform="coolpc" platformLabel="原價屋" listedCount={row.coolpc.listedCount} listingRate={row.coolpc.listingRate} /></TableCell>
+                          <TableCell><CategoryListingMetric platform="pchome" platformLabel="PChome 24h" listedCount={row.pchome.listedCount} listingRate={row.pchome.listingRate} /></TableCell>
+                          <TableCell><CategoryListingMetric platform="momo" platformLabel="momo 購物網" listedCount={row.momo.listedCount} listingRate={row.momo.listingRate} /></TableCell>
                         </TableRow>
                       ))}
                       {!loading && categories.length === 0 && <TableRow><TableCell colSpan={5} className="py-12 text-center text-muted-foreground">找不到符合的分類。</TableCell></TableRow>}
