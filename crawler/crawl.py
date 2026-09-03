@@ -82,6 +82,21 @@ def fetch_confirmed_matching_rules():
     return []
 
 
+def fetch_matching_policies():
+    """Load positive mappings and learned negative signals from one crawler-safe endpoint request."""
+    try:
+        raw = fetch_url(MATCHING_RULES_URL, retries=1)
+        payload = json.loads(raw) if raw else {}
+        rules = payload.get("rules", [])
+        negative_features = payload.get("negativeFeatures", [])
+        if isinstance(rules, list) and isinstance(negative_features, list):
+            print(f"  已載入人工確認規則: {len(rules)} 組；高頻拒絕特徵: {len(negative_features)} 組")
+            return rules, negative_features
+    except (json.JSONDecodeError, TypeError, ValueError) as error:
+        print(f"  [WARN] 無法解析比對回饋規則: {error}")
+    return [], []
+
+
 def report_matching_rule_usage(rule_ids):
     """Report applied rule IDs to the sandbox-local API. Failure never blocks a crawler run."""
     if not rule_ids:
@@ -948,6 +963,34 @@ def main(max_cats=None, priority_category=None):
     pchome_products = crawl_pchome()
     momo_products = crawl_momo()
 
+    # Normalize price safety and determine whether the raw catalog state changed before
+    # doing the comparatively expensive matching and history write work.
+    from dynamic_store import prepare_products_for_matching, touch_catalog_checks
+    try:
+        prepared_products, is_unchanged = prepare_products_for_matching({
+            "sinya": sinya_products,
+            "coolpc": coolpc_products,
+            "pchome": pchome_products,
+            "momo": momo_products,
+        })
+        sinya_products = prepared_products["sinya"]
+        coolpc_products = prepared_products["coolpc"]
+        pchome_products = prepared_products["pchome"]
+        momo_products = prepared_products["momo"]
+        suspect_count = sum(
+            1 for products in prepared_products.values() for product in products if product.get("is_suspect_price")
+        )
+        if suspect_count:
+            print(f"  價格守門：已隔離 {suspect_count} 筆可疑價格，不會進入比對或最低價計算")
+        if is_unchanged:
+            touch_catalog_checks(prepared_products)
+            print("  增量指紋：所有商品狀態未變更，僅更新 last_checked_at，跳過配對與歷程寫入。")
+            return
+    except Exception as error:
+        # Do not silently skip a crawl when the optimization precheck is unavailable.
+        # The transactional persistence still remains the authoritative write guard.
+        print(f"  [WARN] 增量指紋預檢失敗，將執行完整更新：{error}")
+
     # Step 5: 多平台比對商品
     from multi_matcher import match_all_platforms
     # Build category compat set (same as match_products)
@@ -996,11 +1039,13 @@ def main(max_cats=None, priority_category=None):
     for a, b in CATEGORY_COMPAT:
         compat_set.add((a, b))
         compat_set.add((b, a))
-    confirmed_rules = fetch_confirmed_matching_rules()
+    confirmed_rules, negative_features = fetch_matching_policies()
+    from negative_features import build_negative_penalty_lookup
     matched, rejected, review, price_review = match_all_platforms(
         sinya_products, coolpc_products, pchome_products, momo_products,
         category_compat=compat_set,
         confirmed_rules=confirmed_rules,
+        negative_penalty_weights=build_negative_penalty_lookup(negative_features),
     )
     applied_rule_ids = sorted({
         rule_id

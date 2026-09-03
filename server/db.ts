@@ -21,6 +21,7 @@ import {
   matchReviewMentions,
   matchReviewNotificationSettings,
   matchReviewSkips,
+  matchNegativeFeatures,
   matchingFeedback,
   priceNotifications,
   productFavorites,
@@ -36,6 +37,7 @@ import { aggregateReviewQualityRows, summarizeReviewQuality } from "./reviewQual
 import { selectEscalationRulesForRecipient } from "./reviewEscalations";
 import { measureReviewHealthCheck, summarizeReviewHealth } from "./reviewHealth";
 import { createHealthIncidentKey, findPersistentDegradations } from "./reviewHealthMonitor";
+import { calculateNegativePenalty, extractMutuallyExclusiveFeatures, type NegativeFeaturePair } from "./negativeMatchFeatures";
 import { TtlCache } from "./ttlCache";
 
 export type FeedbackPlatform = "coolpc" | "pchome" | "momo";
@@ -56,6 +58,13 @@ export interface MatchReviewSkipInput {
   fingerprint: string;
   createdByOpenId: string;
   note?: string | null;
+}
+
+export interface NegativeMatchFeatureFeedbackInput {
+  platform: FeedbackPlatform;
+  sourceName: string;
+  targetName: string;
+  rejectedByUserId: number;
 }
 
 export interface MatchReviewAssignmentInput {
@@ -417,6 +426,49 @@ export async function recordMatchingFeedbackUsage(ids: number[]) {
     hitCount: sql`${matchingFeedback.hitCount} + 1`,
     lastHitAt: new Date(),
   }).where(inArray(matchingFeedback.id, uniqueIds));
+}
+
+/** Persist only actual contradictory attributes from a human-rejected candidate. */
+export async function recordNegativeMatchFeatureFeedback(input: NegativeMatchFeatureFeedbackInput): Promise<NegativeFeaturePair[]> {
+  const pairs = extractMutuallyExclusiveFeatures(input.sourceName, input.targetName);
+  if (pairs.length === 0) return [];
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+
+  for (const pair of pairs) {
+    await db.insert(matchNegativeFeatures).values({
+      platform: input.platform,
+      sourceFeature: pair.sourceFeature,
+      targetFeature: pair.targetFeature,
+      rejectionCount: 1,
+      lastRejectedByUserId: input.rejectedByUserId,
+      lastSourceName: input.sourceName,
+      lastTargetName: input.targetName,
+      lastRejectedAt: new Date(),
+    }).onDuplicateKeyUpdate({
+      set: {
+        rejectionCount: sql`${matchNegativeFeatures.rejectionCount} + 1`,
+        lastRejectedByUserId: input.rejectedByUserId,
+        lastSourceName: input.sourceName,
+        lastTargetName: input.targetName,
+        lastRejectedAt: new Date(),
+      },
+    });
+  }
+  return pairs;
+}
+
+/** Minimal crawler export; isolated rejections remain auditable but do not alter future scores. */
+export async function listLearnedNegativeMatchFeatures() {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({
+    platform: matchNegativeFeatures.platform,
+    sourceFeature: matchNegativeFeatures.sourceFeature,
+    targetFeature: matchNegativeFeatures.targetFeature,
+    rejectionCount: matchNegativeFeatures.rejectionCount,
+  }).from(matchNegativeFeatures).where(gte(matchNegativeFeatures.rejectionCount, 2));
+  return rows.map(row => ({ ...row, penalty: calculateNegativePenalty(row.rejectionCount) }));
 }
 
 type DynamicProduct = {

@@ -299,14 +299,18 @@ export const comparisonProducts = mysqlTable(
     subtitle: text("subtitle"),
     price: int("price").notNull(),
     originalPrice: int("original_price"),
+    isSuspectPrice: boolean("is_suspect_price").default(false).notNull(),
+    stateFingerprint: varchar("state_fingerprint", { length: 64 }),
     url: text("url"),
     image: text("image"),
     category: varchar("category", { length: 512 }),
     lastSeenRunId: int("last_seen_run_id").notNull(),
+    lastCheckedAt: timestamp("last_checked_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },
   table => ({
     uniquePlatformExternal: uniqueIndex("comparison_products_platform_external_unique").on(table.platform, table.externalId),
+    platformFingerprintIdx: index("comparison_products_platform_fingerprint_idx").on(table.platform, table.stateFingerprint),
     currentCatalogIdx: index("comparison_products_current_catalog_idx").on(table.lastSeenRunId, table.platform, table.category),
   }),
 );
@@ -360,12 +364,37 @@ export const comparisonPriceHistory = mysqlTable(
     pchomePrice: int("pchome_price"),
     momoPrice: int("momo_price"),
     priceDiff: int("price_diff").notNull(),
+    stateFingerprint: varchar("state_fingerprint", { length: 64 }),
+    isSuspectPrice: boolean("is_suspect_price").default(false).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },
   table => ({
     uniqueDailySnapshot: uniqueIndex("comparison_history_daily_source_unique").on(table.snapshotDate, table.sourceKey),
     productHistoryIdx: index("comparison_history_product_idx").on(table.sourceKey, table.snapshotDate),
+    productRecordedIdx: index("comparison_history_product_recorded_idx").on(table.sourceKey, table.createdAt),
+  }),
+);
+
+/** High-frequency human-rejected mismatch signals used to reduce repeat false positives. */
+export const matchNegativeFeatures = mysqlTable(
+  "match_negative_features",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    platform: mysqlEnum("platform", ["coolpc", "pchome", "momo"]).notNull(),
+    sourceFeature: varchar("source_feature", { length: 128 }).notNull(),
+    targetFeature: varchar("target_feature", { length: 128 }).notNull(),
+    rejectionCount: int("rejection_count").default(1).notNull(),
+    lastRejectedByUserId: int("last_rejected_by_user_id").notNull(),
+    lastSourceName: varchar("last_source_name", { length: 1024 }).notNull(),
+    lastTargetName: varchar("last_target_name", { length: 1024 }).notNull(),
+    lastRejectedAt: timestamp("last_rejected_at").defaultNow().notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    uniqueFeaturePair: uniqueIndex("match_negative_features_pair_unique").on(table.platform, table.sourceFeature, table.targetFeature),
+    platformFrequencyIdx: index("match_negative_features_platform_frequency_idx").on(table.platform, table.rejectionCount, table.lastRejectedAt),
   }),
 );
 

@@ -6,6 +6,8 @@
 
 import re
 from difflib import SequenceMatcher
+from negative_features import negative_penalty
+from spec_normalizer import hard_spec_conflict, normalize_match_text, suffix_confidence_cap
 
 # ════════════════════════════════════════════════════════════
 #  品牌對照表 (R1)
@@ -83,7 +85,7 @@ def extract_brands(name):
 
 def norm(s):
     """正規化商品名稱 — 統一寫法差異。"""
-    s = (s or "").upper()
+    s = normalize_match_text(s)
     # 型號寫法統一
     s = re.sub(r'(\d)\s+(TI|SUPER|XT|XTX)\b', r'\1\2', s)       # 5070 Ti → 5070TI
     s = re.sub(r'\bRYZEN\s*([3579])\b', r'R\1', s)               # Ryzen 7 → R7
@@ -550,6 +552,10 @@ def extract_suffixes(name):
 
 def veto(name1, name2):
     """執行 7 條硬否決規則。返回 (vetoed: bool, reason: str)。"""
+
+    spec_conflict = hard_spec_conflict(name1, name2)
+    if spec_conflict:
+        return True, f"R0{spec_conflict}"
     
     # R1. 品牌衝突（RAM 例外：同規格不同品牌可配對）
     brands1 = extract_brands(name1)
@@ -817,7 +823,14 @@ def compute_score(name1, name2):
             rHead = max(rHead, 0.80)
     
     score = 0.45 * overlap + 0.40 * rHead + 0.15 * rFull
-    return score, {"overlap": overlap, "rHead": rHead, "rFull": rFull}
+    suffix_cap, suffix_reason = suffix_confidence_cap(name1, name2)
+    if suffix_cap is not None:
+        score = min(score, suffix_cap)
+    details = {"overlap": overlap, "rHead": rHead, "rFull": rFull}
+    if suffix_cap is not None:
+        details["suffixConfidenceCap"] = suffix_cap
+        details["suffixReason"] = suffix_reason
+    return score, details
 
 
 # ════════════════════════════════════════════════════════════
@@ -895,7 +908,7 @@ def compute_spec_diff(name1, name2):
     return diffs
 
 
-def match_products_v2(sinya_products, coolpc_products, category_compat=None):
+def match_products_v2(sinya_products, coolpc_products, category_compat=None, negative_penalty_weights=None):
     """
     依照規格書 v2 的完整配對流程。
     
@@ -998,6 +1011,10 @@ def match_products_v2(sinya_products, coolpc_products, category_compat=None):
             
             # 步驟 4: 計分（使用裸機品名比對）
             score, details = compute_score(match_name, cp["name"])
+            penalty = negative_penalty(match_name, cp["name"], "coolpc", negative_penalty_weights)
+            if penalty:
+                score = max(0.0, score - penalty)
+                details["negativePenalty"] = penalty
             
             if score > best_score:
                 best_score = score
@@ -1095,6 +1112,10 @@ def match_products_v2(sinya_products, coolpc_products, category_compat=None):
                 continue
             
             score, details = compute_score(match_name, cp["name"])
+            penalty = negative_penalty(match_name, cp["name"], "coolpc", negative_penalty_weights)
+            if penalty:
+                score = max(0.0, score - penalty)
+                details["negativePenalty"] = penalty
             if score > best_score:
                 best_score = score
                 best_ci = ci_orig

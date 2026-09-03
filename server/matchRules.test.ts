@@ -44,6 +44,7 @@ const dbMocks = vi.hoisted(() => ({
   markMatchReviewMentionsRead: vi.fn(),
   markReviewApiDegradationAlertsDelivered: vi.fn(),
   markReviewApiDegradationAlertsRead: vi.fn(),
+  recordNegativeMatchFeatureFeedback: vi.fn(),
   upsertReviewApiDegradationAlertResolution: vi.fn(),
   searchDynamicProducts: vi.fn(),
   setMatchingFeedbackActive: vi.fn(),
@@ -148,6 +149,29 @@ describe("matchRules router", () => {
 
     await expect(caller.comparison.reviewQueue({ page: 1, pageSize: 25 })).resolves.toEqual(queue);
     expect(dbMocks.getLatestMatchReviewQueue).toHaveBeenCalledWith({ page: 1, pageSize: 25 });
+  });
+
+  it("records mutually-exclusive feature feedback for a rejected manual candidate", async () => {
+    dbMocks.recordNegativeMatchFeatureFeedback.mockResolvedValue([
+      { sourceFeature: "color:white", targetFeature: "color:black" },
+    ]);
+    const caller = appRouter.createCaller(createAdminContext());
+
+    await expect(caller.comparison.rejectReviewCandidate({
+      sourceKey: "sinya-123",
+      fingerprint: "a".repeat(64),
+      sourceName: "ASUS 白色主機板 DDR5",
+      targetName: "ASUS 黑色主機板 DDR4",
+      targetId: "coolpc-456",
+      platform: "coolpc",
+    })).resolves.toEqual({ success: true, learnedFeatureCount: 1 });
+
+    expect(dbMocks.recordNegativeMatchFeatureFeedback).toHaveBeenCalledWith({
+      platform: "coolpc",
+      sourceName: "ASUS 白色主機板 DDR5",
+      targetName: "ASUS 黑色主機板 DDR4",
+      rejectedByUserId: 1,
+    });
   });
 
   it("returns the compact high-risk review summary through the administrator procedure", async () => {

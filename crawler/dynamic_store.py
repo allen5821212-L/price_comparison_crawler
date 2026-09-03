@@ -10,6 +10,7 @@ from typing import Any, Iterable
 from urllib.parse import parse_qs, unquote, urlparse
 
 import pymysql
+from price_guard import assess_price, state_fingerprint
 
 
 PLATFORMS = ("sinya", "coolpc", "pchome", "momo")
@@ -83,8 +84,10 @@ def _product_rows(products: Iterable[dict[str, Any]], platform: str, run_id: int
             external_id,
             name,
             _text(product.get("subtitle")),
-            int(product.get("price") or 0),
+            int(product.get("persist_price", product.get("price", 0)) or 0),
             product.get("original_price"),
+            bool(product.get("is_suspect_price")),
+            _text(product.get("state_fingerprint"), 64),
             _text(product.get("url")),
             _text(product.get("image")),
             _text(product.get("category"), 512),
@@ -121,6 +124,14 @@ def _match_rows(matches: Iterable[dict[str, Any]], run_id: int):
         )
 
 
+def _match_state_fingerprint(match: dict[str, Any]) -> str:
+    return state_fingerprint({
+        "observed_price": "|".join(str(int(match.get(key) or 0)) for key in ("sinya_price", "coolpc_price", "pchome_price", "momo_price")),
+        "stock_status": "|".join(str(match.get(key) or "") for key in ("sinya_name", "coolpc_name", "pchome_name", "momo_name")),
+        "promo_info": match.get("cheaper", ""),
+    })
+
+
 def _history_rows(matches: Iterable[dict[str, Any]], snapshot_date: date):
     for match in matches:
         sinya_name = _text(match.get("sinya_name"), 1024)
@@ -138,7 +149,85 @@ def _history_rows(matches: Iterable[dict[str, Any]], snapshot_date: date):
             int(match.get("pchome_price") or 0) or None,
             int(match.get("momo_price") or 0) or None,
             int(match.get("price_diff") or 0),
+            _match_state_fingerprint(match),
+            False,
         )
+
+
+def prepare_products_for_matching(products_by_platform: dict[str, list[dict[str, Any]]]) -> tuple[dict[str, list[dict[str, Any]]], bool]:
+    """Annotate raw observations, preserve the last reliable price, and detect no-op crawls."""
+    connection = _database_connection()
+    try:
+        existing: dict[tuple[str, str], tuple[int, str | None]] = {}
+        with connection.cursor() as cursor:
+            for platform, products in products_by_platform.items():
+                external_ids = [str(product.get("id") or "") for product in products if product.get("id")]
+                for offset in range(0, len(external_ids), 500):
+                    chunk = external_ids[offset:offset + 500]
+                    if not chunk:
+                        continue
+                    placeholders = ",".join(["%s"] * len(chunk))
+                    cursor.execute(
+                        f"SELECT external_id, price, state_fingerprint FROM comparison_products WHERE platform=%s AND external_id IN ({placeholders})",
+                        (platform, *chunk),
+                    )
+                    for external_id, price, fingerprint in cursor.fetchall():
+                        existing[(platform, str(external_id))] = (int(price or 0), fingerprint)
+
+        prepared: dict[str, list[dict[str, Any]]] = {}
+        unchanged = True
+        expected_count = 0
+        for platform, products in products_by_platform.items():
+            current: list[dict[str, Any]] = []
+            for product in products:
+                external_id = str(product.get("id") or "")
+                if not external_id or not product.get("name"):
+                    continue
+                expected_count += 1
+                previous_price, previous_fingerprint = existing.get((platform, external_id), (0, None))
+                observation = dict(product)
+                observed_price = int(observation.get("price") or 0)
+                assessment = assess_price(observed_price, previous_price)
+                observation["observed_price"] = observed_price
+                observation["is_suspect_price"] = assessment.is_suspect
+                observation["suspect_price_reason"] = assessment.reason
+                observation["state_fingerprint"] = state_fingerprint(observation)
+                observation["persist_price"] = previous_price if assessment.is_suspect and previous_price > 0 else (0 if assessment.is_suspect else observed_price)
+                # Never feed suspect price to matching or minimum-price calculations.
+                if assessment.is_suspect:
+                    observation["price"] = 0
+                if not previous_fingerprint or previous_fingerprint != observation["state_fingerprint"]:
+                    unchanged = False
+                current.append(observation)
+            prepared[platform] = current
+        if len(existing) != expected_count:
+            unchanged = False
+        return prepared, unchanged
+    finally:
+        connection.close()
+
+
+def touch_catalog_checks(products_by_platform: dict[str, list[dict[str, Any]]]) -> None:
+    """Record a successful unchanged crawl without generating a run, match, or history write."""
+    connection = _database_connection()
+    try:
+        with connection.cursor() as cursor:
+            for platform, products in products_by_platform.items():
+                ids = [str(product.get("id") or "") for product in products if product.get("id")]
+                for offset in range(0, len(ids), 500):
+                    chunk = ids[offset:offset + 500]
+                    if chunk:
+                        placeholders = ",".join(["%s"] * len(chunk))
+                        cursor.execute(
+                            f"UPDATE comparison_products SET last_checked_at=NOW() WHERE platform=%s AND external_id IN ({placeholders})",
+                            (platform, *chunk),
+                        )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def _record_price_notifications(cursor: Any, matches: Iterable[dict[str, Any]], run_id: int) -> None:
@@ -212,12 +301,14 @@ def persist_crawl_result(
         with connection.cursor() as cursor:
             product_sql = """
                 INSERT INTO comparison_products
-                  (platform, external_id, name, subtitle, price, original_price, url, image, category, last_seen_run_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                  (platform, external_id, name, subtitle, price, original_price, is_suspect_price, state_fingerprint, url, image, category, last_seen_run_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
                   name=VALUES(name), subtitle=VALUES(subtitle), price=VALUES(price),
                   original_price=VALUES(original_price), url=VALUES(url), image=VALUES(image),
-                  category=VALUES(category), last_seen_run_id=VALUES(last_seen_run_id)
+                  category=VALUES(category), is_suspect_price=VALUES(is_suspect_price),
+                  state_fingerprint=VALUES(state_fingerprint), last_seen_run_id=VALUES(last_seen_run_id),
+                  last_checked_at=NOW()
             """
             for platform, products in (
                 ("sinya", sinya_products),
@@ -241,15 +332,20 @@ def persist_crawl_result(
                 cursor.executemany(match_sql, rows)
 
             snapshot_date = date.today()
-            cursor.execute("DELETE FROM comparison_price_history WHERE snapshot_date=%s", (snapshot_date,))
-            history_rows = list(_history_rows(matches, snapshot_date))
+            cursor.execute("SELECT source_key, state_fingerprint FROM comparison_price_history WHERE snapshot_date=%s", (snapshot_date,))
+            existing_history = {str(source_key): fingerprint for source_key, fingerprint in cursor.fetchall()}
+            history_rows = [row for row in _history_rows(matches, snapshot_date) if existing_history.get(str(row[1])) != row[11]]
             if history_rows:
                 cursor.executemany(
                     """
                     INSERT INTO comparison_price_history
                       (snapshot_date, source_key, sinya_name, coolpc_name, pchome_name, momo_name,
-                       sinya_price, coolpc_price, pchome_price, momo_price, price_diff)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                       sinya_price, coolpc_price, pchome_price, momo_price, price_diff, state_fingerprint, is_suspect_price)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                      sinya_name=VALUES(sinya_name), coolpc_name=VALUES(coolpc_name), pchome_name=VALUES(pchome_name), momo_name=VALUES(momo_name),
+                      sinya_price=VALUES(sinya_price), coolpc_price=VALUES(coolpc_price), pchome_price=VALUES(pchome_price), momo_price=VALUES(momo_price),
+                      price_diff=VALUES(price_diff), state_fingerprint=VALUES(state_fingerprint), is_suspect_price=VALUES(is_suspect_price)
                     """,
                     history_rows,
                 )

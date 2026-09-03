@@ -52,6 +52,7 @@ import {
   markReviewApiDegradationAlertsDelivered,
   markMatchReviewMentionsRead,
   markReviewApiDegradationAlertsRead,
+  recordNegativeMatchFeatureFeedback,
   upsertReviewApiDegradationAlertResolution,
   resolveMatchReviewAssignment,
   saveMatchReviewSkip,
@@ -199,6 +200,23 @@ export const appRouter = router({
         assignedByOpenId: ctx.user.openId,
       });
       return { success: true } as const;
+    }),
+    /** Reject one manual-search candidate and retain only its mutually-exclusive feature evidence. */
+    rejectReviewCandidate: adminProcedure.input(z.object({
+      sourceKey: z.string().min(1).max(128),
+      fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+      sourceName: z.string().min(1).max(1024),
+      targetName: z.string().min(1).max(1024),
+      targetId: z.string().max(255).optional(),
+      platform: z.enum(["coolpc", "pchome", "momo"]),
+    })).mutation(async ({ ctx, input }) => {
+      const features = await recordNegativeMatchFeatureFeedback({
+        platform: input.platform,
+        sourceName: input.sourceName,
+        targetName: input.targetName,
+        rejectedByUserId: ctx.user.id,
+      });
+      return { success: true, learnedFeatureCount: features.length } as const;
     }),
     reviewActivity: adminProcedure.input(z.object({
       sourceKey: z.string().min(1).max(128),

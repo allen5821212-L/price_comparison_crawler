@@ -18,10 +18,11 @@ from matcher import (
     compute_score, is_excluded, build_inverted_index,
     MATCH_THRESHOLD, compute_spec_diff,
 )
+from negative_features import negative_penalty
 
 
 def find_best_match(query_name, products, product_index, pos_to_orig,
-                    category_compat=None, query_category="", threshold=0.55):
+                    category_compat=None, query_category="", threshold=0.55, platform="", negative_penalty_weights=None):
     """
     在給定的商品列表中找到與 query_name 最相似的商品。
     使用與主配對引擎相同的計分和否決邏輯，但降低門檻以適應跨平台品名差異。
@@ -61,6 +62,7 @@ def find_best_match(query_name, products, product_index, pos_to_orig,
             continue
 
         score, details = compute_score(query_name, cp["name"])
+        score = max(0.0, score - negative_penalty(query_name, cp["name"], platform, negative_penalty_weights))
         if score > best_score:
             best_score = score
             best_pos = ci_pos
@@ -73,7 +75,7 @@ def find_best_match(query_name, products, product_index, pos_to_orig,
 
 
 def find_best_match_multi_query(query_names, products, product_index, pos_to_orig,
-                                 category_compat=None, query_category="", threshold=0.55):
+                                 category_compat=None, query_category="", threshold=0.55, platform="", negative_penalty_weights=None):
     """
     使用多個品名（欣亞品名 + 原價屋品名 + 配對名稱）搜尋最佳配對。
     取所有搜尋中分數最高者。
@@ -87,7 +89,7 @@ def find_best_match_multi_query(query_names, products, product_index, pos_to_ori
             continue
         prod, score = find_best_match(
             qname, products, product_index, pos_to_orig,
-            category_compat, query_category, threshold
+            category_compat, query_category, threshold, platform, negative_penalty_weights
         )
         if prod and score > best_score:
             best_prod = prod
@@ -239,7 +241,7 @@ def apply_confirmed_rules(matched, sinya_products, coolpc_products, pchome_produ
 
 
 def match_all_platforms(sinya_products, coolpc_products, pchome_products, momo_products,
-                        category_compat=None, confirmed_rules=None):
+                        category_compat=None, confirmed_rules=None, negative_penalty_weights=None):
     """
     四平台配對主函數。
     1. 先執行欣亞 vs 原價屋配對（使用現有引擎）
@@ -250,7 +252,7 @@ def match_all_platforms(sinya_products, coolpc_products, pchome_products, momo_p
 
     # Step 1: 欣亞 vs 原價屋配對
     matched, rejected, review, price_review = match_products_v2(
-        sinya_products, coolpc_products, category_compat=category_compat
+        sinya_products, coolpc_products, category_compat=category_compat, negative_penalty_weights=negative_penalty_weights
     )
 
     coolpc_rules_applied, coolpc_rules_skipped = apply_confirmed_rules(
@@ -286,7 +288,7 @@ def match_all_platforms(sinya_products, coolpc_products, pchome_products, momo_p
 
         # 搜尋 PCHOME — 使用多重品名
         pchome_prod, pchome_score = find_best_match_multi_query(
-            query_names, pchome_valid, pchome_index, pchome_pos_to_orig
+            query_names, pchome_valid, pchome_index, pchome_pos_to_orig, platform="pchome", negative_penalty_weights=negative_penalty_weights
         )
         if pchome_prod:
             m["pchome_name"] = pchome_prod["name"]
@@ -304,7 +306,7 @@ def match_all_platforms(sinya_products, coolpc_products, pchome_products, momo_p
 
         # 搜尋 momo — 使用多重品名
         momo_prod, momo_score = find_best_match_multi_query(
-            query_names, momo_valid, momo_index, momo_pos_to_orig
+            query_names, momo_valid, momo_index, momo_pos_to_orig, platform="momo", negative_penalty_weights=negative_penalty_weights
         )
         if momo_prod:
             m["momo_name"] = momo_prod["name"]

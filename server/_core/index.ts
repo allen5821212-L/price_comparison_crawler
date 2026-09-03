@@ -6,7 +6,7 @@ import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
 import { registerStorageProxy } from "./storageProxy";
 import { appRouter } from "../routers";
-import { listActiveMatchingFeedback, recordMatchingFeedbackUsage, runReviewApiHealthMonitorByTaskUid } from "../db";
+import { listActiveMatchingFeedback, listLearnedNegativeMatchFeatures, recordMatchingFeedbackUsage, runReviewApiHealthMonitorByTaskUid } from "../db";
 import { createContext } from "./context";
 import { sdk } from "./sdk";
 import { serveStatic, setupVite } from "./vite";
@@ -40,11 +40,11 @@ async function startServer() {
   registerOAuthRoutes(app);
   app.get("/api/matching-rules", async (_req, res) => {
     try {
-      const rules = await listActiveMatchingFeedback();
-      res.json({ rules });
+      const [rules, negativeFeatures] = await Promise.all([listActiveMatchingFeedback(), listLearnedNegativeMatchFeatures()]);
+      res.json({ rules, negativeFeatures });
     } catch (error) {
       console.error("[Matching rules] export failed", error);
-      res.status(500).json({ rules: [], error: "matching rules unavailable" });
+      res.status(500).json({ rules: [], negativeFeatures: [], error: "matching rules unavailable" });
     }
   });
   app.post("/api/matching-rules/usage", async (req, res) => {

@@ -115,6 +115,7 @@ export default function MatchReviewQueuePage() {
   const [healthStartDate, setHealthStartDate] = useState("");
   const [healthEndDate, setHealthEndDate] = useState("");
   const [resolutionNotes, setResolutionNotes] = useState<Record<number, string>>({});
+  const [rejectedCandidateIds, setRejectedCandidateIds] = useState<Set<string>>(() => new Set());
   const healthHistoryInput = useMemo(
     () => buildHealthHistoryInput(healthStatusFilter, healthCheckFilter, healthStartDate, healthEndDate),
     [healthStatusFilter, healthCheckFilter, healthStartDate, healthEndDate],
@@ -220,6 +221,15 @@ export default function MatchReviewQueuePage() {
       void utils.comparison.reviewSummary.invalidate();
     },
     onError: error => toast.error(error.message || "無法略過此待審核項目。"),
+  });
+  const rejectReviewCandidate = trpc.comparison.rejectReviewCandidate.useMutation({
+    onSuccess: result => {
+      toast.success(result.learnedFeatureCount > 0
+        ? `已記錄 ${result.learnedFeatureCount} 項互斥特徵；累積獨立拒絕後會降低相同錯配的分數。`
+        : "已排除該候選；未偵測到可安全學習的互斥規格。",
+      );
+    },
+    onError: error => toast.error(error.message || "無法保存拒絕回饋。"),
   });
   const updateHealthMonitorSettings = trpc.comparison.updateReviewHealthMonitorSettings.useMutation({
     onSuccess: () => {
@@ -429,7 +439,18 @@ export default function MatchReviewQueuePage() {
           if (!manualSource) return;
           saveMatch.mutate({ sinyaName: manualSource.name, platform: targetPlatform, targetId, targetName }, { onSuccess: () => resolveReview.mutate({ sourceKey: manualSource.sourceKey, fingerprint: manualSource.fingerprint }) });
         }}
-        onReject={() => toast.info("已略過該候選。請繼續搜尋並選擇正確的商品。")}
+        rejectedIds={rejectedCandidateIds}
+        onReject={(targetId, targetName, targetPlatform = "coolpc") => {
+          if (!manualSource) return;
+          rejectReviewCandidate.mutate({
+            sourceKey: manualSource.sourceKey,
+            fingerprint: manualSource.fingerprint,
+            sourceName: manualSource.name,
+            targetId,
+            targetName,
+            platform: targetPlatform,
+          }, { onSuccess: () => setRejectedCandidateIds(current => new Set(current).add(targetId)) });
+        }}
         onNoMatch={() => toast.info("未建立規則，避免把暫時找不到的商品誤判為永久無對應。")}
       />
     </DashboardLayout>

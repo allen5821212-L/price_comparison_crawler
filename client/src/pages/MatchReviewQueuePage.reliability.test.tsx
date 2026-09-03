@@ -60,6 +60,7 @@ vi.mock("@/lib/trpc", () => {
         updateReviewHealthMonitorSettings: mutate,
         saveReviewDegradationAlertResolution: mutate,
         bulkReassignOverdueReviews: mutate,
+        rejectReviewCandidate: mutate,
         skipReview: mutate,
       },
       matchRules: { confirm: mutate },

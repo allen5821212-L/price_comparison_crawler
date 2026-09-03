@@ -49,7 +49,7 @@ interface ManualMatchDialogProps {
     image: string;
   } | null;
   onConfirm: (their_id: string, their_name: string, platform?: Platform) => void;
-  onReject: (their_id: string, their_name: string) => void;
+  onReject: (their_id: string, their_name: string, platform?: Platform) => void;
   onNoMatch: () => void;
   onManualSave?: (their_name: string, their_price?: number) => void;
   rejectedIds?: Set<string>;
@@ -498,7 +498,7 @@ export function ManualMatchDialog({
                           variant="ghost"
                           className="text-destructive hover:bg-destructive/10 transition-opacity opacity-0 group-hover:opacity-100"
                           onClick={() => {
-                            onReject(id, p.name);
+                            onReject(id, p.name, activePlatform);
                           }}
                           title="標記為錯誤配對"
                         >
