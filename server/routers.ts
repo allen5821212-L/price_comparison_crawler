@@ -34,6 +34,8 @@ import {
   getReviewApiHealth,
   getReviewApiHealthHistory,
   getReviewApiHealthMonitorSettings,
+  getReviewApiDegradationAlertStats,
+  getReviewApiDegradationDiagnostics,
   getUnreadReviewApiDegradationAlerts,
   getMatchReviewEscalationSettings,
   getMatchReviewNotificationSettings,
@@ -45,6 +47,7 @@ import {
   listMatchReviewActivity,
   listUnreadMatchReviewMentions,
   listReviewAssignees,
+  markReviewApiDegradationAlertsDelivered,
   markMatchReviewMentionsRead,
   markReviewApiDegradationAlertsRead,
   resolveMatchReviewAssignment,
@@ -256,8 +259,15 @@ export const appRouter = router({
     weeklyQualityReport: adminProcedure.query(async () => getWeeklyMatchQualityReport()),
     /** On-demand health summary for the review dashboard's key read dependencies. */
     reviewHealth: adminProcedure.query(async () => getReviewApiHealth()),
-    reviewHealthHistory: adminProcedure.input(z.object({ limit: z.number().int().min(1).max(100).default(30) }).optional())
-      .query(async ({ input }) => getReviewApiHealthHistory(input?.limit ?? 30)),
+    reviewHealthHistory: adminProcedure.input(z.object({
+      limit: z.number().int().min(1).max(100).default(30),
+      status: z.enum(["healthy", "degraded"]).optional(),
+      startAt: z.date().optional(),
+      endAt: z.date().optional(),
+    }).refine(input => !input.startAt || !input.endAt || input.startAt <= input.endAt, {
+      message: "開始日期不可晚於結束日期",
+      path: ["endAt"],
+    }).optional()).query(async ({ input }) => getReviewApiHealthHistory(input ?? {})),
     reviewHealthMonitorSettings: adminProcedure.query(async () => getReviewApiHealthMonitorSettings()),
     updateReviewHealthMonitorSettings: adminProcedure.input(z.object({
       active: z.boolean(),
@@ -267,6 +277,19 @@ export const appRouter = router({
       return { success: true } as const;
     }),
     reviewDegradationAlerts: adminProcedure.query(async ({ ctx }) => getUnreadReviewApiDegradationAlerts(ctx.user.id)),
+    reviewDegradationAlertStats: adminProcedure.query(async () => getReviewApiDegradationAlertStats()),
+    reviewDegradationDiagnostics: adminProcedure.input(z.object({
+      startAt: z.date().optional(),
+      endAt: z.date().optional(),
+    }).refine(input => !input.startAt || !input.endAt || input.startAt <= input.endAt, {
+      message: "開始日期不可晚於結束日期",
+      path: ["endAt"],
+    }).optional()).query(async ({ input }) => getReviewApiDegradationDiagnostics(input ?? {})),
+    markReviewDegradationAlertsDelivered: adminProcedure.input(z.object({ ids: z.array(z.number().int().positive()).min(1).max(20) }))
+      .mutation(async ({ ctx, input }) => {
+        await markReviewApiDegradationAlertsDelivered(ctx.user.id, input.ids);
+        return { success: true } as const;
+      }),
     markReviewDegradationAlertsRead: adminProcedure.input(z.object({ ids: z.array(z.number().int().positive()).max(20) }))
       .mutation(async ({ ctx, input }) => {
         await markReviewApiDegradationAlertsRead(ctx.user.id, input.ids);

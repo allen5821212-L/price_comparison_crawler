@@ -1,0 +1,1 @@
+ALTER TABLE `review_api_degradation_alerts` ADD `delivered_at` timestamp;

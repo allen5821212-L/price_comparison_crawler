@@ -79,6 +79,7 @@ export function ReviewQueueAlertListener() {
   const markDegradationAlertsRead = trpc.comparison.markReviewDegradationAlertsRead.useMutation({
     onSuccess: () => void degradationAlerts.refetch(),
   });
+  const markDegradationAlertsDelivered = trpc.comparison.markReviewDegradationAlertsDelivered.useMutation();
 
   useEffect(() => {
     if (!summary.data || !settings.data) return;
@@ -120,8 +121,9 @@ export function ReviewQueueAlertListener() {
     if (!alert) return;
     toast.error(alert.title, { description: alert.message, action: { label: "查看健康狀態", onClick: () => { window.location.href = "/review-queue"; } } });
     if (typeof Notification !== "undefined" && Notification.permission === "granted") new Notification(alert.title, { body: alert.message });
+    markDegradationAlertsDelivered.mutate({ ids: unseen.map(alert => alert.id) });
     markDegradationAlertsRead.mutate({ ids: unseen.map(alert => alert.id) });
-  }, [degradationAlerts.data, markDegradationAlertsRead]);
+  }, [degradationAlerts.data, markDegradationAlertsDelivered, markDegradationAlertsRead]);
 
   useEffect(() => {
     const data = overdueEscalations.data;

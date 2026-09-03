@@ -49,6 +49,8 @@ vi.mock("@/lib/trpc", () => {
         reviewHealth: status({ status: "healthy", checks: [{ id: "weekly-quality", label: "週品質報表", status: "healthy", durationMs: 12, message: null }] }),
         reviewHealthHistory: status([{ id: 1, checkLabel: "週品質報表", status: "degraded", message: "逾時", observedAt: new Date("2026-08-28T00:00:00.000Z"), durationMs: 5000 }]),
         reviewHealthMonitorSettings: query({ active: true, degradationThresholdMinutes: 15 }),
+        reviewDegradationAlertStats: query({ total: 3, delivered: 2, read: 1, unread: 2, distinctIncidents: 2, latestAlertAt: new Date("2026-08-28T00:00:00.000Z") }),
+        reviewDegradationDiagnostics: status({ generatedAt: new Date("2026-08-28T00:00:00.000Z"), filters: { startAt: null, endAt: null }, incidents: [], evidence: [] }),
         assignReview: mutate,
         resolveReview: mutate,
         updateReviewNotificationSettings: mutate,
@@ -82,6 +84,11 @@ describe("待審核工作台可靠性介面", () => {
     expect(markup).toContain("正常");
     expect(markup).toContain("健康狀態歷程");
     expect(markup).toContain("降級");
+    expect(markup).toContain("健康歷程篩選");
+    expect(markup).toContain("全部狀態");
+    expect(markup).toContain("持續降級提醒統計");
+    expect(markup).toContain("已送達");
+    expect(markup).toContain("匯出重大降級診斷 CSV");
     expect(markup).toContain("載入週品質報表");
   });
 

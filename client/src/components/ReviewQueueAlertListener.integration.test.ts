@@ -8,6 +8,7 @@ const state = vi.hoisted(() => ({
   warning: vi.fn(),
   info: vi.fn(),
   error: vi.fn(),
+  markDegradationDelivered: vi.fn(),
   markDegradationRead: vi.fn(),
 }));
 
@@ -34,6 +35,7 @@ vi.mock("@/lib/trpc", () => ({
       unreadReviewMentions: { useQuery: () => ({ data: [] }) },
       markReviewMentionsRead: { useMutation: () => ({ mutate: vi.fn() }) },
       reviewDegradationAlerts: { useQuery: () => ({ data: state.degradationData }) },
+      markReviewDegradationAlertsDelivered: { useMutation: () => ({ mutate: state.markDegradationDelivered }) },
       markReviewDegradationAlertsRead: { useMutation: () => ({ mutate: state.markDegradationRead }) },
     },
   },
@@ -59,6 +61,7 @@ describe("ReviewQueueAlertListener tRPC 整合", () => {
     state.warning.mockReset();
     state.info.mockReset();
     state.error.mockReset();
+    state.markDegradationDelivered.mockReset();
     state.markDegradationRead.mockReset();
     vi.spyOn(Date, "now").mockReturnValue(3_600_000);
   });
@@ -89,11 +92,12 @@ describe("ReviewQueueAlertListener tRPC 整合", () => {
     expect(state.warning).not.toHaveBeenCalled();
   });
 
-  it("notifies once for unread persistent degradation incidents and marks them read", () => {
+  it("notifies once for unread persistent degradation incidents and records in-app delivery before marking read", () => {
     state.degradationData = [{ id: 21, title: "審核 API 持續降級：週品質報表", message: "已持續降級 15 分鐘" }];
 
     renderListener();
     expect(state.error).toHaveBeenCalledWith("審核 API 持續降級：週品質報表", expect.objectContaining({ description: "已持續降級 15 分鐘" }));
+    expect(state.markDegradationDelivered).toHaveBeenCalledWith({ ids: [21] });
     expect(state.markDegradationRead).toHaveBeenCalledWith({ ids: [21] });
 
     renderListener();

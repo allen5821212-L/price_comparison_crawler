@@ -17,6 +17,11 @@ const dbMocks = vi.hoisted(() => ({
   getLatestMatchReviewQueue: vi.fn(),
   getLatestMatchReviewSummary: vi.fn(),
   getReviewApiHealth: vi.fn(),
+  getReviewApiHealthHistory: vi.fn(),
+  getReviewApiHealthMonitorSettings: vi.fn(),
+  getReviewApiDegradationAlertStats: vi.fn(),
+  getReviewApiDegradationDiagnostics: vi.fn(),
+  getUnreadReviewApiDegradationAlerts: vi.fn(),
   getMatchReviewEscalationSettings: vi.fn(),
   getMatchReviewNotificationSettings: vi.fn(),
   getMyOverdueMatchReviewEscalations: vi.fn(),
@@ -32,8 +37,11 @@ const dbMocks = vi.hoisted(() => ({
   upsertMatchReviewAssignment: vi.fn(),
   upsertMatchReviewEscalationSettings: vi.fn(),
   upsertMatchReviewNotificationSettings: vi.fn(),
+  updateReviewApiHealthMonitorSettings: vi.fn(),
   markCrawlerEventsRead: vi.fn(),
   markMatchReviewMentionsRead: vi.fn(),
+  markReviewApiDegradationAlertsDelivered: vi.fn(),
+  markReviewApiDegradationAlertsRead: vi.fn(),
   searchDynamicProducts: vi.fn(),
   setMatchingFeedbackActive: vi.fn(),
   setFavoriteActiveForUser: vi.fn(),
@@ -153,6 +161,26 @@ describe("matchRules router", () => {
     const caller = appRouter.createCaller(createAdminContext());
 
     await expect(caller.comparison.reviewHealth()).resolves.toEqual(health);
+  });
+
+  it("filters health history, returns alert statistics, exports diagnostics, and records in-app delivery", async () => {
+    const caller = appRouter.createCaller(createAdminContext());
+    const startAt = new Date("2026-09-01T00:00:00.000Z");
+    const endAt = new Date("2026-09-02T23:59:59.999Z");
+    const history = [{ id: 8, checkId: "weekly-quality", status: "degraded" }];
+    const stats = { total: 3, delivered: 2, read: 1, unread: 2, distinctIncidents: 2, latestAlertAt: startAt };
+    const diagnostics = { generatedAt: startAt.toISOString(), filters: { startAt, endAt }, incidents: [], evidence: [] };
+    dbMocks.getReviewApiHealthHistory.mockResolvedValue(history);
+    dbMocks.getReviewApiDegradationAlertStats.mockResolvedValue(stats);
+    dbMocks.getReviewApiDegradationDiagnostics.mockResolvedValue(diagnostics);
+
+    await expect(caller.comparison.reviewHealthHistory({ limit: 50, status: "degraded", startAt, endAt })).resolves.toEqual(history);
+    expect(dbMocks.getReviewApiHealthHistory).toHaveBeenCalledWith({ limit: 50, status: "degraded", startAt, endAt });
+    await expect(caller.comparison.reviewDegradationAlertStats()).resolves.toEqual(stats);
+    await expect(caller.comparison.reviewDegradationDiagnostics({ startAt, endAt })).resolves.toEqual(diagnostics);
+    expect(dbMocks.getReviewApiDegradationDiagnostics).toHaveBeenCalledWith({ startAt, endAt });
+    await expect(caller.comparison.markReviewDegradationAlertsDelivered({ ids: [8, 9] })).resolves.toEqual({ success: true });
+    expect(dbMocks.markReviewApiDegradationAlertsDelivered).toHaveBeenCalledWith(1, [8, 9]);
   });
 
   it("persists assignment, personal notification thresholds, and the weekly quality report through administrator procedures", async () => {

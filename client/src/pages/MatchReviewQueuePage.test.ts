@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildQueueConfirmationInput, buildQueueSkipInput, shouldLoadQualityReport } from "./MatchReviewQueuePage";
+import { buildHealthHistoryInput, buildQueueConfirmationInput, buildQueueSkipInput, shouldLoadQualityReport } from "./MatchReviewQueuePage";
 
 describe("待審核佇列確認操作", () => {
   it("creates a platform-specific rule input when an existing candidate is adopted", () => {
@@ -18,5 +18,15 @@ describe("待審核佇列確認操作", () => {
     expect(shouldLoadQualityReport("admin", false)).toBe(false);
     expect(shouldLoadQualityReport("admin", true)).toBe(true);
     expect(shouldLoadQualityReport("user", true)).toBe(false);
+  });
+
+  it("builds a bounded date and degraded-only health-history filter", () => {
+    expect(buildHealthHistoryInput("degraded", "2026-09-01", "2026-09-03")).toEqual({
+      limit: 100,
+      status: "degraded",
+      startAt: new Date("2026-09-01T00:00:00"),
+      endAt: new Date("2026-09-03T23:59:59.999"),
+    });
+    expect(buildHealthHistoryInput("all", "", "")).toMatchObject({ limit: 100, status: undefined, startAt: undefined, endAt: undefined });
   });
 });

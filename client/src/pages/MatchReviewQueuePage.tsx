@@ -8,11 +8,12 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { downloadCsv, toCsv } from "@/lib/csvExport";
+import { buildReviewHealthDiagnosticCsvRows } from "@/lib/reviewHealthDiagnosticCsv";
 import { buildWeeklyQualityCsvRows } from "@/lib/reviewQualityCsv";
 import { trpc } from "@/lib/trpc";
 import { Activity, AlertTriangle, BarChart3, BellRing, ChevronLeft, ChevronRight, CircleCheck, ClipboardCheck, Clock3, Download, HeartPulse, RefreshCw, Search, ShieldAlert, SlidersHorizontal, UserRoundCheck, UsersRound } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 type ReviewPlatform = "coolpc" | "pchome" | "momo";
@@ -74,6 +75,17 @@ export function shouldLoadQualityReport(role: string | undefined, qualityEnabled
   return role === "admin" && qualityEnabled;
 }
 
+type HealthStatusFilter = "all" | "healthy" | "degraded";
+
+export function buildHealthHistoryInput(status: HealthStatusFilter, startDate: string, endDate: string) {
+  return {
+    limit: 100,
+    status: status === "all" ? undefined : status,
+    startAt: startDate ? new Date(`${startDate}T00:00:00`) : undefined,
+    endAt: endDate ? new Date(`${endDate}T23:59:59.999`) : undefined,
+  };
+}
+
 export default function MatchReviewQueuePage() {
   const { user } = useAuth();
   const utils = trpc.useUtils();
@@ -90,6 +102,13 @@ export default function MatchReviewQueuePage() {
   const [bulkHours, setBulkHours] = useState(24);
   const [qualityEnabled, setQualityEnabled] = useState(false);
   const [degradationThresholdMinutes, setDegradationThresholdMinutes] = useState(15);
+  const [healthStatusFilter, setHealthStatusFilter] = useState<HealthStatusFilter>("all");
+  const [healthStartDate, setHealthStartDate] = useState("");
+  const [healthEndDate, setHealthEndDate] = useState("");
+  const healthHistoryInput = useMemo(
+    () => buildHealthHistoryInput(healthStatusFilter, healthStartDate, healthEndDate),
+    [healthStatusFilter, healthStartDate, healthEndDate],
+  );
   const queueQuery = trpc.comparison.reviewQueue.useQuery({
     page,
     pageSize: 20,
@@ -114,12 +133,21 @@ export default function MatchReviewQueuePage() {
     refetchInterval: 5 * 60_000,
     refetchOnWindowFocus: true,
   });
-  const reviewHealthHistoryQuery = trpc.comparison.reviewHealthHistory.useQuery({ limit: 24 }, {
+  const reviewHealthHistoryQuery = trpc.comparison.reviewHealthHistory.useQuery(healthHistoryInput, {
     enabled: user?.role === "admin",
     refetchInterval: 5 * 60_000,
     refetchOnWindowFocus: true,
   });
   const healthMonitorSettingsQuery = trpc.comparison.reviewHealthMonitorSettings.useQuery(undefined, { enabled: user?.role === "admin" });
+  const degradationAlertStatsQuery = trpc.comparison.reviewDegradationAlertStats.useQuery(undefined, {
+    enabled: user?.role === "admin",
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
+  });
+  const healthDiagnosticsQuery = trpc.comparison.reviewDegradationDiagnostics.useQuery({
+    startAt: healthHistoryInput.startAt,
+    endAt: healthHistoryInput.endAt,
+  }, { enabled: false });
   const assignReview = trpc.comparison.assignReview.useMutation({
     onSuccess: () => {
       toast.success("已指派處理人員並設定審核期限。");
@@ -222,6 +250,17 @@ export default function MatchReviewQueuePage() {
     downloadCsv(`配對品質報表_${qualityReportQuery.data.startDate}_${qualityReportQuery.data.endDate}.csv`, toCsv(buildWeeklyQualityCsvRows(qualityReportQuery.data)));
   };
 
+  const exportHealthDiagnostics = async () => {
+    const result = await healthDiagnosticsQuery.refetch();
+    if (!result.data) {
+      toast.error(result.error?.message || "無法產生重大降級診斷紀錄。");
+      return;
+    }
+    const stamp = new Date().toISOString().slice(0, 10);
+    downloadCsv(`審核API重大降級診斷_${stamp}.csv`, toCsv(buildReviewHealthDiagnosticCsvRows(result.data)));
+    toast.success("已匯出重大降級診斷紀錄。");
+  };
+
   const bulkReassignOverdue = () => {
     if (!bulkAssigneeUserId) return;
     bulkReassign.mutate({
@@ -257,6 +296,39 @@ export default function MatchReviewQueuePage() {
               {reviewHealthQuery.data && <div className="mt-4 grid gap-2 md:grid-cols-3">{reviewHealthQuery.data.checks.map(check => <div key={check.id} className={`rounded-lg border p-3 ${check.status === "healthy" ? "border-emerald-500/25 bg-emerald-500/5" : "border-destructive/30 bg-destructive/5"}`}><div className="flex items-center justify-between gap-2"><span className="text-sm font-medium">{check.label}</span><Badge variant="outline" className={check.status === "healthy" ? "border-emerald-500/35 text-emerald-600" : "border-destructive/35 text-destructive"}>{check.status === "healthy" ? <><CircleCheck className="mr-1 size-3" />正常</> : "需注意"}</Badge></div><p className="mt-1 text-xs text-muted-foreground">{check.durationMs} ms{check.message ? ` · ${check.message}` : ""}</p></div>)}</div>}
               {healthMonitorSettingsQuery.data && <div className="mt-4 flex flex-col gap-3 rounded-lg border border-border bg-muted/20 p-3 sm:flex-row sm:items-end sm:justify-between"><div><p className="text-sm font-medium">持續降級提醒</p><p className="mt-1 text-xs text-muted-foreground">每 5 分鐘記錄檢查；同一 API 連續降級達門檻後建立管理員提醒。</p></div><div className="flex items-end gap-2"><label className="text-xs text-muted-foreground">門檻（分鐘）<Input type="number" min={5} max={1440} value={degradationThresholdMinutes} onChange={event => setDegradationThresholdMinutes(Math.max(5, Number(event.target.value)))} className="mt-1 h-9 w-28" /></label><Button size="sm" onClick={() => updateHealthMonitorSettings.mutate({ active: healthMonitorSettingsQuery.data.active, degradationThresholdMinutes })} disabled={updateHealthMonitorSettings.isPending}>儲存</Button></div></div>}
             </Card>
+            <section className="grid gap-3 xl:grid-cols-[1.15fr_0.85fr]">
+              <Card className="p-4 shadow-sm">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                  <div>
+                    <p className="text-sm font-semibold">健康歷程篩選</p>
+                    <p className="mt-1 text-xs text-muted-foreground">日期範圍與狀態會立即套用至時間軸；重大降級診斷匯出沿用日期區間。</p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setHealthStatusFilter("all");
+                      setHealthStartDate("");
+                      setHealthEndDate("");
+                    }}
+                    disabled={healthStatusFilter === "all" && !healthStartDate && !healthEndDate}
+                  >
+                    清除篩選
+                  </Button>
+                </div>
+                <div className="mt-4 grid gap-3 sm:grid-cols-3" aria-label="健康歷程篩選條件">
+                  <label className="text-xs text-muted-foreground">開始日期<Input type="date" value={healthStartDate} onChange={event => setHealthStartDate(event.target.value)} className="mt-1 h-9" /></label>
+                  <label className="text-xs text-muted-foreground">結束日期<Input type="date" value={healthEndDate} onChange={event => setHealthEndDate(event.target.value)} className="mt-1 h-9" /></label>
+                  <label className="text-xs text-muted-foreground">狀態<select value={healthStatusFilter} onChange={event => setHealthStatusFilter(event.target.value as HealthStatusFilter)} className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm"><option value="all">全部狀態</option><option value="degraded">僅降級</option><option value="healthy">僅正常</option></select></label>
+                </div>
+              </Card>
+              <Card className="p-4 shadow-sm">
+                <div className="flex items-start justify-between gap-3"><div className="flex items-center gap-2"><BellRing className="size-4 text-primary" /><div><p className="text-sm font-semibold">持續降級提醒統計</p><p className="mt-1 text-xs text-muted-foreground">送達代表系統已在管理員工作台顯示站內提醒；已讀不等同問題已處置。</p></div></div></div>
+                {degradationAlertStatsQuery.isLoading && <div className="mt-4 grid grid-cols-3 gap-2"><Skeleton className="h-12" /><Skeleton className="h-12" /><Skeleton className="h-12" /></div>}
+                {degradationAlertStatsQuery.isError && <p className="mt-4 text-sm text-destructive">提醒統計暫時無法載入。</p>}
+                {degradationAlertStatsQuery.data && <><div className="mt-4 grid grid-cols-3 gap-2"><div className="rounded-md bg-muted/60 p-2"><p className="text-xs text-muted-foreground">已建立</p><p className="mt-1 font-semibold tabular-nums">{degradationAlertStatsQuery.data.total}</p></div><div className="rounded-md bg-emerald-500/5 p-2"><p className="text-xs text-muted-foreground">已送達</p><p className="mt-1 font-semibold tabular-nums">{degradationAlertStatsQuery.data.delivered}</p></div><div className="rounded-md bg-primary/5 p-2"><p className="text-xs text-muted-foreground">已讀</p><p className="mt-1 font-semibold tabular-nums">{degradationAlertStatsQuery.data.read}</p></div></div><p className="mt-2 text-xs text-muted-foreground">未讀 {degradationAlertStatsQuery.data.unread} 則 · 共 {degradationAlertStatsQuery.data.distinctIncidents} 個事件</p><Button className="mt-3 w-full" size="sm" variant="outline" onClick={() => void exportHealthDiagnostics()} disabled={healthDiagnosticsQuery.isFetching}>{healthDiagnosticsQuery.isFetching ? <RefreshCw className="mr-1.5 size-3.5 animate-spin" /> : <Download className="mr-1.5 size-3.5" />}匯出重大降級診斷 CSV</Button></>}
+              </Card>
+            </section>
             <Card className="p-5 shadow-sm"><div className="flex items-center gap-2"><Activity className="size-4 text-primary" /><div><p className="text-sm font-semibold">健康狀態歷程</p><p className="text-xs text-muted-foreground">最近 24 筆排程健康檢查；紅色標記代表異常時間軸事件。</p></div></div>{reviewHealthHistoryQuery.isLoading && <div className="mt-4 space-y-2" aria-label="健康歷程載入中">{Array.from({ length: 4 }, (_, index) => <Skeleton key={index} className="h-10" />)}</div>}{reviewHealthHistoryQuery.isError && <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3"><p className="text-sm text-destructive">健康歷程暫時無法載入</p><Button size="sm" variant="outline" onClick={() => reviewHealthHistoryQuery.refetch()}>再試一次</Button></div>}{reviewHealthHistoryQuery.data && <div className="mt-4 max-h-56 space-y-2 overflow-y-auto pr-1">{reviewHealthHistoryQuery.data.length === 0 ? <p className="text-sm text-muted-foreground">監控排程尚未產生健康歷程。</p> : reviewHealthHistoryQuery.data.map(event => <div key={event.id} className={`flex items-center justify-between gap-3 rounded-lg border p-3 ${event.status === "healthy" ? "border-emerald-500/20 bg-emerald-500/5" : "border-destructive/25 bg-destructive/5"}`}><div className="min-w-0"><p className="text-sm font-medium">{event.checkLabel}</p><p className="mt-1 truncate text-xs text-muted-foreground">{event.message || "檢查正常"}</p></div><div className="shrink-0 text-right"><Badge variant="outline" className={event.status === "healthy" ? "border-emerald-500/35 text-emerald-600" : "border-destructive/35 text-destructive"}>{event.status === "healthy" ? "正常" : "降級"}</Badge><p className="mt-1 text-xs text-muted-foreground">{formatDueAt(event.observedAt)} · {event.durationMs} ms</p></div></div>)}</div>}</Card>
             {!qualityEnabled && <Card className="p-5 shadow-sm"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-sm font-semibold">最近七日配對品質</p><p className="mt-1 text-xs text-muted-foreground">品質圖表與風險排行會在需要時才查詢，避免影響待審核工作台的首屏速度。</p></div><Button onClick={() => setQualityEnabled(true)}><BarChart3 className="mr-2 size-4" />載入週品質報表</Button></div></Card>}
             {qualityReportQuery.isLoading && <section className="grid gap-3 lg:grid-cols-[1.2fr_0.8fr]" aria-label="週品質報表載入中"><Card className="p-5 shadow-sm"><Skeleton className="h-5 w-40" /><Skeleton className="mt-2 h-3 w-72" /><div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">{Array.from({ length: 4 }, (_, index) => <Skeleton key={index} className="h-14" />)}</div></Card><Card className="p-5 shadow-sm"><Skeleton className="h-5 w-28" /><div className="mt-4 grid grid-cols-3 gap-2">{Array.from({ length: 3 }, (_, index) => <Skeleton key={index} className="h-16" />)}</div></Card></section>}

@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, like, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, like, lt, lte, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   comparisonMatches,
@@ -101,6 +101,18 @@ export interface MatchReviewEscalationSettingsInput {
 export interface ReviewApiHealthMonitorSettingsInput {
   active: boolean;
   degradationThresholdMinutes: number;
+}
+
+export interface ReviewApiHealthHistoryInput {
+  limit?: number;
+  status?: "healthy" | "degraded";
+  startAt?: Date;
+  endAt?: Date;
+}
+
+export interface ReviewApiDegradationDiagnosticsInput {
+  startAt?: Date;
+  endAt?: Date;
 }
 
 const weeklyQualityReportCache = new TtlCache<Awaited<ReturnType<typeof buildWeeklyMatchQualityReport>>>(60_000);
@@ -1088,12 +1100,18 @@ export async function setReviewApiHealthMonitorTaskUid(taskUid: string) {
   else await db.insert(reviewApiHealthMonitorSettings).values({ scheduleCronTaskUid: taskUid });
 }
 
-export async function getReviewApiHealthHistory(limit = 30) {
+export async function getReviewApiHealthHistory(input: ReviewApiHealthHistoryInput = {}) {
   const db = await getDb();
   if (!db) throw new Error("資料庫目前無法使用");
-  return db.select().from(reviewApiHealthEvents)
+  const conditions = [
+    input.status ? eq(reviewApiHealthEvents.status, input.status) : undefined,
+    input.startAt ? gte(reviewApiHealthEvents.observedAt, input.startAt) : undefined,
+    input.endAt ? lte(reviewApiHealthEvents.observedAt, input.endAt) : undefined,
+  ].filter(Boolean) as NonNullable<ReturnType<typeof eq>>[];
+  const query = db.select().from(reviewApiHealthEvents);
+  return (conditions.length > 0 ? query.where(and(...conditions)) : query)
     .orderBy(desc(reviewApiHealthEvents.observedAt), desc(reviewApiHealthEvents.id))
-    .limit(Math.min(100, Math.max(1, limit)));
+    .limit(Math.min(100, Math.max(1, input.limit ?? 30)));
 }
 
 export async function getUnreadReviewApiDegradationAlerts(userId: number) {
@@ -1103,6 +1121,105 @@ export async function getUnreadReviewApiDegradationAlerts(userId: number) {
     .where(and(eq(reviewApiDegradationAlerts.userId, userId), isNull(reviewApiDegradationAlerts.readAt)))
     .orderBy(desc(reviewApiDegradationAlerts.createdAt))
     .limit(20);
+}
+
+/** Counts persisted station alerts. “Delivered” means the in-app warning was rendered, not OS-notification confirmation. */
+export async function getReviewApiDegradationAlertStats() {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const [stats] = await db.select({
+    total: sql<number>`count(*)`,
+    delivered: sql<number>`coalesce(sum(case when ${reviewApiDegradationAlerts.deliveredAt} is not null then 1 else 0 end), 0)`,
+    read: sql<number>`coalesce(sum(case when ${reviewApiDegradationAlerts.readAt} is not null then 1 else 0 end), 0)`,
+    unread: sql<number>`coalesce(sum(case when ${reviewApiDegradationAlerts.readAt} is null then 1 else 0 end), 0)`,
+    distinctIncidents: sql<number>`count(distinct ${reviewApiDegradationAlerts.incidentKey})`,
+    latestAlertAt: sql<Date | null>`max(${reviewApiDegradationAlerts.createdAt})`,
+  }).from(reviewApiDegradationAlerts);
+  return {
+    total: Number(stats?.total ?? 0),
+    delivered: Number(stats?.delivered ?? 0),
+    read: Number(stats?.read ?? 0),
+    unread: Number(stats?.unread ?? 0),
+    distinctIncidents: Number(stats?.distinctIncidents ?? 0),
+    latestAlertAt: stats?.latestAlertAt ?? null,
+  };
+}
+
+/** Produces grouped, export-ready evidence for only persistent (alert-producing) degradation incidents. */
+export async function getReviewApiDegradationDiagnostics(input: ReviewApiDegradationDiagnosticsInput = {}) {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const alertConditions = [
+    input.startAt ? gte(reviewApiDegradationAlerts.createdAt, input.startAt) : undefined,
+    input.endAt ? lte(reviewApiDegradationAlerts.createdAt, input.endAt) : undefined,
+  ].filter(Boolean) as NonNullable<ReturnType<typeof eq>>[];
+  const alertQuery = db.select({
+    id: reviewApiDegradationAlerts.id,
+    checkId: reviewApiDegradationAlerts.checkId,
+    incidentKey: reviewApiDegradationAlerts.incidentKey,
+    title: reviewApiDegradationAlerts.title,
+    message: reviewApiDegradationAlerts.message,
+    deliveredAt: reviewApiDegradationAlerts.deliveredAt,
+    readAt: reviewApiDegradationAlerts.readAt,
+    createdAt: reviewApiDegradationAlerts.createdAt,
+    recipientName: users.name,
+    recipientEmail: users.email,
+  }).from(reviewApiDegradationAlerts).leftJoin(users, eq(reviewApiDegradationAlerts.userId, users.id));
+  const alerts = await (alertConditions.length > 0 ? alertQuery.where(and(...alertConditions)) : alertQuery)
+    .orderBy(desc(reviewApiDegradationAlerts.createdAt), desc(reviewApiDegradationAlerts.id));
+  const incidents = new Map<string, {
+    incidentKey: string;
+    checkId: string;
+    title: string;
+    message: string;
+    createdAt: Date;
+    recipientCount: number;
+    deliveredCount: number;
+    readCount: number;
+    recipients: string[];
+  }>();
+  for (const alert of alerts) {
+    const incident = incidents.get(alert.incidentKey) ?? {
+      incidentKey: alert.incidentKey,
+      checkId: alert.checkId,
+      title: alert.title,
+      message: alert.message,
+      createdAt: alert.createdAt,
+      recipientCount: 0,
+      deliveredCount: 0,
+      readCount: 0,
+      recipients: [],
+    };
+    incident.recipientCount += 1;
+    incident.deliveredCount += alert.deliveredAt ? 1 : 0;
+    incident.readCount += alert.readAt ? 1 : 0;
+    incident.recipients.push(alert.recipientName || alert.recipientEmail || "未命名管理員");
+    incidents.set(alert.incidentKey, incident);
+  }
+  const checkIds = Array.from(new Set(alerts.map(alert => alert.checkId)));
+  const evidenceConditions = [
+    checkIds.length > 0 ? inArray(reviewApiHealthEvents.checkId, checkIds) : undefined,
+    eq(reviewApiHealthEvents.status, "degraded"),
+    input.startAt ? gte(reviewApiHealthEvents.observedAt, input.startAt) : undefined,
+    input.endAt ? lte(reviewApiHealthEvents.observedAt, input.endAt) : undefined,
+  ].filter(Boolean) as NonNullable<ReturnType<typeof eq>>[];
+  const evidence = checkIds.length === 0 ? [] : await db.select().from(reviewApiHealthEvents)
+    .where(and(...evidenceConditions))
+    .orderBy(desc(reviewApiHealthEvents.observedAt), desc(reviewApiHealthEvents.id))
+    .limit(500);
+  return {
+    generatedAt: new Date().toISOString(),
+    filters: { startAt: input.startAt ?? null, endAt: input.endAt ?? null },
+    incidents: Array.from(incidents.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()),
+    evidence,
+  };
+}
+
+export async function markReviewApiDegradationAlertsDelivered(userId: number, ids: number[]) {
+  const db = await getDb();
+  if (!db || ids.length === 0) return;
+  await db.update(reviewApiDegradationAlerts).set({ deliveredAt: new Date() })
+    .where(and(eq(reviewApiDegradationAlerts.userId, userId), inArray(reviewApiDegradationAlerts.id, ids), isNull(reviewApiDegradationAlerts.deliveredAt)));
 }
 
 export async function markReviewApiDegradationAlertsRead(userId: number, ids: number[]) {

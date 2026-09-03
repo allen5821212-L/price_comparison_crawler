@@ -219,6 +219,8 @@ export const reviewApiDegradationAlerts = mysqlTable(
     incidentKey: varchar("incident_key", { length: 256 }).notNull(),
     title: varchar("title", { length: 256 }).notNull(),
     message: text("message").notNull(),
+    /** First time this alert was rendered to its recipient inside the management workspace. */
+    deliveredAt: timestamp("delivered_at"),
     readAt: timestamp("read_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
