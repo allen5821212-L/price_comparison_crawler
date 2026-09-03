@@ -42,19 +42,36 @@ const DEFAULT_WIDTH = 280;
 const MIN_WIDTH = 200;
 const MAX_WIDTH = 480;
 
+type SidebarStorage = Pick<Storage, "getItem" | "setItem">;
+
+export function readSidebarWidth(storage?: SidebarStorage): number {
+  try {
+    const saved = (storage ?? window.localStorage).getItem(SIDEBAR_WIDTH_KEY);
+    const width = saved ? Number.parseInt(saved, 10) : DEFAULT_WIDTH;
+    return Number.isFinite(width) && width >= MIN_WIDTH && width <= MAX_WIDTH ? width : DEFAULT_WIDTH;
+  } catch {
+    return DEFAULT_WIDTH;
+  }
+}
+
+export function persistSidebarWidth(width: number, storage?: SidebarStorage): void {
+  try {
+    (storage ?? window.localStorage).setItem(SIDEBAR_WIDTH_KEY, width.toString());
+  } catch {
+    // 瀏覽器的隱私模式或嵌入式環境可能拒絕存取，版面仍應可正常使用。
+  }
+}
+
 export default function DashboardLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const [sidebarWidth, setSidebarWidth] = useState(() => {
-    const saved = localStorage.getItem(SIDEBAR_WIDTH_KEY);
-    return saved ? parseInt(saved, 10) : DEFAULT_WIDTH;
-  });
+  const [sidebarWidth, setSidebarWidth] = useState(() => readSidebarWidth());
   const { loading, user } = useAuth();
 
   useEffect(() => {
-    localStorage.setItem(SIDEBAR_WIDTH_KEY, sidebarWidth.toString());
+    persistSidebarWidth(sidebarWidth);
   }, [sidebarWidth]);
 
   if (loading) {
