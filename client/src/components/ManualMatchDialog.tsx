@@ -10,7 +10,7 @@
  * 7. 提供「此商品對手站沒有」按鈕與手動輸入品名
  */
 
-import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import {
   Dialog,
   DialogContent,
