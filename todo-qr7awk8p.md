@@ -136,4 +136,4 @@
 - [x] 執行 pnpm test、使用四支排除清單的 crawler pytest、獨立 acceptance 測試與 pnpm build；所有已執行測試通過
 - [x] 僅安裝 pytest 執行器，並只在 test_acceptance.py 以 __main__ 保護加入依 total_fail 決定退出碼的單行修正
 - [x] 以使用者指定的四支排除清單執行 crawler pytest，確認收集八支單元測試，並單獨驗收 test_acceptance.py 的 exit=0
-- [ ] 保存本批八項效能與韌性優化版本，並保留逐檔差異與完整測試紀錄
+- [x] 保存本批八項效能與韌性優化版本，並保留逐檔差異與完整測試紀錄
