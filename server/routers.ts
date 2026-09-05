@@ -27,7 +27,8 @@ import {
   enqueueCrawlerJob,
   getCategoryRecrawlAnalytics,
   getCrawlerRefreshEstimates,
-  getDynamicPriceHistory,
+  getPriceHistoryForProduct,
+  listLatestPriceHistoryProducts,
   getLatestListingAvailability,
   getLatestMatchReviewQueue,
   getLatestMatchReviewSummary,
@@ -124,7 +125,7 @@ export const appRouter = router({
   }),
   matchRules: router({
     /** The scheduled crawler reads only active mappings through this endpoint. */
-    listForCrawler: publicProcedure.query(async () => listActiveMatchingFeedback()),
+    listForCrawler: adminProcedure.query(async () => listActiveMatchingFeedback()),
     /** Administrator management view includes disabled rules and crawler usage information. */
     listForAdmin: adminProcedure.query(async () => listMatchingFeedbackForAdmin()),
     setActive: adminProcedure.input(z.object({
@@ -153,7 +154,7 @@ export const appRouter = router({
     }),
   }),
   brandAliases: router({
-    listForCrawler: publicProcedure.query(async () => listActiveBrandAliases()),
+    listForCrawler: adminProcedure.query(async () => listActiveBrandAliases()),
     listForAdmin: adminProcedure.query(async () => listBrandAliasesForAdmin()),
     save: adminProcedure.input(z.object({
       alias: z.string().trim().min(1).max(128),
@@ -367,22 +368,27 @@ export const appRouter = router({
       });
       return { success: true } as const;
     }),
-    /** Database-backed history replaces price_history.json. */
-    history: publicProcedure.query(async () => getDynamicPriceHistory()),
+    /** Lightweight latest-day catalog selector for the public price-history dialog. */
+    historyProducts: publicProcedure.query(async () => listLatestPriceHistoryProducts()),
+    /** One product's history only; source/date index avoids full-catalog scans. */
+    historyForProduct: publicProcedure.input(z.object({
+      sourceKey: z.string().min(1).max(128),
+      days: z.number().int().min(7).max(90).default(30),
+    })).query(async ({ input }) => getPriceHistoryForProduct(input)),
     /** Lightweight polling endpoint for crawler status and recent completion time. */
     status: publicProcedure.query(async () => getLatestCrawlerStatus()),
     /** Historical successful-job timing keeps refresh ETAs grounded in actual worker runs. */
     refreshEstimates: publicProcedure.query(async () => getCrawlerRefreshEstimates()),
     /** Conservative coverage: only accepted Sinya-to-CoolPC matches count as listed. */
-    coolpcCoverage: publicProcedure.query(async () => getCoolpcCoverageSummary()),
-    coolpcUnlisted: publicProcedure.input(z.object({
+    coolpcCoverage: adminProcedure.query(async () => getCoolpcCoverageSummary()),
+    coolpcUnlisted: adminProcedure.input(z.object({
       category: z.string().min(1).max(512).optional(),
       page: z.number().int().positive().default(1),
       pageSize: z.number().int().min(10).max(100).default(25),
     }).optional()).query(async ({ input }) => listCoolpcUnlistedSinyaProducts(input ?? { page: 1, pageSize: 25 })),
     /** Reverse conservative coverage: CoolPC products without an accepted Sinya match. */
-    sinyaCoverage: publicProcedure.query(async () => getSinyaCoverageSummary()),
-    sinyaUnlisted: publicProcedure.input(z.object({
+    sinyaCoverage: adminProcedure.query(async () => getSinyaCoverageSummary()),
+    sinyaUnlisted: adminProcedure.input(z.object({
       category: z.string().min(1).max(512).optional(),
       page: z.number().int().positive().default(1),
       pageSize: z.number().int().min(10).max(100).default(25),

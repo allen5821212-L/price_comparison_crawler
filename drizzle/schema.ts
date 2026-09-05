@@ -359,6 +359,13 @@ export const comparisonMatches = mysqlTable(
     cheaper: mysqlEnum("cheaper", ["sinya", "coolpc", "pchome", "momo", "tie"]).notNull(),
     score: decimal("score", { precision: 7, scale: 4 }).notNull(),
     hasSpecDiff: boolean("has_spec_diff").default(false).notNull(),
+    reviewable: boolean("reviewable").default(false).notNull(),
+    reviewSeverity: mysqlEnum("review_severity", ["medium", "high", "critical"]),
+    reviewRiskScore: int("review_risk_score"),
+    reviewFingerprint: varchar("review_fingerprint", { length: 64 }),
+    reviewHasCoolpc: boolean("review_has_coolpc").default(false).notNull(),
+    reviewHasPchome: boolean("review_has_pchome").default(false).notNull(),
+    reviewHasMomo: boolean("review_has_momo").default(false).notNull(),
     payload: text("payload").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
@@ -366,6 +373,8 @@ export const comparisonMatches = mysqlTable(
     uniqueRunSource: uniqueIndex("comparison_matches_run_source_unique").on(table.runId, table.sourceKey),
     currentMatchIdx: index("comparison_matches_current_match_idx").on(table.runId, table.category, table.cheaper),
     scoreIdx: index("comparison_matches_score_idx").on(table.runId, table.score),
+    reviewQueueIdx: index("comparison_matches_review_queue_idx").on(table.runId, table.reviewable, table.reviewSeverity, table.reviewRiskScore, table.score),
+    reviewFingerprintIdx: index("comparison_matches_review_fingerprint_idx").on(table.runId, table.reviewFingerprint),
   }),
 );
 

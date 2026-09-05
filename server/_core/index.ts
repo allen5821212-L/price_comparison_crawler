@@ -40,7 +40,10 @@ async function startServer() {
   app.use(express.urlencoded({ limit: "1mb", extended: true }));
   registerStorageProxy(app);
   registerOAuthRoutes(app);
-  app.get("/api/matching-rules", async (_req, res) => {
+  app.get("/api/matching-rules", async (req, res) => {
+    const remoteAddress = req.socket.remoteAddress || "";
+    const isLoopback = remoteAddress === "127.0.0.1" || remoteAddress === "::1" || remoteAddress.endsWith("127.0.0.1");
+    if (!isLoopback) return res.status(403).json({ error: "crawler endpoint is loopback-only" });
     try {
       const [rules, negativeFeatures, brandAliases] = await Promise.all([listActiveMatchingFeedback(), listLearnedNegativeMatchFeatures(), listActiveBrandAliases()]);
       res.json({ rules, negativeFeatures, brandAliases });

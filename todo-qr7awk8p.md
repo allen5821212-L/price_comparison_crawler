@@ -137,3 +137,14 @@
 - [x] 僅安裝 pytest 執行器，並只在 test_acceptance.py 以 __main__ 保護加入依 total_fail 決定退出碼的單行修正
 - [x] 以使用者指定的四支排除清單執行 crawler pytest，確認收集八支單元測試，並單獨驗收 test_acceptance.py 的 exit=0
 - [x] 保存本批八項效能與韌性優化版本，並保留逐檔差異與完整測試紀錄
+- [x] 盤點價格歷史對話框、複核佇列、公開端點及前台登入需求，確認 API 契約調整的相容範圍
+- [x] 建立單品價格歷史與輕量商品選單端點，改由對話框按需查詢歷史資料
+- [x] 將複核摘要改為 SQL 聚合，並將佇列篩選、排序、分頁及當頁關聯查詢下推資料庫
+- [x] 在 persist_crawl_result 加入 comparison_matches 與過期 comparison_products 的分批保留清理
+- [x] 將指定營運端點改為 adminProcedure，並使公開 matching-rules 端點僅允許 loopback 存取
+- [x] 將 comparison.status 收窄為前端實際使用的四個生命週期欄位，保留 comparison.refreshEstimates 公開，並確認四支覆蓋率／缺口端點僅於登入後呼叫
+- [x] 先為 CoolpcCoveragePage 與 CoolpcOnlyPage 的指定管理員查詢補上 enabled: user?.role === "admin"，保留既有 export 與 token 條件
+- [x] 再將 coolpcCoverage、coolpcUnlisted、sinyaCoverage、sinyaUnlisted 四支 comparison 程序改為 adminProcedure
+- [x] 以未登入與管理員登入會話驗收兩頁：未登入零 API 請求、管理員可正常載入資料
+- [x] 新增契約、資料層及保留清理回歸測試，完成前端畫面驗證
+- [x] 保存第二批資料存取、審核佇列、資料保留及授權收斂版本，並保留發布後驗證紀錄

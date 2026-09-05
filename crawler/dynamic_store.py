@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from datetime import date, timedelta
 from typing import Any, Iterable
@@ -104,6 +105,7 @@ def _match_rows(matches: Iterable[dict[str, Any]], run_id: int):
         if cheaper not in {"sinya", "coolpc", "pchome", "momo", "tie"}:
             cheaper = "tie"
         spec_diff = match.get("spec_diff") or []
+        review = _review_metadata(match, bool(spec_diff))
         yield (
             run_id,
             _source_key(match),
@@ -120,8 +122,57 @@ def _match_rows(matches: Iterable[dict[str, Any]], run_id: int):
             cheaper,
             float(match.get("score") or 0),
             bool(spec_diff),
+            review["reviewable"],
+            review["severity"],
+            review["risk_score"],
+            review["fingerprint"],
+            review["has_coolpc"],
+            review["has_pchome"],
+            review["has_momo"],
             json.dumps(match, ensure_ascii=False, separators=(",", ":")),
         )
+
+
+def _js_round(value: float) -> int:
+    """Match JavaScript Math.round for non-negative review-risk components."""
+    return math.floor(value + 0.5)
+
+
+def _review_metadata(match: dict[str, Any], has_spec_diff: bool) -> dict[str, Any]:
+    """Materialize the same review semantics as server/reviewQueue.ts for SQL filtering."""
+    score = max(0.0, min(1.0, float(match.get("score") or 0)))
+    target_names = {
+        "coolpc": str(match.get("coolpc_name") or "").strip(),
+        "pchome": str(match.get("pchome_name") or "").strip(),
+        "momo": str(match.get("momo_name") or "").strip(),
+    }
+    prices = [int(match.get("sinya_price") or 0)]
+    prices.extend(int(match.get(f"{platform}_price") or 0) for platform, name in target_names.items() if name)
+    usable = [price for price in prices if price > 0]
+    price_spread = round((max(usable) - min(usable)) / min(usable), 3) if len(usable) >= 2 else 0.0
+    reviewable = has_spec_diff or score < 0.86 or price_spread >= 0.5
+    confidence_risk = _js_round((1 - score) * 100)
+    price_risk = min(90, _js_round(price_spread * 100)) if price_spread >= 0.5 else 0
+    risk_score = max(85 if has_spec_diff else 0, confidence_risk, price_risk)
+    severity = "critical" if risk_score >= 80 else "high" if risk_score >= 55 else "medium"
+    source_key = _source_key(match)
+    fingerprint_parts = [
+        source_key,
+        target_names["coolpc"],
+        target_names["pchome"],
+        target_names["momo"],
+        "spec-diff" if has_spec_diff else "no-spec-diff",
+    ]
+    fingerprint = hashlib.sha256("\x1f".join(fingerprint_parts).encode("utf-8")).hexdigest()
+    return {
+        "reviewable": reviewable,
+        "severity": severity if reviewable else None,
+        "risk_score": risk_score if reviewable else None,
+        "fingerprint": fingerprint if reviewable else None,
+        "has_coolpc": bool(target_names["coolpc"]),
+        "has_pchome": bool(target_names["pchome"]),
+        "has_momo": bool(target_names["momo"]),
+    }
 
 
 def _match_state_fingerprint(match: dict[str, Any]) -> str:
@@ -278,6 +329,38 @@ def _record_price_notifications(cursor: Any, matches: Iterable[dict[str, Any]], 
         )
 
 
+def _delete_in_batches(cursor: Any, statement: str, batch_size: int = 5000) -> int:
+    """Delete old rows in bounded batches so retention avoids long table locks."""
+    total_deleted = 0
+    while True:
+        cursor.execute(statement, (batch_size,))
+        deleted = max(0, int(cursor.rowcount or 0))
+        total_deleted += deleted
+        if deleted < batch_size:
+            return total_deleted
+
+
+def _prune_completed_run_data(cursor: Any) -> tuple[int, int]:
+    """Keep only matches and catalog rows observed in the latest 30 completed runs."""
+    retained_runs = """
+        SELECT id FROM comparison_runs
+        WHERE status='completed'
+        ORDER BY finished_at DESC, id DESC
+        LIMIT 30
+    """
+    deleted_matches = _delete_in_batches(cursor, f"""
+        DELETE FROM comparison_matches
+        WHERE run_id NOT IN ({retained_runs})
+        LIMIT %s
+    """)
+    deleted_products = _delete_in_batches(cursor, f"""
+        DELETE FROM comparison_products
+        WHERE last_seen_run_id IS NULL OR last_seen_run_id NOT IN ({retained_runs})
+        LIMIT %s
+    """)
+    return deleted_matches, deleted_products
+
+
 def persist_crawl_result(
     *,
     stats: dict[str, Any],
@@ -324,8 +407,9 @@ def persist_crawl_result(
                 INSERT INTO comparison_matches
                   (run_id, source_key, sinya_name, coolpc_name, pchome_name, momo_name, category,
                    sinya_price, coolpc_price, pchome_price, momo_price, price_diff, cheaper, score,
-                   has_spec_diff, payload)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   has_spec_diff, reviewable, review_severity, review_risk_score, review_fingerprint,
+                   review_has_coolpc, review_has_pchome, review_has_momo, payload)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
             rows = list(_match_rows(matches, run_id))
             if rows:
@@ -378,6 +462,7 @@ def persist_crawl_result(
                     run_id,
                 ),
             )
+            _prune_completed_run_data(cursor)
         connection.commit()
         return run_id
     except Exception as error:

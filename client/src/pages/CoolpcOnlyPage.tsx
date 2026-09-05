@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useAuth } from "@/_core/hooks/useAuth";
 import { downloadCsv, toCsv } from "@/lib/csvExport";
 import { trpc } from "@/lib/trpc";
 import { Bell, BellRing, BookmarkPlus, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock3, Copy, Download, ExternalLink, GripVertical, History, Link, ListChecks, ListPlus, Lock, PackageX, Pin, PinOff, Play, RefreshCw, Save, Share2, Store, Trash2, Unlock, Upload, UserPlus, Users, X } from "lucide-react";
@@ -159,6 +160,7 @@ type RecrawlPresetImportPreview = {
 };
 
 export default function CoolpcOnlyPage() {
+  const { user } = useAuth();
   const [category, setCategory] = useState("all");
   const [page, setPage] = useState(1);
   const [categorySort, setCategorySort] = useState<"gap_desc" | "coverage_asc" | "coverage_desc">("gap_desc");
@@ -172,16 +174,16 @@ export default function CoolpcOnlyPage() {
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [collaboratorEmails, setCollaboratorEmails] = useState<Record<number, string>>({});
   const importPresetInputRef = useRef<HTMLInputElement>(null);
-  const coverageQuery = trpc.comparison.sinyaCoverage.useQuery();
-  const unlistedQuery = trpc.comparison.sinyaUnlisted.useQuery({ category: category === "all" ? undefined : category, page, pageSize: 25 });
+  const coverageQuery = trpc.comparison.sinyaCoverage.useQuery(undefined, { enabled: user?.role === "admin" });
+  const unlistedQuery = trpc.comparison.sinyaUnlisted.useQuery({ category: category === "all" ? undefined : category, page, pageSize: 25 }, { enabled: user?.role === "admin" });
   const exportQuery = trpc.comparison.sinyaUnlistedExport.useQuery({ category: category === "all" ? undefined : category }, { enabled: false });
-  const remindersQuery = trpc.crawler.coolpcRecrawlReminders.useQuery(undefined, { refetchInterval: 60_000 });
-  const presetsQuery = trpc.crawler.coolpcRecrawlPresets.useQuery();
-  const presetHistoryQuery = trpc.crawler.coolpcRecrawlPresetHistory.useQuery();
+  const remindersQuery = trpc.crawler.coolpcRecrawlReminders.useQuery(undefined, { enabled: user?.role === "admin", refetchInterval: 60_000 });
+  const presetsQuery = trpc.crawler.coolpcRecrawlPresets.useQuery(undefined, { enabled: user?.role === "admin" });
+  const presetHistoryQuery = trpc.crawler.coolpcRecrawlPresetHistory.useQuery(undefined, { enabled: user?.role === "admin" });
   const presetExportQuery = trpc.crawler.exportCoolpcRecrawlPresets.useQuery(undefined, { enabled: false });
-  const teamTemplatesQuery = trpc.crawler.coolpcRecrawlPresetTemplates.useQuery();
+  const teamTemplatesQuery = trpc.crawler.coolpcRecrawlPresetTemplates.useQuery(undefined, { enabled: user?.role === "admin" });
   const sharedTemplateToken = useMemo(() => typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("template"), []);
-  const sharedTemplateQuery = trpc.crawler.coolpcRecrawlPresetTemplateByToken.useQuery({ token: sharedTemplateToken ?? "invalid" }, { enabled: Boolean(sharedTemplateToken) });
+  const sharedTemplateQuery = trpc.crawler.coolpcRecrawlPresetTemplateByToken.useQuery({ token: sharedTemplateToken ?? "invalid" }, { enabled: user?.role === "admin" && Boolean(sharedTemplateToken) });
   const utils = trpc.useUtils();
   const saveReminder = trpc.crawler.saveCoolpcRecrawlReminder.useMutation({ onSuccess: () => void utils.crawler.coolpcRecrawlReminders.invalidate() });
   const setReminderActive = trpc.crawler.setCoolpcRecrawlReminderActive.useMutation({ onSuccess: () => void utils.crawler.coolpcRecrawlReminders.invalidate() });

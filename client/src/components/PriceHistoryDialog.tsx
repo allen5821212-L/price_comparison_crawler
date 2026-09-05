@@ -5,7 +5,7 @@
  * 支援搜尋商品名稱，顯示欣亞與原價屋兩條價格線。
  */
 
-import { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import {
   Dialog,
   DialogContent,
@@ -16,17 +16,15 @@ import { Input } from "@/components/ui/input";
 import { Search } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 
-interface PriceSnapshot {
-  sinya_name: string;
-  coolpc_name: string;
-  sinya_price: number;
-  coolpc_price: number;
-  price_diff: number;
+interface PriceHistoryProduct {
+  sourceKey: string;
+  sinyaName: string;
 }
 
-interface HistoryDay {
+interface HistoryPoint {
   date: string;
-  matched: PriceSnapshot[];
+  sinyaPrice: number;
+  coolpcPrice: number;
 }
 
 interface PriceHistoryDialogProps {
@@ -37,54 +35,54 @@ interface PriceHistoryDialogProps {
 }
 
 export function PriceHistoryDialog({ open, onOpenChange, initialProduct, onSetTargetPrice }: PriceHistoryDialogProps) {
-  const historyQuery = trpc.comparison.history.useQuery(undefined, { enabled: open });
-  const history = (historyQuery.data ?? []) as HistoryDay[];
+  const productsQuery = trpc.comparison.historyProducts.useQuery(undefined, { enabled: open });
   const [search, setSearch] = useState("");
-  const [selectedProduct, setSelectedProduct] = useState<string | null>(null);
+  const [selectedSourceKey, setSelectedSourceKey] = useState<string | null>(null);
+  const productHistoryQuery = trpc.comparison.historyForProduct.useQuery({ sourceKey: selectedSourceKey ?? "", days: 30 }, {
+    enabled: open && Boolean(selectedSourceKey),
+  });
+  const history = (productHistoryQuery.data ?? []) as HistoryPoint[];
 
   useEffect(() => {
     if (open && initialProduct) {
       setSearch(initialProduct);
-      setSelectedProduct(initialProduct);
+      setSelectedSourceKey(null);
     }
   }, [initialProduct, open]);
 
+  useEffect(() => {
+    if (!open || !initialProduct || selectedSourceKey) return;
+    const initial = ((productsQuery.data ?? []) as PriceHistoryProduct[])
+      .find((product: PriceHistoryProduct) => product.sinyaName === initialProduct);
+    if (initial) setSelectedSourceKey(initial.sourceKey);
+  }, [initialProduct, open, productsQuery.data, selectedSourceKey]);
+
   // Build product list from latest snapshot
   const productList = useMemo(() => {
-    if (history.length === 0) return [];
-    const latest = history[history.length - 1];
-    return latest.matched
-      .map((m) => ({
-        sinya_name: m.sinya_name,
-        coolpc_name: m.coolpc_name,
-        display: m.sinya_name.length > 40 ? m.sinya_name.substring(0, 40) + "..." : m.sinya_name,
+    return ((productsQuery.data ?? []) as PriceHistoryProduct[])
+      .map((product) => ({
+        sourceKey: product.sourceKey,
+        sinyaName: product.sinyaName,
+        display: product.sinyaName.length > 40 ? product.sinyaName.substring(0, 40) + "..." : product.sinyaName,
       }))
-      .filter((p, i, arr) => arr.findIndex((x) => x.sinya_name === p.sinya_name) === i)
       .sort((a, b) => a.display.localeCompare(b.display, "zh-TW"));
-  }, [history]);
+  }, [productsQuery.data]);
 
   const filteredProducts = useMemo(() => {
     if (!search) return productList.slice(0, 50);
     return productList
-      .filter((p) => p.sinya_name.toLowerCase().includes(search.toLowerCase()))
+      .filter((p) => p.sinyaName.toLowerCase().includes(search.toLowerCase()))
       .slice(0, 50);
   }, [productList, search]);
 
   // Get price trend for selected product
   const trendData = useMemo(() => {
-    if (!selectedProduct || history.length === 0) return [];
-    return history
-      .map((day) => {
-        const match = day.matched.find((m) => m.sinya_name === selectedProduct);
-        if (!match) return null;
-        return {
-          date: day.date,
-          sinya_price: match.sinya_price,
-          coolpc_price: match.coolpc_price,
-        };
-      })
-      .filter((d): d is NonNullable<typeof d> => d !== null);
-  }, [selectedProduct, history]);
+    return history.map(point => ({
+      date: point.date,
+      sinya_price: point.sinyaPrice,
+      coolpc_price: point.coolpcPrice,
+    }));
+  }, [history]);
 
   // SVG chart dimensions
   const chartW = 600;
@@ -149,7 +147,7 @@ export function PriceHistoryDialog({ open, onOpenChange, initialProduct, onSetTa
             />
           </div>
           <span className="text-sm text-muted-foreground whitespace-nowrap">
-            {history.length} 天歷史
+            {selectedSourceKey ? `${history.length} 天歷史` : "選擇商品後載入"}
           </span>
         </div>
 
@@ -158,15 +156,15 @@ export function PriceHistoryDialog({ open, onOpenChange, initialProduct, onSetTa
           <div className="w-64 overflow-y-auto border rounded-md">
             {filteredProducts.length === 0 ? (
               <p className="p-4 text-sm text-muted-foreground">
-                {history.length === 0 ? "尚無歷史資料" : "找不到商品"}
+                {productsQuery.isLoading ? "正在載入商品..." : "找不到商品"}
               </p>
             ) : (
               filteredProducts.map((p) => (
                 <button
-                  key={p.sinya_name}
-                  onClick={() => setSelectedProduct(p.sinya_name)}
+                  key={p.sourceKey}
+                  onClick={() => setSelectedSourceKey(p.sourceKey)}
                   className={`block w-full text-left px-3 py-2 text-sm border-b transition-colors ${
-                    selectedProduct === p.sinya_name
+                    selectedSourceKey === p.sourceKey
                       ? "bg-primary/10 text-primary font-medium"
                       : "hover:bg-muted/50"
                   }`}
@@ -179,7 +177,7 @@ export function PriceHistoryDialog({ open, onOpenChange, initialProduct, onSetTa
 
           {/* Chart area */}
           <div className="flex-1 flex flex-col">
-            {selectedProduct && trendData.length > 0 ? (
+            {selectedSourceKey && trendData.length > 0 ? (
               <>
                 <div className="flex gap-4 mb-2 text-xs">
                   <span className="flex items-center gap-1.5">
@@ -266,11 +264,14 @@ export function PriceHistoryDialog({ open, onOpenChange, initialProduct, onSetTa
                   {trendData.length} 筆記錄 | 歷史最低: NT${historicLow?.toLocaleString() ?? "—"} | 最新價差: NT$
                   {trendData[trendData.length - 1].sinya_price - trendData[trendData.length - 1].coolpc_price}
                 </div>
-                {historicLow !== null && onSetTargetPrice ? <button type="button" className="mt-3 inline-flex w-fit items-center rounded-md border border-emerald-500/35 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-700 transition-colors hover:bg-emerald-500/20 dark:text-emerald-400" onClick={() => onSetTargetPrice(selectedProduct, historicLow)}>將 NT${historicLow.toLocaleString()} 設為目標價通知</button> : null}
+                {historicLow !== null && onSetTargetPrice ? <button type="button" className="mt-3 inline-flex w-fit items-center rounded-md border border-emerald-500/35 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-700 transition-colors hover:bg-emerald-500/20 dark:text-emerald-400" onClick={() => {
+                  const product = productList.find(item => item.sourceKey === selectedSourceKey);
+                  if (product) onSetTargetPrice(product.sinyaName, historicLow);
+                }}>將 NT${historicLow.toLocaleString()} 設為目標價通知</button> : null}
               </>
             ) : (
               <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
-                {selectedProduct ? "此商品尚無足夠歷史資料" : "請從左側選擇商品查看價格趨勢"}
+                {selectedSourceKey ? (productHistoryQuery.isLoading ? "正在載入歷史資料..." : "此商品尚無足夠歷史資料") : "請從左側選擇商品查看價格趨勢"}
               </div>
             )}
           </div>

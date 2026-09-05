@@ -34,7 +34,7 @@ import {
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { buildListingAvailability, buildListingCategories } from "./listingAvailability";
-import { filterAndSortReviewItems, summarizeReviewItems, type ReviewPlatform, type ReviewSeverity } from "./reviewQueue";
+import { buildMatchReviewItem, type ReviewPlatform, type ReviewSeverity } from "./reviewQueue";
 import { aggregateReviewQualityRows, summarizeReviewQuality } from "./reviewQuality";
 import { selectEscalationRulesForRecipient } from "./reviewEscalations";
 import { measureReviewHealthCheck, summarizeReviewHealth } from "./reviewHealth";
@@ -869,9 +869,56 @@ export async function getLatestMatchReviewQueue(input: {
     .where(eq(comparisonRuns.status, "completed"))
     .orderBy(desc(comparisonRuns.finishedAt), desc(comparisonRuns.id))
     .limit(1);
-  if (!run) return { run: null, total: 0, page: input.page, pageSize: input.pageSize, totalPages: 0, summary: summarizeReviewItems([]), items: [] };
+  if (!run) return {
+    run: null,
+    total: 0,
+    page: input.page,
+    pageSize: input.pageSize,
+    totalPages: 0,
+    summary: { total: 0, mediumTotal: 0, highTotal: 0, criticalTotal: 0, highRiskTotal: 0 },
+    items: [],
+  };
 
-  const rows = await db.select({
+  const conditions = [
+    eq(comparisonMatches.runId, run.id),
+    eq(comparisonMatches.reviewable, true),
+    sql`NOT EXISTS (SELECT 1 FROM ${matchReviewSkips} WHERE ${matchReviewSkips.fingerprint} = ${comparisonMatches.reviewFingerprint})`,
+    sql`NOT EXISTS (SELECT 1 FROM ${matchReviewAssignments} WHERE ${matchReviewAssignments.sourceKey} = ${comparisonMatches.sourceKey} AND ${matchReviewAssignments.fingerprint} = ${comparisonMatches.reviewFingerprint} AND ${matchReviewAssignments.status} = 'resolved')`,
+  ];
+  if (input.severity) conditions.push(eq(comparisonMatches.reviewSeverity, input.severity));
+  if (input.platform === "coolpc") conditions.push(eq(comparisonMatches.reviewHasCoolpc, true));
+  if (input.platform === "pchome") conditions.push(eq(comparisonMatches.reviewHasPchome, true));
+  if (input.platform === "momo") conditions.push(eq(comparisonMatches.reviewHasMomo, true));
+  const search = input.search?.trim();
+  if (search) {
+    const pattern = `%${search}%`;
+    conditions.push(or(
+      like(comparisonMatches.sinyaName, pattern),
+      like(comparisonMatches.category, pattern),
+      like(comparisonMatches.coolpcName, pattern),
+      like(comparisonMatches.pchomeName, pattern),
+      like(comparisonMatches.momoName, pattern),
+    )!);
+  }
+  const where = and(...conditions)!;
+  const [totalRows, summaryRows] = await Promise.all([
+    db.select({ total: sql<number>`COUNT(*)` }).from(comparisonMatches).where(where),
+    db.select({ severity: comparisonMatches.reviewSeverity, total: sql<number>`COUNT(*)` })
+      .from(comparisonMatches).where(where).groupBy(comparisonMatches.reviewSeverity),
+  ]);
+  const total = Number(totalRows[0]?.total ?? 0);
+  const pageSize = Math.min(100, Math.max(10, input.pageSize));
+  const totalPages = Math.ceil(total / pageSize);
+  const page = Math.min(Math.max(1, input.page), Math.max(1, totalPages));
+  const summary = { total, mediumTotal: 0, highTotal: 0, criticalTotal: 0, highRiskTotal: 0 };
+  for (const row of summaryRows) {
+    if (row.severity === "medium") summary.mediumTotal = Number(row.total ?? 0);
+    if (row.severity === "high") summary.highTotal = Number(row.total ?? 0);
+    if (row.severity === "critical") summary.criticalTotal = Number(row.total ?? 0);
+  }
+  summary.highRiskTotal = summary.highTotal + summary.criticalTotal;
+
+  const rows = total === 0 ? [] : await db.select({
     id: comparisonMatches.id,
     sourceKey: comparisonMatches.sourceKey,
     sinyaName: comparisonMatches.sinyaName,
@@ -886,35 +933,37 @@ export async function getLatestMatchReviewQueue(input: {
     score: comparisonMatches.score,
     hasSpecDiff: comparisonMatches.hasSpecDiff,
     payload: comparisonMatches.payload,
+    reviewFingerprint: comparisonMatches.reviewFingerprint,
   }).from(comparisonMatches)
-    .where(eq(comparisonMatches.runId, run.id));
+    .where(where)
+    .orderBy(desc(comparisonMatches.reviewRiskScore), asc(comparisonMatches.score), asc(comparisonMatches.sinyaName))
+    .limit(pageSize)
+    .offset((page - 1) * pageSize);
 
-  const reviewRows = rows.map(row => ({ ...row, ...parseReviewMatchSignals(row.payload) }));
-
-  const [skippedRows, assignmentRows, assignees] = await Promise.all([
-    db.select({ fingerprint: matchReviewSkips.fingerprint }).from(matchReviewSkips),
-    db.select().from(matchReviewAssignments),
-    db.select({ id: users.id, openId: users.openId, name: users.name, email: users.email }).from(users).where(eq(users.role, "admin")),
-  ]);
-  const resolvedAssignmentKeys = new Set(assignmentRows.filter(row => row.status === "resolved").map(row => `${row.sourceKey}:${row.fingerprint}`));
-  const activeAssignments = new Map(assignmentRows.filter(row => row.status === "assigned").map(row => [`${row.sourceKey}:${row.fingerprint}`, row]));
+  const sourceKeys = rows.map(row => row.sourceKey);
+  const fingerprints = rows.flatMap(row => row.reviewFingerprint ? [row.reviewFingerprint] : []);
+  const assignmentRows = sourceKeys.length && fingerprints.length
+    ? await db.select().from(matchReviewAssignments).where(and(
+      eq(matchReviewAssignments.status, "assigned"),
+      inArray(matchReviewAssignments.sourceKey, sourceKeys),
+      inArray(matchReviewAssignments.fingerprint, fingerprints),
+    ))
+    : [];
+  const assigneeIds = Array.from(new Set(assignmentRows.map(row => row.assigneeUserId)));
+  const assignees = assigneeIds.length
+    ? await db.select({ id: users.id, openId: users.openId, name: users.name, email: users.email }).from(users)
+      .where(and(eq(users.role, "admin"), inArray(users.id, assigneeIds)))
+    : [];
+  const activeAssignments = new Map(assignmentRows.map(row => [`${row.sourceKey}:${row.fingerprint}`, row]));
   const assigneeById = new Map(assignees.map(user => [user.id, user]));
-  const candidates = filterAndSortReviewItems(reviewRows, {
-    ...input,
-    skippedFingerprints: new Set(skippedRows.map(row => row.fingerprint)),
-  }).filter(item => !resolvedAssignmentKeys.has(`${item.sourceKey}:${item.fingerprint}`));
-  const total = candidates.length;
-  const pageSize = Math.min(100, Math.max(10, input.pageSize));
-  const totalPages = Math.ceil(total / pageSize);
-  const page = Math.min(Math.max(1, input.page), Math.max(1, totalPages));
   return {
     run: { id: run.id, finishedAt: run.finishedAt ?? run.startedAt },
     total,
     page,
     pageSize,
     totalPages,
-    summary: summarizeReviewItems(candidates),
-    items: candidates.slice((page - 1) * pageSize, page * pageSize).map(item => {
+    summary,
+    items: rows.map(row => buildMatchReviewItem({ ...row, ...parseReviewMatchSignals(row.payload) })).filter((item): item is NonNullable<typeof item> => item !== null).map(item => {
       const assignment = activeAssignments.get(`${item.sourceKey}:${item.fingerprint}`);
       const assignee = assignment ? assigneeById.get(assignment.assigneeUserId) : null;
       return {
@@ -933,8 +982,31 @@ export async function getLatestMatchReviewQueue(input: {
 
 /** Small admin payload suitable for frequent UI polling and alert badges. */
 export async function getLatestMatchReviewSummary() {
-  const queue = await getLatestMatchReviewQueue({ page: 1, pageSize: 10 });
-  return { run: queue.run, ...queue.summary };
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+  const [run] = await db.select({ id: comparisonRuns.id, finishedAt: comparisonRuns.finishedAt, startedAt: comparisonRuns.startedAt })
+    .from(comparisonRuns).where(eq(comparisonRuns.status, "completed"))
+    .orderBy(desc(comparisonRuns.finishedAt), desc(comparisonRuns.id)).limit(1);
+  if (!run) return { run: null, total: 0, mediumTotal: 0, highTotal: 0, criticalTotal: 0, highRiskTotal: 0 };
+  const rows = await db.select({ severity: comparisonMatches.reviewSeverity, total: sql<number>`COUNT(*)` })
+    .from(comparisonMatches)
+    .where(and(
+      eq(comparisonMatches.runId, run.id),
+      eq(comparisonMatches.reviewable, true),
+      sql`NOT EXISTS (SELECT 1 FROM ${matchReviewSkips} WHERE ${matchReviewSkips.fingerprint} = ${comparisonMatches.reviewFingerprint})`,
+      sql`NOT EXISTS (SELECT 1 FROM ${matchReviewAssignments} WHERE ${matchReviewAssignments.sourceKey} = ${comparisonMatches.sourceKey} AND ${matchReviewAssignments.fingerprint} = ${comparisonMatches.reviewFingerprint} AND ${matchReviewAssignments.status} = 'resolved')`,
+    ))
+    .groupBy(comparisonMatches.reviewSeverity);
+  const summary = { total: 0, mediumTotal: 0, highTotal: 0, criticalTotal: 0, highRiskTotal: 0 };
+  for (const row of rows) {
+    const count = Number(row.total ?? 0);
+    summary.total += count;
+    if (row.severity === "medium") summary.mediumTotal = count;
+    if (row.severity === "high") summary.highTotal = count;
+    if (row.severity === "critical") summary.criticalTotal = count;
+  }
+  summary.highRiskTotal = summary.highTotal + summary.criticalTotal;
+  return { run: { id: run.id, finishedAt: run.finishedAt ?? run.startedAt }, ...summary };
 }
 
 export async function listReviewAssignees() {
@@ -1543,14 +1615,27 @@ export async function saveMatchReviewSkip(input: MatchReviewSkipInput) {
   });
 }
 
-/** Dynamic four-platform history grouped into the current dialog's day-based response shape. */
-export async function getDynamicPriceHistory() {
+/** Lightweight latest-snapshot selector used to populate the public price-history dialog. */
+export async function listLatestPriceHistoryProducts() {
+  const db = await getDb();
+  if (!db) throw new Error("資料庫目前無法使用");
+
+  return db.select({
+    sourceKey: comparisonPriceHistory.sourceKey,
+    sinyaName: comparisonPriceHistory.sinyaName,
+  }).from(comparisonPriceHistory)
+    .where(sql`${comparisonPriceHistory.snapshotDate} = (SELECT MAX(snapshot_date) FROM comparison_price_history)`)
+    .groupBy(comparisonPriceHistory.sourceKey, comparisonPriceHistory.sinyaName)
+    .orderBy(asc(comparisonPriceHistory.sinyaName), asc(comparisonPriceHistory.sourceKey));
+}
+
+/** Product-scoped history uses the source/date index instead of loading the whole catalog into Node. */
+export async function getPriceHistoryForProduct(input: { sourceKey: string; days: number }) {
   const db = await getDb();
   if (!db) throw new Error("資料庫目前無法使用");
 
   const rows = await db.select({
     snapshotDate: comparisonPriceHistory.snapshotDate,
-    sourceKey: comparisonPriceHistory.sourceKey,
     sinyaName: comparisonPriceHistory.sinyaName,
     coolpcName: comparisonPriceHistory.coolpcName,
     pchomeName: comparisonPriceHistory.pchomeName,
@@ -1561,38 +1646,42 @@ export async function getDynamicPriceHistory() {
     momoPrice: comparisonPriceHistory.momoPrice,
     priceDiff: comparisonPriceHistory.priceDiff,
   }).from(comparisonPriceHistory)
-    .orderBy(comparisonPriceHistory.snapshotDate, comparisonPriceHistory.sourceKey);
+    .where(and(
+      eq(comparisonPriceHistory.sourceKey, input.sourceKey),
+      sql`${comparisonPriceHistory.snapshotDate} >= CURDATE() - INTERVAL ${input.days} DAY`,
+    ))
+    .orderBy(asc(comparisonPriceHistory.snapshotDate));
 
-  const days = new Map<string, { date: string; matched: unknown[] }>();
-  rows.forEach(row => {
-    const date = row.snapshotDate instanceof Date
+  return rows.map(row => ({
+    date: row.snapshotDate instanceof Date
       ? row.snapshotDate.toISOString().slice(0, 10)
-      : String(row.snapshotDate).slice(0, 10);
-    const day = days.get(date) ?? { date, matched: [] };
-    day.matched.push({
-      source_key: row.sourceKey,
-      sinya_name: row.sinyaName,
-      coolpc_name: row.coolpcName,
-      pchome_name: row.pchomeName,
-      momo_name: row.momoName,
-      sinya_price: row.sinyaPrice,
-      coolpc_price: row.coolpcPrice,
-      pchome_price: row.pchomePrice,
-      momo_price: row.momoPrice,
-      price_diff: row.priceDiff,
-    });
-    days.set(date, day);
-  });
-  return Array.from(days.values());
+      : String(row.snapshotDate).slice(0, 10),
+    sourceKey: input.sourceKey,
+    sinyaName: row.sinyaName,
+    coolpcName: row.coolpcName,
+    pchomeName: row.pchomeName,
+    momoName: row.momoName,
+    sinyaPrice: row.sinyaPrice,
+    coolpcPrice: row.coolpcPrice,
+    pchomePrice: row.pchomePrice,
+    momoPrice: row.momoPrice,
+    priceDiff: row.priceDiff,
+  }));
 }
 
 /** Status is deliberately small so the UI can refresh it without loading the catalog. */
 export async function getLatestCrawlerStatus() {
   const db = await getDb();
   if (!db) throw new Error("資料庫目前無法使用");
-  const [latestRun] = await db.select().from(comparisonRuns)
+  const statusFields = {
+    id: comparisonRuns.id,
+    status: comparisonRuns.status,
+    startedAt: comparisonRuns.startedAt,
+    finishedAt: comparisonRuns.finishedAt,
+  };
+  const [latestRun] = await db.select(statusFields).from(comparisonRuns)
     .orderBy(desc(comparisonRuns.id)).limit(1);
-  const [latestCompletedRun] = await db.select().from(comparisonRuns)
+  const [latestCompletedRun] = await db.select(statusFields).from(comparisonRuns)
     .where(eq(comparisonRuns.status, "completed"))
     .orderBy(desc(comparisonRuns.id)).limit(1);
   return {

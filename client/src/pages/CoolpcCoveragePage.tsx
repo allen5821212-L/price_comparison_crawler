@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import { BarChart3, CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, PackageX, RefreshCw } from "lucide-react";
 import React, { useState } from "react";
@@ -41,14 +42,15 @@ export function CoverageQueryErrorPanel({
 }
 
 export default function CoolpcCoveragePage() {
+  const { user } = useAuth();
   const [category, setCategory] = useState("all");
   const [page, setPage] = useState(1);
-  const coverageQuery = trpc.comparison.coolpcCoverage.useQuery();
+  const coverageQuery = trpc.comparison.coolpcCoverage.useQuery(undefined, { enabled: user?.role === "admin" });
   const unlistedQuery = trpc.comparison.coolpcUnlisted.useQuery({
     category: category === "all" ? undefined : category,
     page,
     pageSize: 25,
-  });
+  }, { enabled: user?.role === "admin" });
   const coverage = coverageQuery.data;
   const unlisted = unlistedQuery.data;
 

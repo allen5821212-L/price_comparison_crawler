@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TrpcContext } from "./_core/context";
 
 const dbMocks = vi.hoisted(() => ({
-  getDynamicPriceHistory: vi.fn(),
+  getPriceHistoryForProduct: vi.fn(),
+  listLatestPriceHistoryProducts: vi.fn(),
   getCrawlerRefreshEstimates: vi.fn(),
   getFavoriteForUser: vi.fn(),
   getLatestCrawlerStatus: vi.fn(),
@@ -79,6 +80,10 @@ function createAdminContext(): TrpcContext {
     req: { protocol: "https", headers: {} } as TrpcContext["req"],
     res: { clearCookie: vi.fn() } as unknown as TrpcContext["res"],
   };
+}
+
+function createUserContext(): TrpcContext {
+  return { ...createAdminContext(), user: { ...createAdminContext().user!, role: "user" } };
 }
 
 describe("matchRules router", () => {
@@ -342,15 +347,32 @@ describe("matchRules router", () => {
     });
   });
 
-  it("serves database-backed price history and crawler status through public queries", async () => {
-    const history = [{ date: "2026-08-16", matched: [] }];
-    const status = { id: 4, status: "completed", matchedTotal: 2008 };
-    dbMocks.getDynamicPriceHistory.mockResolvedValue(history);
+  it("serves product-scoped history and a lightweight selector through public queries", async () => {
+    const products = [{ sourceKey: "sinya_1", sinyaName: "Samsung 870 EVO 4TB" }];
+    const history = [{ date: "2026-08-16", sourceKey: "sinya_1", sinyaName: "Samsung 870 EVO 4TB", sinyaPrice: 8990, coolpcPrice: 8790 }];
+    const status = {
+      latestRun: { id: 4, status: "completed", startedAt: new Date("2026-08-16T00:00:00.000Z"), finishedAt: new Date("2026-08-16T01:00:00.000Z") },
+      latestCompletedRun: { id: 4, status: "completed", startedAt: new Date("2026-08-16T00:00:00.000Z"), finishedAt: new Date("2026-08-16T01:00:00.000Z") },
+    };
+    dbMocks.listLatestPriceHistoryProducts.mockResolvedValue(products);
+    dbMocks.getPriceHistoryForProduct.mockResolvedValue(history);
     dbMocks.getLatestCrawlerStatus.mockResolvedValue(status);
     const caller = appRouter.createCaller(createAdminContext());
 
-    await expect(caller.comparison.history()).resolves.toEqual(history);
+    await expect(caller.comparison.historyProducts()).resolves.toEqual(products);
+    await expect(caller.comparison.historyForProduct({ sourceKey: "sinya_1", days: 30 })).resolves.toEqual(history);
+    expect(dbMocks.getPriceHistoryForProduct).toHaveBeenCalledWith({ sourceKey: "sinya_1", days: 30 });
     await expect(caller.comparison.status()).resolves.toEqual(status);
+  });
+
+  it("restricts coverage, gap lists, and crawler rule exports to administrators", async () => {
+    const caller = appRouter.createCaller(createUserContext());
+    await expect(caller.comparison.coolpcCoverage()).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(caller.comparison.coolpcUnlisted({ page: 1, pageSize: 25 })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(caller.comparison.sinyaCoverage()).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(caller.comparison.sinyaUnlisted({ page: 1, pageSize: 25 })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(caller.matchRules.listForCrawler()).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(caller.brandAliases.listForCrawler()).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
   it("serves refresh timing estimates derived by the persistence layer", async () => {
