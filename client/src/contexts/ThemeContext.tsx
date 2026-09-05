@@ -10,6 +10,25 @@ interface ThemeContextType {
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
+type ThemeStorage = Pick<Storage, "getItem" | "setItem">;
+
+export function readStoredTheme(defaultTheme: Theme, storage?: ThemeStorage): Theme {
+  try {
+    const stored = (storage ?? window.localStorage).getItem("theme");
+    return stored === "light" || stored === "dark" ? stored : defaultTheme;
+  } catch {
+    return defaultTheme;
+  }
+}
+
+export function persistTheme(theme: Theme, storage?: ThemeStorage): void {
+  try {
+    (storage ?? window.localStorage).setItem("theme", theme);
+  } catch {
+    // 在隱私模式或嵌入式瀏覽器中可能無法寫入；主題切換仍應正常運作。
+  }
+}
+
 interface ThemeProviderProps {
   children: React.ReactNode;
   defaultTheme?: Theme;
@@ -23,8 +42,7 @@ export function ThemeProvider({
 }: ThemeProviderProps) {
   const [theme, setTheme] = useState<Theme>(() => {
     if (switchable) {
-      const stored = localStorage.getItem("theme");
-      return (stored as Theme) || defaultTheme;
+      return readStoredTheme(defaultTheme);
     }
     return defaultTheme;
   });
@@ -38,7 +56,7 @@ export function ThemeProvider({
     }
 
     if (switchable) {
-      localStorage.setItem("theme", theme);
+      persistTheme(theme);
     }
   }, [theme, switchable]);
 

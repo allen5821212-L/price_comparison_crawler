@@ -170,11 +170,10 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
-          if (!id.includes("node_modules")) return;
-          if (id.includes("react-dom") || id.includes("/react/")) return "react-core";
-          if (id.includes("recharts")) return "charts";
-          if (id.includes("@radix-ui")) return "radix-ui";
-          if (id.includes("@tanstack") || id.includes("@trpc")) return "data-client";
+          // Radix、React 與資料客戶端彼此存在跨套件依賴。強制把它們分到
+          // 多個手動 chunk 會改變 ES module 的初始化順序，導致正式版 Radix
+          // 取得未初始化的 React 而無法掛載。僅分離體積大且依賴方向單純的圖表套件。
+          if (id.includes("node_modules/recharts/")) return "charts";
         },
       },
     },

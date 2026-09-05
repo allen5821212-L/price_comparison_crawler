@@ -14,6 +14,27 @@
 
   <body>
     <div id="root"></div>
+    <div id="startup-error" role="alert" hidden style="min-height:100vh;padding:2rem;background:#020817;color:#e2e8f0;font-family:system-ui,sans-serif;box-sizing:border-box;">
+      <div style="max-width:42rem;margin:18vh auto 0;padding:1.5rem;border:1px solid #7f1d1d;border-radius:0.75rem;background:#1e293b;">
+        <strong style="display:block;font-size:1.25rem;margin-bottom:0.5rem;color:#fecaca;">管理介面無法啟動</strong>
+        <p id="startup-error-message" style="margin:0 0 1rem;line-height:1.6;">前端資源初始化發生問題，請重新載入頁面。</p>
+        <button type="button" onclick="window.location.reload()" style="padding:0.55rem 0.9rem;border:0;border-radius:0.5rem;background:#2563eb;color:#fff;cursor:pointer;">重新載入</button>
+      </div>
+    </div>
+    <script>
+      (() => {
+        const showStartupError = (reason) => {
+          if (window.__priceComparisonMounted) return;
+          const fallback = document.getElementById("startup-error");
+          const message = document.getElementById("startup-error-message");
+          if (!fallback || !message) return;
+          message.textContent = `前端資源初始化發生問題：${reason || "未知錯誤"}。請重新載入頁面。`;
+          fallback.hidden = false;
+        };
+        window.addEventListener("error", (event) => showStartupError(event.error?.message || event.message), true);
+        window.addEventListener("unhandledrejection", (event) => showStartupError(event.reason?.message || String(event.reason)), true);
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
     <script
       defer

@@ -79,3 +79,5 @@ createRoot(document.getElementById("root")!).render(
     </QueryClientProvider>
   </trpc.Provider>
 );
+
+(window as Window & { __priceComparisonMounted?: boolean }).__priceComparisonMounted = true;
