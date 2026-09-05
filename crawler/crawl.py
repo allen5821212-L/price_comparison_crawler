@@ -860,7 +860,7 @@ def is_non_product(name, price):
     return False
 
 
-def match_products(sinya_products, coolpc_products):
+def match_products(sinya_products, coolpc_products, dump_json=False):
     """Match products using the v2 spec-compliant matching engine."""
     import sys as _sys, os as _os
     _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
@@ -917,17 +917,17 @@ def match_products(sinya_products, coolpc_products):
         sinya_products, coolpc_products, category_compat=compat_set
     )
 
-    # Store rejected/review data for audit (limit to 500 per category to keep file size small)
-    import json
-    audit_data = {
-        "rejected": rejected[:500],
-        "review": review[:500],
-        "price_review": price_review[:500],
-    }
-    audit_file = OUTPUT_DIR / "audit.json"
-    with open(audit_file, "w", encoding="utf-8") as f:
-        json.dump(audit_data, f, ensure_ascii=False, separators=(',', ':'))
-    print(f"  複核清單已儲存至 {audit_file}")
+    if dump_json:
+        # Optional local diagnostics only; production review data is database-backed.
+        audit_data = {
+            "rejected": rejected[:500],
+            "review": review[:500],
+            "price_review": price_review[:500],
+        }
+        audit_file = OUTPUT_DIR / "audit.json"
+        with open(audit_file, "w", encoding="utf-8") as f:
+            json.dump(audit_data, f, ensure_ascii=False, separators=(',', ':'))
+        print(f"  複核清單已儲存至 {audit_file}")
 
     return matched
 
@@ -936,7 +936,7 @@ def match_products(sinya_products, coolpc_products):
 #  Main
 # ──────────────────────────────────────────────
 
-def main(max_cats=None, priority_category=None):
+def main(max_cats=None, priority_category=None, dump_json=False):
     print(f"爬蟲啟動 — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
 
     # Step 1: 取得欣亞官方分類清單
@@ -1057,16 +1057,17 @@ def main(max_cats=None, priority_category=None):
         if isinstance(rule_id, int) and rule_id > 0
     })
     report_matching_rule_usage(applied_rule_ids)
-    # Store audit data
-    audit_data = {
-        "rejected": rejected[:500],
-        "review": review[:500],
-        "price_review": price_review[:500],
-    }
-    audit_file = OUTPUT_DIR / "audit.json"
-    with open(audit_file, "w", encoding="utf-8") as f:
-        json.dump(audit_data, f, ensure_ascii=False, separators=(',', ':'))
-    print(f"  複核清單已儲存至 {audit_file}")
+    if dump_json:
+        # Optional local diagnostics only; production review data is database-backed.
+        audit_data = {
+            "rejected": rejected[:500],
+            "review": review[:500],
+            "price_review": price_review[:500],
+        }
+        audit_file = OUTPUT_DIR / "audit.json"
+        with open(audit_file, "w", encoding="utf-8") as f:
+            json.dump(audit_data, f, ensure_ascii=False, separators=(',', ':'))
+        print(f"  複核清單已儲存至 {audit_file}")
 
     # Generate statistics
     stats = {
@@ -1106,64 +1107,52 @@ def main(max_cats=None, priority_category=None):
         # A crawler run is still reported as failed in the database when a run record was created.
         print(f"[WARN] 動態資料庫寫入失敗，保留既有靜態備援：{error}")
 
-    # Save all data — include the official Sinya DIY category list (in order)
-    sinya_categories = [c["name"] for c in categories] if categories else []
+    if dump_json:
+        # Keep legacy JSON artifacts available for explicit offline diagnostics only.
+        sinya_categories = [c["name"] for c in categories] if categories else []
+        all_data = {
+            "stats": stats,
+            "matched": matched,
+            "sinya_products": sinya_products,
+            "coolpc_products": coolpc_products,
+            "pchome_products": pchome_products,
+            "momo_products": momo_products,
+            "sinya_categories": sinya_categories,
+        }
+        output_file = OUTPUT_DIR / "comparison.json"
+        with open(output_file, "w", encoding="utf-8") as f:
+            json.dump(all_data, f, ensure_ascii=False, separators=(',', ':'))
+        print(f"資料已儲存至 {output_file}")
 
-    all_data = {
-        "stats": stats,
-        "matched": matched,
-        "sinya_products": sinya_products,
-        "coolpc_products": coolpc_products,
-        "pchome_products": pchome_products,
-        "momo_products": momo_products,
-        "sinya_categories": sinya_categories,
-    }
-
-    output_file = OUTPUT_DIR / "comparison.json"
-    with open(output_file, "w", encoding="utf-8") as f:
-        json.dump(all_data, f, ensure_ascii=False, separators=(',', ':'))
-
-    print(f"資料已儲存至 {output_file}")
-
-    # ── 價格歷史快照 ──
-    history_file = OUTPUT_DIR / "price_history.json"
-    today = dt.date.today().isoformat()
-
-    # 載入現有歷史
-    price_history = []
-    if history_file.exists():
-        try:
-            with open(history_file, "r", encoding="utf-8") as f:
-                price_history = json.load(f)
-        except:
-            price_history = []
-
-    # 建立今日快照（只記錄配對成功的商品價格）
-    today_snapshot = {
-        "date": today,
-        "matched": [
-            {
-                "sinya_name": m["sinya_name"],
-                "coolpc_name": m["coolpc_name"],
-                "sinya_price": m["sinya_price"],
-                "coolpc_price": m["coolpc_price"],
-                "price_diff": m["price_diff"],
-            }
-            for m in all_data["matched"]
-        ],
-    }
-
-    # 移除今日已有的快照（避免重複），然後加入新快照
-    price_history = [s for s in price_history if s.get("date") != today]
-    price_history.append(today_snapshot)
-
-    # 只保留最近 90 天的快照
-    cutoff = (dt.date.today() - dt.timedelta(days=90)).isoformat()
-    price_history = [s for s in price_history if s.get("date", "") >= cutoff]
-
-    with open(history_file, "w", encoding="utf-8") as f:
-        json.dump(price_history, f, ensure_ascii=False, separators=(',', ':'))
-    print(f"價格歷史快照已儲存至 {history_file} ({len(price_history)} 天)")
+        history_file = OUTPUT_DIR / "price_history.json"
+        today = dt.date.today().isoformat()
+        price_history = []
+        if history_file.exists():
+            try:
+                with open(history_file, "r", encoding="utf-8") as f:
+                    price_history = json.load(f)
+            except:
+                price_history = []
+        today_snapshot = {
+            "date": today,
+            "matched": [
+                {
+                    "sinya_name": m["sinya_name"],
+                    "coolpc_name": m["coolpc_name"],
+                    "sinya_price": m["sinya_price"],
+                    "coolpc_price": m["coolpc_price"],
+                    "price_diff": m["price_diff"],
+                }
+                for m in all_data["matched"]
+            ],
+        }
+        price_history = [snapshot for snapshot in price_history if snapshot.get("date") != today]
+        price_history.append(today_snapshot)
+        cutoff = (dt.date.today() - dt.timedelta(days=90)).isoformat()
+        price_history = [snapshot for snapshot in price_history if snapshot.get("date", "") >= cutoff]
+        with open(history_file, "w", encoding="utf-8") as f:
+            json.dump(price_history, f, ensure_ascii=False, separators=(',', ':'))
+        print(f"價格歷史快照已儲存至 {history_file} ({len(price_history)} 天)")
 
     print(f"\n統計摘要:")
     print(f"  欣亞商品數: {stats['sinya_total']}")
@@ -1186,5 +1175,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="欣亞 vs 原價屋 價格比對爬蟲")
     parser.add_argument("--max-cats", type=int, default=None, help="Max categories (for testing)")
     parser.add_argument("--priority-category", type=str, default=None, help="Fetch this Sinya category first while retaining a complete rebuilt catalog")
+    parser.add_argument("--dump-json", action="store_true", help="Write legacy local JSON diagnostics under client/public/data")
     args = parser.parse_args()
-    main(max_cats=args.max_cats, priority_category=args.priority_category)
+    main(max_cats=args.max_cats, priority_category=args.priority_category, dump_json=args.dump_json)

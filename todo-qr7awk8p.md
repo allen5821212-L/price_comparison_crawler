@@ -126,3 +126,14 @@
 - [x] 重現並定位正式網域管理員頁面持續空白的前端初始化故障（Radix 分包在 React 初始化前存取 forwardRef）
 - [x] 修復正式管理頁未掛載問題：撤除 React／Radix／資料客戶端的危險分包、保留圖表分包，並完成回歸測試
 - [x] 在正式網域驗證品牌別名與待審核工作台重新可用後保存修復版本
+- [x] 盤點 compression、mysql2、爬蟲函式、靜態 JSON 與指定死碼的實際引用，確認不會改變 API 或配對輸出
+- [x] 在 server/_core/index.ts 掛載 threshold 1024 的 compression，並將全域 JSON body 限制縮為 1mb
+- [x] 在 server/db.ts 將單一 Drizzle 連線改為 mysql2/promise 連線池並保留既有資料庫行為
+- [x] 在 crawler/matcher.py 對可安全快取的純字串函式加記憶化，並提前截斷 rejected 清單且保留完整統計
+- [x] 在 crawler/crawler_worker.py 回收超過 9 小時的 running 工作並寫入 crawler_events
+- [x] 依使用者確認移除唯一使用者 make_summary 與舊靜態遷移依賴；前台維持讀取最新 completed comparison_run，並限制 crawl.py JSON 輸出為 --dump-json、更新 .gitignore 及刪除 crawl workflow
+- [x] 確認未引用後刪除指定 Manus 殘留與 server/index.ts 死碼，且不刪除仍被引用的檔案
+- [x] 執行 pnpm test、使用四支排除清單的 crawler pytest、獨立 acceptance 測試與 pnpm build；所有已執行測試通過
+- [x] 僅安裝 pytest 執行器，並只在 test_acceptance.py 以 __main__ 保護加入依 total_fail 決定退出碼的單行修正
+- [x] 以使用者指定的四支排除清單執行 crawler pytest，確認收集八支單元測試，並單獨驗收 test_acceptance.py 的 exit=0
+- [ ] 保存本批八項效能與韌性優化版本，並保留逐檔差異與完整測試紀錄

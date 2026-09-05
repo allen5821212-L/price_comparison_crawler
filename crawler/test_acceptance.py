@@ -104,3 +104,5 @@ if total_fail == 0:
 else:
     print(f"✗ 有 {total_fail} 筆失敗：A 組 {A_fail} 筆未否決，B 組 {B_fail} 筆被誤殺")
 print("=" * 70)
+if __name__ == "__main__":
+    sys.exit(1 if total_fail else 0)

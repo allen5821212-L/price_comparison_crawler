@@ -17,6 +17,7 @@ PROJECT_DIR = Path(__file__).resolve().parent.parent
 CRAWLER_PATH = PROJECT_DIR / "crawler" / "crawl.py"
 POLL_SECONDS = int(os.environ.get("CRAWLER_WORKER_POLL_SECONDS", "20"))
 CRAWLER_JOB_TIMEOUT_SECONDS = int(os.environ.get("CRAWLER_JOB_TIMEOUT_SECONDS", str(8 * 60 * 60)))
+STALE_JOB_RECOVERY_SECONDS = CRAWLER_JOB_TIMEOUT_SECONDS + 60 * 60
 OWNER_NOTIFICATION_ENDPOINT = "webdevtoken.v1.WebDevService/SendNotification"
 
 
@@ -52,6 +53,37 @@ def claim_next_job() -> dict[str, Any] | None:
             event(cursor, job["id"], "info", "job_started", "爬蟲工作開始", scope_label)
             connection.commit()
             return job
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+def recover_stale_running_jobs() -> int:
+    """Fail jobs left running after an executor restart, without touching active work."""
+    connection = _database_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("START TRANSACTION")
+            cursor.execute(
+                """SELECT id FROM crawler_jobs
+                   WHERE status='running'
+                     AND started_at < DATE_SUB(NOW(), INTERVAL %s SECOND)
+                   FOR UPDATE""",
+                (STALE_JOB_RECOVERY_SECONDS,),
+            )
+            stale_ids = [int(row[0]) for row in cursor.fetchall()]
+            for job_id in stale_ids:
+                cursor.execute(
+                    """UPDATE crawler_jobs
+                       SET status='failed', error_message=%s, finished_at=NOW()
+                       WHERE id=%s AND status='running'""",
+                    ("執行器重啟，工作已中斷", job_id),
+                )
+                event(cursor, job_id, "error", "job_recovered_after_restart", "爬蟲工作因執行器重啟中斷", "執行器重啟，工作已中斷")
+            connection.commit()
+            return len(stale_ids)
     except Exception:
         connection.rollback()
         raise
@@ -198,6 +230,9 @@ def execute(job: dict[str, Any]) -> None:
 
 def run_forever() -> None:
     print(f"persistent crawler worker started; polling every {POLL_SECONDS}s", flush=True)
+    recovered_count = recover_stale_running_jobs()
+    if recovered_count:
+        print(f"[RECOVERY] marked {recovered_count} stale running crawler job(s) as failed", flush=True)
     while True:
         try:
             job = claim_next_job()

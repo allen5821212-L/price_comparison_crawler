@@ -5,7 +5,9 @@
 """
 
 import re
+from collections import Counter, deque
 from difflib import SequenceMatcher
+from functools import lru_cache
 from negative_features import negative_penalty
 from spec_normalizer import extract_mpn_codes, hard_spec_conflict, normalize_match_text, suffix_confidence_cap
 
@@ -101,6 +103,7 @@ def register_brand_aliases(entries):
 #  正規化 (步驟 2)
 # ════════════════════════════════════════════════════════════
 
+@lru_cache(maxsize=None)
 def norm(s):
     """正規化商品名稱 — 統一寫法差異。"""
     s = normalize_match_text(s)
@@ -118,6 +121,7 @@ def norm(s):
     return s
 
 
+@lru_cache(maxsize=None)
 def head(nm):
     """品名主體：去除【】促銷標籤，截掉第一個 / 〈 ( （ 之後的規格描述。"""
     s = re.sub(r'【[^】]*】', ' ', nm or '')
@@ -154,6 +158,7 @@ COMPONENT_KEYWORDS = [
 ]
 
 
+@lru_cache(maxsize=None)
 def is_excluded(name):
     """判斷是否為不可比價品項（贈品/福利品/二手品）。
     只過濾不可比價品項，不過濾組合包（由 R7 規則處理）。
@@ -260,6 +265,7 @@ GENERIC_TOKENS = {
 }
 
 
+@lru_cache(maxsize=None)
 def extract_tokens(name):
     """從品名中提取 token（英數混合、長度≥3），另加容量與3位以上數字型號。
     另外加入特殊型號正規化 token（GPU/CPU/MB/RAM/SSD）以提升核心零組件覆蓋率。
@@ -429,7 +435,7 @@ def extract_tokens(name):
         if not tok.isdigit() and tok not in GENERIC_CODE:
             tokens.add(tok)
     
-    return tokens
+    return frozenset(tokens)
 
 
 # ════════════════════════════════════════════════════════════
@@ -938,7 +944,9 @@ def match_products_v2(sinya_products, coolpc_products, category_compat=None, neg
     """
     print("=== 商品配對開始 (v2 規格書) ===")
     matched = []
-    rejected = []
+    rejected = deque(maxlen=500)
+    rejected_total = 0
+    rejected_reason_counts = Counter()
     review = []
     sinya_matched = set()
     coolpc_matched = set()
@@ -1026,6 +1034,8 @@ def match_products_v2(sinya_products, coolpc_products, category_compat=None, neg
             is_vetoed, reason = veto(match_name, cp["name"])
             if is_vetoed:
                 vetoed_candidates.append((ci_orig, reason, 0))
+                rejected_total += 1
+                rejected_reason_counts[reason.split(":", 1)[0]] += 1
                 continue
             
             # 步驟 4: 計分（使用裸機品名比對）
@@ -1131,6 +1141,8 @@ def match_products_v2(sinya_products, coolpc_products, category_compat=None, neg
             
             is_vetoed, reason = veto(match_name, cp["name"])
             if is_vetoed:
+                rejected_total += 1
+                rejected_reason_counts[reason.split(":", 1)[0]] += 1
                 continue
             
             score, details = compute_score(match_name, cp["name"])
@@ -1191,11 +1203,11 @@ def match_products_v2(sinya_products, coolpc_products, category_compat=None, neg
         deduped.append(m)
     
     print(f"  配對成功: {len(deduped)} 組")
-    print(f"  複核清單 (否決): {len(rejected)} 筆")
+    print(f"  複核清單 (否決): {rejected_total} 筆（保留最近 {len(rejected)} 筆明細；規則統計 {dict(rejected_reason_counts)}）")
     print(f"  複核清單 (邊界): {len(review)} 筆")
     print(f"  複核清單 (價差): {len(price_review)} 筆")
     print(f"  欣亞未比對: {len(sinya_valid) - len(sinya_matched)} 件")
     print(f"  原價屋未比對: {len(coolpc_valid) - len(coolpc_matched)} 件")
     print(f"=== 商品配對完成 ===\n")
     
-    return deduped, rejected, review, price_review
+    return deduped, list(rejected), review, price_review
